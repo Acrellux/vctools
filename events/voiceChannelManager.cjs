@@ -707,10 +707,8 @@ function audioListeningFunctions(connection, guild) {
 
   receiver.speaking.setMaxListeners(100);
   receiver.speaking.on("start", async (userId) => {
-    /* ignore dupes */
     if (currentlySpeaking.has(userId)) return;
 
-    /* guild settings / safety checks */
     const settings = await getSettingsForGuild(guild.id);
     if (!settings.transcriptionEnabled) return;
     if (settings.safeUsers?.includes(userId)) return;
@@ -719,50 +717,59 @@ function audioListeningFunctions(connection, guild) {
     if (settings.safeChannels?.includes(chanId)) return;
     if (!(await hasUserConsented(userId))) return;
 
-    /* we are actually going to capture audio */
     const unique = `${Date.now()}-${Math.floor(Math.random() * 1e3)}`;
     userAudioIds[userId] = unique;
     currentlySpeaking.add(userId);
     userLastSpokeTime[userId] = Date.now();
+
     if (perUserSilenceTimer[userId]) {
       clearTimeout(perUserSilenceTimer[userId]);
       delete perUserSilenceTimer[userId];
     }
 
-    /* subscribe & record */
     console.log(`[DEBUG] START for ${userId}`);
     const audioStream = receiver.subscribe(userId, { end: { behavior: "manual" } });
+    userSubscriptions[userId] = audioStream;
 
-    // Log actual stream events
+    // Debug: Log stream events
     audioStream.on("data", (chunk) => {
       console.log(`[AUDIO] ${userId} streaming ${chunk.length} bytes`);
     });
-    audioStream.on("end", () => {
-      console.log(`[AUDIO] END stream for ${userId}`);
-    });
-    audioStream.on("close", () => {
-      console.log(`[AUDIO] CLOSE stream for ${userId}`);
-    });
-    audioStream.on("error", (e) => {
-      console.error(`[AUDIO] ERROR for ${userId}:`, e);
-    });
+    audioStream.on("end", () => console.log(`[AUDIO] END stream for ${userId}`));
+    audioStream.on("close", () => console.log(`[AUDIO] CLOSE stream for ${userId}`));
+    audioStream.on("error", (e) => console.error(`[AUDIO] ERROR for ${userId}:`, e));
 
-    userSubscriptions[userId] = audioStream;
-
-    /* loudness detector */
+    // Loudness detector
     const loudPass = new PassThrough();
     audioStream.pipe(loudPass);
     initiateLoudnessWarning(userId, loudPass, guild, () => {
       userLastSpokeTime[userId] = Date.now();
     });
 
-    /* write PCM */
+    // Write decoded PCM to file
     const pcmPath = path.join(__dirname, "../../temp_audio", `${userId}-${unique}.pcm`);
     fs.mkdirSync(path.dirname(pcmPath), { recursive: true });
     const pcmWriter = fs.createWriteStream(pcmPath, { flags: "w" });
     const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 1, rate: 48000 });
     audioStream.pipe(decoder).pipe(pcmWriter);
     outputStreams[userId] = pcmWriter;
+
+    // Silence-based fallback if stop never fires
+    perUserSilenceTimer[userId] = setInterval(() => {
+      const silenceDuration = Date.now() - (userLastSpokeTime[userId] || 0);
+      const threshold = getAverageSilenceDuration(userId) || DEFAULT_SILENCE_TIMEOUT;
+
+      if (silenceDuration >= threshold) {
+        console.warn(`[SILENCE FINALIZE] ${userId} silent for ${silenceDuration}ms (threshold: ${threshold})`);
+        clearInterval(perUserSilenceTimer[userId]);
+        delete perUserSilenceTimer[userId];
+
+        if (currentlySpeaking.has(userId)) {
+          currentlySpeaking.delete(userId);
+          finalizeUserAudio(userId, guild, unique);
+        }
+      }
+    }, 1000);
   });
 
   receiver.speaking.on("stop", (userId) => {
