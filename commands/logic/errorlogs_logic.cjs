@@ -112,6 +112,16 @@ async function showErrorLogsSettingsUI(
       errorLogRoleDropdown
     );
 
+    // Handle button interactions with update
+    const isButtonInteraction = interactionOrMessage.isButton?.();
+    if (isButtonInteraction) {
+      await interactionOrMessage.update({
+        content: contentMessage,
+        components,
+      });
+      return;
+    }
+
     if (interactionOrMessage.isRepliable?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
         await interactionOrMessage.editReply({
@@ -143,21 +153,19 @@ async function showErrorLogsSettingsUI(
     const errorMessage =
       "> <❌> An error occurred displaying error logs settings. (INT_ERR_006)";
     if (interactionOrMessage.isButton?.()) {
-      await interactionOrMessage.update({
-        content: contentMessage,
-        components,
-      });
+      try {
+        await interactionOrMessage.update({
+          content: errorMessage,
+          components: [],
+        });
+      } catch { }
     } else if (interactionOrMessage.isRepliable?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
-        await interactionOrMessage.editReply({
-          content: contentMessage,
-          components,
-        });
+        await interactionOrMessage.editReply({ content: errorMessage });
       } else {
         await interactionOrMessage.reply({
-          content: contentMessage,
-          components,
-          ephemeral: isEphemeral,
+          content: errorMessage,
+          ephemeral: true,
         });
       }
     } else {
