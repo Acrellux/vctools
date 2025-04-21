@@ -732,6 +732,21 @@ function audioListeningFunctions(connection, guild) {
     /* subscribe & record */
     console.log(`[DEBUG] START for ${userId}`);
     const audioStream = receiver.subscribe(userId, { end: { behavior: "manual" } });
+
+    // Log actual stream events
+    audioStream.on("data", (chunk) => {
+      console.log(`[AUDIO] ${userId} streaming ${chunk.length} bytes`);
+    });
+    audioStream.on("end", () => {
+      console.log(`[AUDIO] END stream for ${userId}`);
+    });
+    audioStream.on("close", () => {
+      console.log(`[AUDIO] CLOSE stream for ${userId}`);
+    });
+    audioStream.on("error", (e) => {
+      console.error(`[AUDIO] ERROR for ${userId}:`, e);
+    });
+
     userSubscriptions[userId] = audioStream;
 
     /* loudness detector */
@@ -772,20 +787,6 @@ function audioListeningFunctions(connection, guild) {
     receiver.isListening = false;
     Object.values(perUserSilenceTimer).forEach(clearTimeout);
   });
-
-  // Log actual stream events
-audioStream.on("data", (chunk) => {
-  console.log(`[AUDIO] ${userId} streaming ${chunk.length} bytes`);
-});
-audioStream.on("end", () => {
-  console.log(`[AUDIO] END stream for ${userId}`);
-});
-audioStream.on("close", () => {
-  console.log(`[AUDIO] CLOSE stream for ${userId}`);
-});
-audioStream.on("error", (e) => {
-  console.error(`[AUDIO] ERROR for ${userId}:`, e);
-});
 
   /* ───────────────────────── FINALISE & TRANSCRIBE ───────────────────────── */
 
