@@ -705,6 +705,7 @@ function audioListeningFunctions(connection, guild) {
 
   /* ───────────────────────── START / STOP HANDLERS ───────────────────────── */
 
+  receiver.speaking.setMaxListeners(100);
   receiver.speaking.on("start", async (userId) => {
     /* ignore dupes */
     if (currentlySpeaking.has(userId)) return;
@@ -729,6 +730,7 @@ function audioListeningFunctions(connection, guild) {
     }
 
     /* subscribe & record */
+    console.log(`[DEBUG] START for ${userId}`);
     const audioStream = receiver.subscribe(userId, { end: { behavior: "manual" } });
     userSubscriptions[userId] = audioStream;
 
