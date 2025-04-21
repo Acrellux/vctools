@@ -94,6 +94,11 @@ const {
   showNotifyHubUI,
 } = require("./logic/notify_logic.cjs");
 const { handleRebootCommand } = require("./logic/reboot_logic.cjs");
+const {
+  handleFilterMessageCommand,
+  handleFilterSlashCommand,
+  showFilterSettingsUI,
+} = require("./logic/filter_logic.cjs");
 
 /* =============================
    MESSAGE-BASED COMMAND ROUTING
@@ -135,6 +140,9 @@ async function onMessageCreate(message) {
         break;
       case "disallow":
         await handleDisallowMessageCommand(message, args);
+        break;
+      case "filter":
+        await handleFilterMessageCommand(message, args);
         break;
       case "notify":
         await handleNotifyMessageCommand(message, args);
@@ -192,6 +200,9 @@ async function onInteractionCreate(interaction) {
           break;
         case "disallow":
           await handleDisallowSlashCommand(interaction);
+          break;
+        case "filter":
+          await handleFilterSlashCommand(interaction);
           break;
         case "notify":
           await handleNotifySlashCommand(interaction);
