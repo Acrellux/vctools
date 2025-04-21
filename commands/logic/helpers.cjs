@@ -19,25 +19,40 @@ const { getSettingsForGuild } = require("../settings.cjs");
 function logErrorToChannel(guildId, errorMessage, client, context = "General") {
   if (!guildId || !client)
     return console.error("[ERROR] Missing guildId or client.");
-  const settings = getSettingsForGuild(guildId);
-  if (!settings || !settings.errorLogsChannelId) {
-    console.error(`[ERROR] ${context}: ${errorMessage}`);
-    return;
-  }
-  const guild = client.guilds.cache.get(guildId);
-  if (!guild) return console.error("[ERROR] Guild not found.");
 
-  const channel = guild.channels.cache.get(settings.errorLogsChannelId);
-  if (!channel)
-    return console.error("[ERROR] Error logs channel not found in guild.");
+  getSettingsForGuild(guildId)
+    .then((settings) => {
+      if (!settings || !settings.errorLogsChannelId) {
+        console.error(`[ERROR] ${context}: ${errorMessage}`);
+        return;
+      }
 
-  // Replace the username in the file path with "Server"
-  const censoredErrorMessage = errorMessage.split("C:\\Users\\")[1]
-  ? `C:\\Users\\Server\\${errorMessage.split("C:\\Users\\")[1].split("\\").slice(1).join("\\")}`
-  : errorMessage;
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) {
+        console.error("[ERROR] Guild not found.");
+        return;
+      }
 
-  const formattedError = `> **Error in ${context}:**\n\`\`\`${censoredErrorMessage}\`\`\``;
-  channel.send(formattedError).catch(console.error);
+      const channel = guild.channels.cache.get(settings.errorLogsChannelId);
+      if (!channel) {
+        console.error("[ERROR] Error logs channel not found in guild.");
+        return;
+      }
+
+      const censoredErrorMessage = errorMessage.split("C:\\Users\\")[1]
+        ? `C:\\Users\\Server\\${errorMessage
+          .split("C:\\Users\\")[1]
+          .split("\\")
+          .slice(1)
+          .join("\\")}`
+        : errorMessage;
+
+      const formattedError = `> **Error in ${context}:**\n\`\`\`${censoredErrorMessage}\`\`\``;
+      channel.send(formattedError).catch(console.error);
+    })
+    .catch((err) => {
+      console.error(`[ERROR] Failed to retrieve settings for logging:`, err);
+    });
 }
 
 /**
