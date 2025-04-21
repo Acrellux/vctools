@@ -97,7 +97,7 @@ async function handleAllInteractions(interaction) {
       bot: handleSettingsFlow,
       vc: handleSettingsFlow,
       vcsettings: handleSettingsFlow,
-      transcription: handleTranscriptionFlow,
+      transcription: undefined, // 🔥 this will throw an error
       errorlogs: handleErrorLogsFlow,
       staffroles: handleStaffRolesFlow,
     };
