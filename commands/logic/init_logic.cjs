@@ -108,7 +108,7 @@ async function handleInitializeMessageCommand(message, args) {
     console.error(
       `[ERROR] handleInitializeMessageCommand failed: ${error.message}`
     );
-    logErrorToChannel(
+    await logErrorToChannel(
       message.guild?.id,
       error.stack,
       message.client,
@@ -180,7 +180,7 @@ async function handleInitializeSlashCommand(interaction) {
     console.error(
       `[ERROR] handleInitializeSlashCommand failed: ${error.message}`
     );
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,

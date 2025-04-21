@@ -135,7 +135,7 @@ async function showErrorLogsSettingsUI(
     }
   } catch (error) {
     console.error(`[ERROR] showErrorLogsSettingsUI failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interactionOrMessage.guild?.id,
       error.stack,
       interactionOrMessage.client,

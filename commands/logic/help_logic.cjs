@@ -500,7 +500,7 @@ async function handleHelpMessageCommand(message, args) {
     await showHelpContent(message, subCommandName);
   } catch (error) {
     console.error(`[ERROR] handleHelpMessageCommand failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       message.guild?.id,
       error.stack,
       message.client,
@@ -539,7 +539,7 @@ async function handleHelpSlashCommand(interaction) {
     await showHelpContent(interaction, subCommandName, false);
   } catch (error) {
     console.error(`[ERROR] handleHelpSlashCommand failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,

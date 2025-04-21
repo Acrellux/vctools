@@ -125,7 +125,7 @@ async function handleReportSlashCommand(interaction) {
       });
     }
   } catch (error) {
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild.id,
       error.stack,
       interaction.client,
@@ -200,7 +200,7 @@ async function handleReportMessageCommand(message, args = []) {
       );
     }
   } catch (error) {
-    logErrorToChannel(
+    await logErrorToChannel(
       message.guild.id,
       error.stack,
       message.client,

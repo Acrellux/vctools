@@ -1,4 +1,4 @@
-// helpers.cjs
+﻿// helpers.cjs
 
 const {
   ActionRowBuilder,

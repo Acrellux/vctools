@@ -125,7 +125,7 @@ async function handleVCSlashCommand(interaction) {
     }
   } catch (error) {
     console.error(`[ERROR] handleVCSlashCommand: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild.id,
       error.stack,
       interaction.client,
@@ -247,7 +247,7 @@ async function handleVCMessageCommand(message, args = []) {
     }
   } catch (error) {
     console.error(`[ERROR] handleVCMessageCommand: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       message.guild.id,
       error.stack,
       message.client,

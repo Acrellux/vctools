@@ -74,7 +74,7 @@ async function handleInitializeErrorLogs(messageOrInteraction) {
     }
   } catch (error) {
     console.error(`[ERROR] handleInitializeErrorLogs failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       messageOrInteraction.guild?.id,
       error.stack,
       messageOrInteraction.client,
@@ -262,7 +262,7 @@ Error logs initialization complete! You can modify these settings later by typin
     }
   } catch (error) {
     console.error(`[ERROR] handleErrorLogsFlow failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,

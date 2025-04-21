@@ -34,7 +34,7 @@ async function removeUserConsent(userId, guildId, client) {
       .eq("userId", userIdStr);
 
     if (consentError) {
-      logErrorToChannel(
+      await logErrorToChannel(
         guildId,
         consentError.stack,
         client,
@@ -64,7 +64,7 @@ async function removeUserConsent(userId, guildId, client) {
       .eq("target_id", userIdStr);
 
     if (notifFetchError) {
-      logErrorToChannel(
+      await logErrorToChannel(
         guildId,
         notifFetchError.stack,
         client,
@@ -99,7 +99,7 @@ async function removeUserConsent(userId, guildId, client) {
           .delete({ returning: "minimal", count: "exact" })
           .eq("target_id", userIdStr);
       if (notifTargetError) {
-        logErrorToChannel(
+        await logErrorToChannel(
           guildId,
           notifTargetError.stack,
           client,
@@ -122,7 +122,7 @@ async function removeUserConsent(userId, guildId, client) {
       .delete({ returning: "minimal", count: "exact" })
       .eq("user_id", userIdStr);
     if (notifUserError) {
-      logErrorToChannel(
+      await logErrorToChannel(
         guildId,
         notifUserError.stack,
         client,
@@ -144,7 +144,7 @@ async function removeUserConsent(userId, guildId, client) {
       .delete({ returning: "minimal", count: "exact" })
       .eq("user_id", userIdStr);
     if (statusesError) {
-      logErrorToChannel(
+      await logErrorToChannel(
         guildId,
         statusesError.stack,
         client,
@@ -167,7 +167,7 @@ async function removeUserConsent(userId, guildId, client) {
       .delete({ returning: "minimal", count: "exact" })
       .or(`user_id.eq.${userIdStr},blocked_id.eq.${userIdStr}`);
     if (userBlocksError) {
-      logErrorToChannel(
+      await logErrorToChannel(
         guildId,
         userBlocksError.stack,
         client,
@@ -195,7 +195,7 @@ async function removeUserConsent(userId, guildId, client) {
         .eq("userid", userIdStr);
 
     if (soundboardLogError) {
-      logErrorToChannel(
+      await logErrorToChannel(
         guildId,
         soundboardLogError.stack,
         client,
@@ -213,7 +213,7 @@ async function removeUserConsent(userId, guildId, client) {
 
     return "success";
   } catch (error) {
-    logErrorToChannel(guildId, error.stack, client, "removeUserConsent");
+    await logErrorToChannel(guildId, error.stack, client, "removeUserConsent");
     console.error(`[ERROR] removeUserConsent exception: ${error.message}`);
     return "failed";
   }
@@ -232,7 +232,7 @@ async function muteIfNeeded(member, guildId, client) {
       await member.voice.setMute(true);
       console.log(`[INFO] Muted ${member.user.tag} in VC due to /disallow.`);
     } catch (error) {
-      logErrorToChannel(guildId, error.stack, client, "muteIfNeeded");
+      await logErrorToChannel(guildId, error.stack, client, "muteIfNeeded");
       console.error(`[ERROR] Failed to mute ${member.user.tag}: ${error}`);
     }
   } else {
@@ -280,7 +280,7 @@ async function handleDisallowSlashCommand(interaction) {
       });
     }
   } catch (error) {
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild.id,
       error.stack,
       interaction.client,
@@ -328,7 +328,7 @@ async function handleDisallowMessageCommand(message) {
       );
     }
   } catch (error) {
-    logErrorToChannel(
+    await logErrorToChannel(
       message.guild.id,
       error.stack,
       message.client,

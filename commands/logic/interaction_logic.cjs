@@ -124,7 +124,7 @@ async function handleAllInteractions(interaction) {
     });
   } catch (error) {
     console.error(`[ERROR] handleAllInteractions failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,

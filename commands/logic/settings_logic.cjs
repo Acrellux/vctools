@@ -462,7 +462,7 @@ async function handleSettingsFlow(interaction, mode, action) {
     }
   } catch (error) {
     console.error(`[ERROR] handleSettingsFlow failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,
@@ -737,7 +737,7 @@ async function handleSettingsMessageCommand(message, args) {
     console.error(
       `[ERROR] handleSettingsMessageCommand failed: ${error.message}`
     );
-    logErrorToChannel(
+    await logErrorToChannel(
       message.guild?.id,
       error.stack,
       message.client,
@@ -1012,7 +1012,7 @@ async function handleSettingsSlashCommand(interaction) {
     console.error(
       `[ERROR] handleSettingsSlashCommand failed: ${error.message}`
     );
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,

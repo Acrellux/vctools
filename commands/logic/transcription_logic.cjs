@@ -139,7 +139,7 @@ async function showTranscriptionSettingsUI(
     console.error(
       `[ERROR] showTranscriptionSettingsUI failed: ${error.message}`
     );
-    logErrorToChannel(
+    await logErrorToChannel(
       interactionOrMessage.guild?.id,
       error.stack,
       interactionOrMessage.client,
@@ -186,7 +186,7 @@ async function updateVoicemuteStatusForGuild(
     try {
       consentData = JSON.parse(fs.readFileSync(consentFilePath, "utf8"));
     } catch (error) {
-      logErrorToChannel(
+      await logErrorToChannel(
         guild.id,
         error.stack,
         client,
@@ -224,7 +224,7 @@ async function updateVoicemuteStatusForGuild(
             }
           }
         } catch (error) {
-          logErrorToChannel(
+          await logErrorToChannel(
             guild.id,
             error.stack,
             client,
@@ -257,7 +257,7 @@ async function handleTranscriptionSettingChange(
     // Only update voice mute status, as settings have already been updated.
     await updateVoicemuteStatusForGuild(guild, client, enableTranscription);
   } catch (error) {
-    logErrorToChannel(
+    await logErrorToChannel(
       interactionOrMessage.guild.id,
       error.stack,
       interactionOrMessage.client,

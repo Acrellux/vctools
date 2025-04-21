@@ -78,7 +78,7 @@ Welcome to the system setup process! Follow the steps below to configure the bot
     }
   } catch (error) {
     console.error(`[ERROR] handleInitializeFTT failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       messageOrInteraction.guild?.id,
       error.stack,
       messageOrInteraction.client,

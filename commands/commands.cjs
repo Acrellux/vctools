@@ -149,7 +149,7 @@ async function onMessageCreate(message) {
     }
   } catch (error) {
     console.error(`[ERROR] onMessageCreate failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       message.guild?.id,
       error.stack,
       message.client,
@@ -230,7 +230,7 @@ async function onInteractionCreate(interaction) {
     }
   } catch (error) {
     console.error(`[ERROR] onInteractionCreate failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,

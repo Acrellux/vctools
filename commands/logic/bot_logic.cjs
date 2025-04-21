@@ -190,7 +190,7 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
   } catch (error) {
     console.error(`[ERROR] showBotSettingsUI failed: ${error.message}`);
     console.error(error.stack);
-    logErrorToChannel(
+    await logErrorToChannel(
       interactionOrMessage.guild?.id,
       error.stack,
       interactionOrMessage.client,

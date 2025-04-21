@@ -163,7 +163,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
     }
   } catch (error) {
     console.error(`[ERROR] showVCSettingsUI failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interactionOrMessage.guild?.id,
       error.stack,
       interactionOrMessage.client,
@@ -253,7 +253,7 @@ async function handleVCSettingsFlow(interaction, action) {
     await showVCSettingsUI(interaction, true);
   } catch (error) {
     console.error(`[ERROR] handleVCSettingsFlow failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,

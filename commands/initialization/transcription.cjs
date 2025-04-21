@@ -74,7 +74,7 @@ async function handleInitializeTranscription(messageOrInteraction) {
     console.error(
       `[ERROR] handleInitializeTranscription failed: ${error.message}`
     );
-    logErrorToChannel(
+    await logErrorToChannel(
       messageOrInteraction.guild?.id,
       error.stack,
       messageOrInteraction.client,
@@ -255,7 +255,7 @@ Transcription initialization complete.`,
     }
   } catch (error) {
     console.error(`[ERROR] handleTranscriptionFlow failed: ${error.message}`);
-    logErrorToChannel(
+    await logErrorToChannel(
       interaction.guild?.id,
       error.stack,
       interaction.client,
