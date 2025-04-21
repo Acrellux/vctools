@@ -1,0 +1,161 @@
+// helpers.cjs
+
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  ChannelType,
+} = require("discord.js");
+const { getSettingsForGuild } = require("../settings.cjs");
+
+/**
+ * Logs an error message to the configured error logs channel.
+ * @param {string} guildId - The guild ID.
+ * @param {string} errorMessage - The error message or stack trace.
+ * @param {Client} client - The Discord client.
+ * @param {string} [context="General"] - Optional context.
+ */
+function logErrorToChannel(guildId, errorMessage, client, context = "General") {
+  if (!guildId || !client)
+    return console.error("[ERROR] Missing guildId or client.");
+  const settings = getSettingsForGuild(guildId);
+  if (!settings || !settings.errorLogsChannelId) {
+    console.error(`[ERROR] ${context}: ${errorMessage}`);
+    return;
+  }
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return console.error("[ERROR] Guild not found.");
+
+  const channel = guild.channels.cache.get(settings.errorLogsChannelId);
+  if (!channel)
+    return console.error("[ERROR] Error logs channel not found in guild.");
+
+  // Replace the username in the file path with "Server"
+  const censoredErrorMessage = errorMessage.split("C:\\Users\\")[1]
+  ? `C:\\Users\\Server\\${errorMessage.split("C:\\Users\\")[1].split("\\").slice(1).join("\\")}`
+  : errorMessage;
+
+  const formattedError = `> **Error in ${context}:**\n\`\`\`${censoredErrorMessage}\`\`\``;
+  channel.send(formattedError).catch(console.error);
+}
+
+/**
+ * Creates a dropdown for selecting a text channel.
+ * @param {string} mode - Operation mode (e.g., "init", "settings").
+ * @param {Guild} guild - The Discord guild.
+ * @param {string} userId - The user ID.
+ * @param {string|null} currentchannelId - Currently selected channel ID.
+ * @returns {ActionRowBuilder} - The action row with the channel dropdown.
+ */
+function createchannelIdropdown(mode, guild, userId, currentchannelId) {
+  const channelOptions = guild.channels.cache
+    .filter((channel) => channel.type === ChannelType.GuildText)
+    .map((channel) => ({
+      label: `#${channel.name}`,
+      value: channel.id,
+      default: channel.id === currentchannelId,
+    }));
+
+  if (mode === "init") {
+    channelOptions.unshift({
+      label: "Make a new channel",
+      value: "new_channel",
+    });
+  }
+
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`${mode}:select_logging_channel:${userId}`)
+      .setPlaceholder("Choose a logging channel...")
+      .addOptions(channelOptions)
+  );
+}
+
+/**
+ * Creates a dropdown for selecting an error logs channel.
+ * @param {string} mode - Operation mode.
+ * @param {Guild} guild - The Discord guild.
+ * @param {string} userId - The user ID.
+ * @param {string|null} currentchannelId - Currently selected channel ID.
+ * @returns {ActionRowBuilder} - The action row with the error logs channel dropdown.
+ */
+function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
+  const channelOptions = guild.channels.cache
+    .filter((channel) => channel.type === ChannelType.GuildText)
+    .map((channel) => ({
+      label: `#${channel.name}`,
+      value: channel.id,
+      default: channel.id === currentchannelId,
+    }));
+
+  if (mode === "init") {
+    channelOptions.unshift({
+      label: "Create a new error logs channel",
+      value: "new_channel",
+    });
+  }
+
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`${mode}:select_error_logs_channel:${userId}`)
+      .setPlaceholder("Choose an error logs channel...")
+      .addOptions(channelOptions)
+  );
+}
+
+/**
+ * Creates a dropdown for selecting a role for log access.
+ * @param {string} mode - Operation mode.
+ * @param {Guild} guild - The Discord guild.
+ * @param {string} userId - The user ID.
+ * @param {string|null} currentRoleId - Currently selected role ID.
+ * @returns {ActionRowBuilder} - The action row with the role dropdown.
+ */
+function createRoleDropdown(mode, guild, userId, currentRoleId) {
+  const roleOptions = guild.roles.cache
+    .filter((r) => r.name !== "@everyone") // Exclude @everyone if needed
+    .map((r) => ({
+      label: `@${r.name}`,
+      value: r.id,
+      default: r.id === currentRoleId, // ✅ Pre-selects if matching
+    }));
+
+  const selectMenu = new StringSelectMenuBuilder()
+    .setCustomId(`${mode}:select_log_viewers:${userId}`)
+    .setPlaceholder("Select a role...")
+    .setOptions(roleOptions); // ✅ Use `.setOptions()` instead of `.addOptions()`
+
+  return new ActionRowBuilder().addComponents(selectMenu);
+}
+
+/**
+ * Creates a dropdown for selecting a role for error logs access.
+ * @param {string} mode - Operation mode.
+ * @param {Guild} guild - The Discord guild.
+ * @param {string} userId - The user ID.
+ * @param {string|null} currentRoleId - Currently selected role ID.
+ * @returns {ActionRowBuilder} - The action row with the error logs role dropdown.
+ */
+function createErrorLogRoleDropdown(mode, guild, userId, currentRoleId) {
+  const roleOptions = guild.roles.cache.map((role) => ({
+    label: role.name === "@everyone" ? "@everyone" : `@${role.name}`,
+    value: role.id,
+    default: role.id === currentRoleId,
+  }));
+
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`${mode}:select_error_logs_role:${userId}`)
+      .setPlaceholder("Select a role...")
+      .addOptions(roleOptions)
+  );
+}
+
+module.exports = {
+  logErrorToChannel,
+  createchannelIdropdown,
+  createErrorLogchannelIdropdown,
+  createRoleDropdown,
+  createErrorLogRoleDropdown,
+};
