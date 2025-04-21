@@ -47,12 +47,12 @@ const processingQueue = [];
 // Track file streams and subscriptions by user
 const outputStreams = {};
 const userSubscriptions = {};
+const userAudioIds = {}; // userId -> unique
 
 /************************************************************************************************
  * REUSABLE TRANSCRIPTION FUNCTIONS
  ************************************************************************************************/
 const {
-  processAudio,
   transcribeAudio,
   postTranscription,
   convertOpusToWav,
@@ -431,17 +431,16 @@ async function execute(oldState, newState, client) {
       if (activityChannel) {
         const oldChannel = guild.channels.cache.get(oldState.channelId);
         const newChannel = guild.channels.cache.get(newState.channelId);
-        const oldChannelName = oldChannel ? oldChannel.name : "Unknown Channel";
-        const newChannelName = newChannel ? newChannel.name : "Unknown Channel";
+        const oldChannelName = oldChannel?.name || "Unknown Channel";
+        const newChannelName = newChannel?.name || "Unknown Channel";
+        const memberCount = newChannel.members.filter((m) => !m.user.bot).size;
         const now = new Date();
         const timestamp = now.toLocaleTimeString("en-US", {
           minute: "2-digit",
           second: "2-digit",
         });
-        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} moved from ${ansi.white}${oldChannelName}${ansi.darkGray} to ${ansi.white}${newChannelName}${ansi.darkGray}.`;
-        await activityChannel
-          .send(buildLog(timestamp, logMsg))
-          .catch(console.error);
+        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} moved from ${ansi.white}${oldChannelName}${ansi.darkGray} to ${ansi.white}${newChannelName}${ansi.darkGray}. Member count: ${memberCount}`;
+        await activityChannel.send(buildLog(timestamp, logMsg)).catch(console.error);
       } else {
         console.error(
           `[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`
@@ -472,18 +471,15 @@ async function execute(oldState, newState, client) {
       );
       if (activityChannel) {
         const joinedChannel = guild.channels.cache.get(newState.channelId);
-        const joinedChannelName = joinedChannel
-          ? joinedChannel.name
-          : "Unknown Channel";
+        const joinedChannelName = joinedChannel?.name || "Unknown Channel";
+        const memberCount = joinedChannel.members.filter((m) => !m.user.bot).size;
         const now = new Date();
         const timestamp = now.toLocaleTimeString("en-US", {
           minute: "2-digit",
           second: "2-digit",
         });
-        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} joined voice channel ${ansi.white}${joinedChannelName}${ansi.darkGray}.`;
-        await activityChannel
-          .send(buildLog(timestamp, logMsg))
-          .catch(console.error);
+        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} joined voice channel ${ansi.white}${joinedChannelName}${ansi.darkGray}. Member count: ${memberCount}`;
+        await activityChannel.send(buildLog(timestamp, logMsg)).catch(console.error);
       } else {
         console.error(
           `[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`
@@ -559,18 +555,15 @@ Inside this voice call, your voice will be transcribed into text. Please click t
       );
       if (activityChannel) {
         const leftChannel = guild.channels.cache.get(oldState.channelId);
-        const leftChannelName = leftChannel
-          ? leftChannel.name
-          : "Unknown Channel";
+        const leftChannelName = leftChannel?.name || "Unknown Channel";
+        const memberCount = leftChannel.members.filter((m) => !m.user.bot).size;
         const now = new Date();
         const timestamp = now.toLocaleTimeString("en-US", {
           minute: "2-digit",
           second: "2-digit",
         });
-        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} left voice channel ${ansi.white}${leftChannelName}${ansi.darkGray}.`;
-        await activityChannel
-          .send(buildLog(timestamp, logMsg))
-          .catch(console.error);
+        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} left voice channel ${ansi.white}${leftChannelName}${ansi.darkGray}. Member count: ${memberCount}`;
+        await activityChannel.send(buildLog(timestamp, logMsg)).catch(console.error);
       } else {
         console.error(
           `[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`
@@ -706,224 +699,114 @@ function audioListeningFunctions(connection, guild) {
   if (receiver.isListening) return;
   receiver.isListening = true;
 
-  const currentlySpeaking = new Set();
-  const userLastSpokeTime = {};
+  const currentlySpeaking = new Set();        // users currently talking
+  const userLastSpokeTime = {};               // epoch ms of last packet
+  const perUserSilenceTimer = {};             // timeout IDs keyed by user
 
-  // Single interval for checking silence for all users.
-  const silenceInterval = setInterval(() => {
-    const now = Date.now();
-    for (const uid of currentlySpeaking) {
-      const lastActive = userLastSpokeTime[uid] || 0;
-      const silenceDuration = now - lastActive;
-      const threshold = getAverageSilenceDuration(uid) || DEFAULT_SILENCE_TIMEOUT;
-      if (silenceDuration >= threshold) {
-        console.log(`[INFO] Silence threshold exceeded for user ${uid}`);
-        updateSilenceDuration(uid, silenceDuration);
-        onSpeakingStop(uid);
-      }
-    }
-  }, 1000);
+  /* ───────────────────────── START / STOP HANDLERS ───────────────────────── */
 
-  receiver.speaking.on("start", (userId) => {
-    onSpeakingStart(userId).catch(console.error);
-  });
-  receiver.speaking.on("stop", onSpeakingStop);
+  receiver.speaking.on("start", async (userId) => {
+    /* ignore dupes */
+    if (currentlySpeaking.has(userId)) return;
 
-  connection.once(VoiceConnectionStatus.Disconnected, () => {
-    console.log("[INFO] Voice disconnected. Removing listeners.");
-    receiver.speaking.removeAllListeners("start");
-    receiver.speaking.removeAllListeners("stop");
-    receiver.isListening = false;
-    clearInterval(silenceInterval);
-  });
-
-  async function onSpeakingStart(userId) {
+    /* guild settings / safety checks */
     const settings = await getSettingsForGuild(guild.id);
     if (!settings.transcriptionEnabled) return;
-    if (currentlySpeaking.has(userId)) return;
-    console.log(`[AUDIO] speaking.start user=${userId}`);
+    if (settings.safeUsers?.includes(userId)) return;
+    const member = guild.members.cache.get(userId);
+    const chanId = member?.voice?.channel?.id;
+    if (settings.safeChannels?.includes(chanId)) return;
+    if (!(await hasUserConsented(userId))) return;
+
+    /* we are actually going to capture audio */
+    const unique = `${Date.now()}-${Math.floor(Math.random() * 1e3)}`;
+    userAudioIds[userId] = unique;
     currentlySpeaking.add(userId);
     userLastSpokeTime[userId] = Date.now();
-
-    if (finalizationTimers[userId]) {
-      clearTimeout(finalizationTimers[userId]);
-      delete finalizationTimers[userId];
+    if (perUserSilenceTimer[userId]) {
+      clearTimeout(perUserSilenceTimer[userId]);
+      delete perUserSilenceTimer[userId];
     }
 
-    const audioStream = receiver.subscribe(userId, {
-      end: { behavior: "manual" },
-    });
+    /* subscribe & record */
+    const audioStream = receiver.subscribe(userId, { end: { behavior: "manual" } });
     userSubscriptions[userId] = audioStream;
 
-    const loudnessPassThrough = new PassThrough();
-    audioStream.pipe(loudnessPassThrough);
-    initiateLoudnessWarning(userId, loudnessPassThrough, guild, () => {
+    /* loudness detector */
+    const loudPass = new PassThrough();
+    audioStream.pipe(loudPass);
+    initiateLoudnessWarning(userId, loudPass, guild, () => {
       userLastSpokeTime[userId] = Date.now();
     });
 
-    if (settings.safeUsers && settings.safeUsers.includes(userId)) {
-      console.log(`[INFO] User ${userId} is marked as safe. Skipping transcription pipeline.`);
-      return;
-    }
-    const member = guild.members.cache.get(userId);
-    if (member && member.voice && member.voice.channel) {
-      const voicechannelId = member.voice.channel.id;
-      if (settings.safeChannels && settings.safeChannels.includes(voicechannelId)) {
-        console.log(`[INFO] Channel ${voicechannelId} is marked as safe. Skipping transcription pipeline.`);
-        return;
-      }
-    }
+    /* write PCM */
+    const pcmPath = path.join(__dirname, "../../temp_audio", `${userId}-${unique}.pcm`);
+    fs.mkdirSync(path.dirname(pcmPath), { recursive: true });
+    const pcmWriter = fs.createWriteStream(pcmPath, { flags: "w" });
+    const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 1, rate: 48000 });
+    audioStream.pipe(decoder).pipe(pcmWriter);
+    outputStreams[userId] = pcmWriter;
+  });
 
-    const consent = await hasUserConsented(userId);
-    if (!consent) {
-      console.log(`[INFO] User ${userId} has not consented. Skipping transcription pipeline.`);
-      return;
-    }
-
-    const pcmFilePath = path.resolve(__dirname, "../../temp_audio", `${userId}.pcm`);
-    fs.mkdirSync(path.dirname(pcmFilePath), { recursive: true });
-    transcription.ensureDirectoryExistence(pcmFilePath);
-
-    if (outputStreams[userId]) {
-      console.warn(`[AUDIO] Warning: user=${userId} already has a stream open. Replacing it.`);
-      try {
-        outputStreams[userId].destroy();
-      } catch (e) {
-        console.error(`[AUDIO] Failed to destroy previous stream for ${userId}: ${e.message}`);
-      }
-      delete outputStreams[userId];
-    }
-
-    const pcmPassThrough = new PassThrough();
-    audioStream.pipe(pcmPassThrough);
-
-    const opusDecoderPCM = new prism.opus.Decoder({
-      frameSize: 960,
-      channels: 1,
-      rate: 48000,
-    });
-    const fileWriteStream = fs.createWriteStream(pcmFilePath, { flags: "w" });
-
-    pcmPassThrough.pipe(opusDecoderPCM).pipe(fileWriteStream);
-    outputStreams[userId] = fileWriteStream;
-
-    opusDecoderPCM.on("data", () => {
-      userLastSpokeTime[userId] = Date.now();
-    });
-    opusDecoderPCM.on("error", (err) => {
-      console.error(`[AUDIO] PCM Decoder error: user=${userId} ${err.message}`);
-      onSpeakingStop(userId);
-    });
-    audioStream.on("error", (err) => {
-      console.error(`[AUDIO] Audio stream error: user=${userId} ${err.message}`);
-      onSpeakingStop(userId);
-    });
-  }
-
-  function onSpeakingStop(userId) {
-    if (!currentlySpeaking.has(userId)) {
-      console.log(`[AUDIO] onSpeakingStop called but user=${userId} isn't speaking.`);
-      return;
-    }
-    const now = Date.now();
-    const lastSpoke = userLastSpokeTime[userId] || 0;
-    if (now - lastSpoke < GRACE_PERIOD_MS) {
-      console.log(`[AUDIO] onSpeakingStop ignored for user=${userId}, still within grace.`);
-      return;
-    }
-    console.log(`[AUDIO] speaking.stop user=${userId}`);
+  receiver.speaking.on("stop", (userId) => {
+    if (!currentlySpeaking.has(userId)) return;
     currentlySpeaking.delete(userId);
-    if (finalizationTimers[userId]) {
-      clearTimeout(finalizationTimers[userId]);
-    }
-    finalizationTimers[userId] = setTimeout(() => {
-      if (!currentlySpeaking.has(userId)) {
-        finalizeUserAudio(userId, guild);
-      } else {
-        console.log(`[AUDIO] User ${userId} started speaking again; skip finalize.`);
+
+    const unique = userAudioIds[userId];
+    if (!unique) return;                               // never recorded
+
+    /* schedule finalisation after GRACE_PERIOD_MS of silence */
+    const wait = GRACE_PERIOD_MS - (Date.now() - (userLastSpokeTime[userId] || 0));
+    perUserSilenceTimer[userId] = setTimeout(() => {
+      if (!currentlySpeaking.has(userId)) finalizeUserAudio(userId, guild, unique);
+      clearTimeout(perUserSilenceTimer[userId]);
+      delete perUserSilenceTimer[userId];
+    }, wait > 0 ? wait : 0);
+  });
+
+  connection.once(VoiceConnectionStatus.Disconnected, () => {
+    receiver.speaking.removeAllListeners();
+    receiver.isListening = false;
+    Object.values(perUserSilenceTimer).forEach(clearTimeout);
+  });
+
+  /* ───────────────────────── FINALISE & TRANSCRIBE ───────────────────────── */
+
+  async function finalizeUserAudio(userId, guild, unique) {
+    const base = path.join(__dirname, "../../temp_audio", `${userId}-${unique}`);
+    const pcm = `${base}.pcm`;
+    const wav = `${base}.wav`;
+
+    try {
+      /* skip if no file or trivial length */
+      if (!fs.existsSync(pcm) || fs.statSync(pcm).size < 2048) {
+        await safeDeleteFile(pcm);
+        cleanup(userId);
+        return;
       }
-      delete finalizationTimers[userId];
-    }, GRACE_PERIOD_MS);
+
+      /* convert + transcribe */
+      await convertOpusToWav(pcm, wav);
+      const text = await transcribeAudio(wav);
+      if (text) {
+        await postTranscription(guild, userId, text);
+      }
+    } catch (err) {
+      console.error(`[FINALIZE] user=${userId} → ${err.message}`);
+    } finally {
+      await safeDeleteFile(pcm);
+      await safeDeleteFile(wav);
+      cleanup(userId);
+    }
   }
 
-  async function finalizeUserAudio(userId, guild) {
-    if (currentlySpeaking.has(userId)) return;
-    if (finalizationTimers[userId]) {
-      clearTimeout(finalizationTimers[userId]);
-      delete finalizationTimers[userId];
-    }
-
-    const tempAudioDir = path.resolve(__dirname, "../../temp_audio");
-    fs.mkdirSync(tempAudioDir, { recursive: true });
-
-    const pcmFilePath = path.join(tempAudioDir, `${userId}.pcm`);
-    const wavFilePath = path.join(tempAudioDir, `${userId}.wav`);
-
-    if (Date.now() - (userLastSpokeTime[userId] || 0) < 3000) {
-      console.log(`[INFO] Aborting finalization: user ${userId} resumed speaking recently.`);
-      return;
-    }
-
-    try {
-      fs.accessSync(pcmFilePath, fs.constants.W_OK);
-      console.log(`[DEBUG] File is writable: ${pcmFilePath}`);
-    } catch (err) {
-      console.error(`[LOCKED] Cannot write to PCM file: ${pcmFilePath}`, err.message);
-    }
-
-    try {
-      if (!fs.existsSync(pcmFilePath)) {
-        console.warn(`[AUDIO] finalizeUserAudio: No PCM file for user=${userId}`);
-        return;
-      }
-
-      const stats = fs.statSync(pcmFilePath);
-      console.log(`[AUDIO] finalizeUserAudio: user=${userId}, size=${stats.size} bytes.`);
-      if (stats.size < 2000) {
-        console.warn(`[AUDIO] Very short file for user=${userId}, skipping transcription.`);
-        await safeDeleteFile(pcmFilePath);
-        return;
-      }
-
-      console.log(`[DEBUG] Converting PCM to WAV for user=${userId}...`);
-      const buffer = await fs.promises.readFile(pcmFilePath);
-      await transcription.convertOpusToWav(buffer, wavFilePath, userId);
-
-      if (!fs.existsSync(wavFilePath)) {
-        console.error(`[ERROR] WAV file was NOT created for user ${userId}`);
-        return;
-      }
-
-      console.log(`[INFO] Successfully created WAV file: ${wavFilePath}`);
-      const transcriptionText = await transcription.processAudio(userId, guild);
-      if (!transcriptionText) {
-        console.warn(`[WARNING] No transcription generated for user ${userId}.`);
-        return;
-      }
-
-      console.log(`[TRANSCRIPTION] User ${userId}: ${transcriptionText}`);
-      await postTranscription(guild, userId, transcriptionText);
-    } catch (error) {
-      console.error(`[AUDIO] finalizeUserAudio error: user=${userId} ${error.message}`);
-    } finally {
-      setTimeout(async () => {
-        if (Date.now() - (userLastSpokeTime[userId] || 0) < 3000) {
-          console.log(`[INFO] Aborting deletion: user ${userId} resumed speaking recently.`);
-          return;
-        }
-        if (outputStreams[userId]) {
-          outputStreams[userId].destroy();
-          delete outputStreams[userId];
-        }
-        await safeDeleteFile(pcmFilePath);
-        await safeDeleteFile(wavFilePath);
-        console.log(`[AUDIO] Deleted audio files for user ${userId}`);
-        delete userSubscriptions[userId];
-      }, 5000);
-    }
+  /* ───────────────────────── HELPER: CLEANUP ───────────────────────── */
+  function cleanup(userId) {
+    if (outputStreams[userId]) outputStreams[userId].destroy();
+    delete outputStreams[userId];
+    delete userSubscriptions[userId];
+    delete userAudioIds[userId];
   }
 }
 
-module.exports = {
-  execute,
-};
+module.exports = { execute };

@@ -352,11 +352,13 @@ async function ensureTranscriptionChannel(guild) {
 async function processAudio(userId, guild) {
   return new Promise((resolve, reject) => {
     const audioDir = path.resolve(__dirname, "../../temp_audio");
-    const wavFilePath = path.join(audioDir, `${userId}.wav`);
+    const unique = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const wavFilePath = path.join(audioDir, `${userId}-${unique}.wav`);
     console.log(
       `[DEBUG] Pushing to queue: userId=${userId}, wavFilePath=${wavFilePath}`
     );
-    processingQueue.push({ userId, guild, wavFilePath, resolve, reject });
+    processingQueue.push({ userId, guild, wavFilePath, unique, resolve, reject });
+
     processQueue();
   });
 }
@@ -385,6 +387,7 @@ async function processQueue() {
       `[QUEUE] Transcription for user ${userId}: ${transcriptionText}`
     );
     resolve(transcriptionText);
+    await safeDeleteFile(wavFilePath).catch(console.error);
   } catch (err) {
     console.error(
       `[QUEUE] Error processing audio for user ${userId}: ${err.message}`
@@ -416,7 +419,7 @@ async function transcribeAudio(wavFilePath) {
   console.log(
     `[DEBUG] Full Command: python "${pythonScript}" "${wavFilePath}"`
   );
-  const command = `python "${pythonScript}" "${wavFilePath}"`;
+  const command = `python "${pythonScript}" --out-format json "${wavFilePath}"`;
   return new Promise((resolve, reject) => {
     exec(command, { shell: true }, (error, stdout, stderr) => {
       console.log(`[DEBUG] Whisper Raw Output:\n${stdout.trim()}`);
@@ -547,47 +550,36 @@ ${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${nameColor}${u
 }
 
 /**
- * Converts an opus buffer to a WAV file.
- * @param {Buffer} opusBuffer - The opus audio buffer.
- * @param {string} wavFilePath - The destination path for the WAV file.
- * @param {string} userId - The user ID.
+ * Converts a raw **16‑bit PCM** file (decoded from Opus) to a WAV file.
+ * @param {string} pcmPath      Absolute path of the source `.pcm` file.
+ * @param {string} wavFilePath  Destination path for the `.wav` file.
  * @returns {Promise<void>}
  */
-async function convertOpusToWav(opusBuffer, wavFilePath, userId) {
+async function convertOpusToWav(pcmPath, wavFilePath) {
   const ffmpegPath = path.resolve(__dirname, "../ffmpeg/ffmpeg.exe");
   ffmpeg.setFfmpegPath(ffmpegPath);
 
-  const tempAudioDir = path.resolve(__dirname, "../../temp_audio");
-  fs.mkdirSync(tempAudioDir, { recursive: true });
-  const tempOpusPath = path.join(tempAudioDir, `${userId}.pcm`);
+  // Ensure the target directory exists.
+  ensureDirectoryExistence(wavFilePath);
 
-  ensureDirectoryExistence(tempOpusPath);
+  console.log(
+    `[DEBUG] Converting PCM → WAV:\n  src: ${pcmPath}\n  dst: ${wavFilePath}`
+  );
 
-  try {
-    fs.writeFileSync(tempOpusPath, opusBuffer);
-  } catch (err) {
-    console.error(`[ERROR] Failed to write PCM file for ${userId}: ${err.message}`);
-    throw err;
-  }
-
-  console.log(`[DEBUG] Converting PCM to WAV for user ${userId}...`);
   return new Promise((resolve, reject) => {
-    ffmpeg(tempOpusPath)
-      .inputFormat("s16le")
-      .audioFrequency(16000)
+    ffmpeg(pcmPath)
+      .inputFormat("s16le")      // raw 16‑bit little‑endian PCM
+      .audioFrequency(16000)     // Whisper works best at 16 kHz mono
       .audioChannels(1)
       .audioCodec("pcm_s16le")
       .toFormat("wav")
       .save(wavFilePath)
       .on("end", () => {
-        console.log(`[INFO] Converted PCM to WAV for user ${userId}`);
-        if (!fs.existsSync(wavFilePath)) {
-          console.error(`[ERROR] WAV file was NOT created: ${wavFilePath}`);
-        }
+        console.log(`[INFO] PCM → WAV conversion complete: ${wavFilePath}`);
         resolve();
       })
       .on("error", (error) => {
-        console.error(`[ERROR] FFmpeg failed for user ${userId}: ${error.message}`);
+        console.error(`[ERROR] FFmpeg failed: ${error.message}`);
         reject(error);
       });
   });
