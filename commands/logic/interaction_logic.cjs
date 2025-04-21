@@ -93,7 +93,7 @@ async function handleAllInteractions(interaction) {
 
     // For non-init interactions, use a handler mapping.
     const handlers = {
-      settings: undefined, // 🔥 this will throw an error
+      settings: handleSettingsFlow,
       bot: handleSettingsFlow,
       vc: handleSettingsFlow,
       vcsettings: handleSettingsFlow,

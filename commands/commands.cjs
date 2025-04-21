@@ -100,6 +100,9 @@ const { handleRebootCommand } = require("./logic/reboot_logic.cjs");
 ============================ */
 async function onMessageCreate(message) {
   try {
+
+    exampleErrorCreation(); // <-- purposefully create an error to test logging
+
     if (message.author.bot) return;
     const prefixes = [">", "!"];
     if (!prefixes.some((p) => message.content.startsWith(p))) return;
