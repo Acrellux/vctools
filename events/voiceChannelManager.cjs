@@ -731,14 +731,6 @@ function audioListeningFunctions(connection, guild) {
     const audioStream = receiver.subscribe(userId, { end: { behavior: "manual" } });
     userSubscriptions[userId] = audioStream;
 
-    // Debug: Log stream events
-    audioStream.on("data", (chunk) => {
-      console.log(`[AUDIO] ${userId} streaming ${chunk.length} bytes`);
-    });
-    audioStream.on("end", () => console.log(`[AUDIO] END stream for ${userId}`));
-    audioStream.on("close", () => console.log(`[AUDIO] CLOSE stream for ${userId}`));
-    audioStream.on("error", (e) => console.error(`[AUDIO] ERROR for ${userId}:`, e));
-
     // Loudness detector
     const loudPass = new PassThrough();
     audioStream.pipe(loudPass);

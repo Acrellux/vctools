@@ -419,7 +419,7 @@ async function transcribeAudio(wavFilePath) {
   console.log(
     `[DEBUG] Full Command: python "${pythonScript}" "${wavFilePath}"`
   );
-  const command = `python "${pythonScript}" --out-format json "${wavFilePath}"`;
+  const command = `python "${pythonScript}" "${wavFilePath}"`;
   return new Promise((resolve, reject) => {
     exec(command, { shell: true }, (error, stdout, stderr) => {
       console.log(`[DEBUG] Whisper Raw Output:\n${stdout.trim()}`);
