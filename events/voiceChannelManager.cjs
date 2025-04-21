@@ -784,7 +784,7 @@ function audioListeningFunctions(connection, guild) {
   connection.once(VoiceConnectionStatus.Disconnected, () => {
     receiver.speaking.removeAllListeners();
     receiver.isListening = false;
-    Object.values(perUserSilenceTimer).forEach(clearTimeout);
+    Object.values(perUserSilenceTimer).forEach(clearInterval);
   });
 
   /* ───────────────────────── FINALISE & TRANSCRIBE ───────────────────────── */
@@ -819,9 +819,24 @@ function audioListeningFunctions(connection, guild) {
 
   /* ───────────────────────── HELPER: CLEANUP ───────────────────────── */
   function cleanup(userId) {
-    if (outputStreams[userId]) outputStreams[userId].destroy();
+    if (outputStreams[userId]) {
+      try {
+        outputStreams[userId].destroy();
+      } catch (e) {
+        console.warn(`[CLEANUP] Error closing stream for ${userId}: ${e.message}`);
+      }
+    }
+
+    if (userSubscriptions[userId]) {
+      try {
+        userSubscriptions[userId].destroy?.(); // Just in case it’s closable
+        delete userSubscriptions[userId];
+      } catch (e) {
+        console.warn(`[CLEANUP] Error cleaning subscription for ${userId}: ${e.message}`);
+      }
+    }
+
     delete outputStreams[userId];
-    delete userSubscriptions[userId];
     delete userAudioIds[userId];
   }
 }
