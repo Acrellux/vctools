@@ -64,17 +64,15 @@ async function showErrorLogsSettingsUI(
 
     const contentMessage = `## ◈ **Error Logs Settings**
     > **Error Logging:** ${settings.errorLogsEnabled ? "Enabled" : "Disabled"}
-    > **Error Logs Channel:** ${
-      settings.errorLogsChannelId
+    > **Error Logs Channel:** ${settings.errorLogsChannelId
         ? `<#${settings.errorLogsChannelId}>`
         : "Not set"
-    }
-    > **Error Logs Role:** ${
-      settings.errorLogsRoleId
+      }
+    > **Error Logs Role:** ${settings.errorLogsRoleId
         ? guild.roles.cache.get(settings.errorLogsRoleId)?.name ||
-          "Unknown Role"
+        "Unknown Role"
         : "Not set"
-    }`;
+      }`;
 
     // 🛠 Reset components to avoid duplication
     const components = [];
@@ -144,13 +142,22 @@ async function showErrorLogsSettingsUI(
 
     const errorMessage =
       "> <❌> An error occurred displaying error logs settings. (INT_ERR_006)";
-    if (interactionOrMessage.isRepliable?.()) {
+    if (interactionOrMessage.isButton?.()) {
+      await interactionOrMessage.update({
+        content: contentMessage,
+        components,
+      });
+    } else if (interactionOrMessage.isRepliable?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
-        await interactionOrMessage.editReply({ content: errorMessage });
+        await interactionOrMessage.editReply({
+          content: contentMessage,
+          components,
+        });
       } else {
         await interactionOrMessage.reply({
-          content: errorMessage,
-          ephemeral: true,
+          content: contentMessage,
+          components,
+          ephemeral: isEphemeral,
         });
       }
     } else {
