@@ -42,6 +42,9 @@ const {
   showErrorLogsSettingsUI,
   handleErrorLogsFlow,
 } = require("./logic/errorlogs_logic.cjs");
+const { handleDrainSlashCommand,
+  handleDrainMessageCommand,
+} = require("./logic/drain_logic.cjs");
 const {
   showVCSettingsUI,
   handleVCSettingsFlow,
@@ -150,6 +153,9 @@ async function onMessageCreate(message) {
       case "reboot":
         await handleRebootCommand(message);
         break;
+      case "drain":
+        await handleDrainMessageCommand(message, args);
+        break;
       default:
         break;
     }
@@ -206,6 +212,9 @@ async function onInteractionCreate(interaction) {
           break;
         case "notify":
           await handleNotifySlashCommand(interaction);
+          break;
+        case "drain":
+          await handleDrainSlashCommand(interaction);
           break;
         default:
           console.log(`[DEBUG] Unhandled command: ${interaction.commandName}`);

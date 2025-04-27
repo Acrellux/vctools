@@ -528,6 +528,20 @@ const commands = [
         )
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  // ==============================
+  // DRAIN COMMAND
+  // ==============================
+  new SlashCommandBuilder()
+    .setName('drain')
+    .setDescription('Disconnect all users from a voice channel.')
+    .addChannelOption(option =>
+      option.setName('channel')
+        .setDescription('The voice channel to drain')
+        .setRequired(true)
+        .addChannelTypes(2) // Voice channels only
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.MoveMembers),
 ].map((command) => command.toJSON());
 
 const { REST } = require("discord.js");
