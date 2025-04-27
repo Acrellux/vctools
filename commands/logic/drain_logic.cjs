@@ -1,5 +1,8 @@
 // drain_logic.cjs
 
+const { getSettingsForGuild } = require("../settings.cjs"); // Assuming your settings helper
+const ansi = require("../util/ansi.cjs"); // Assuming you have your ansi helper
+
 async function handleDrainSlashCommand(interaction) {
     try {
         if (!interaction.member.permissions.has("MoveMembers")) {
@@ -39,7 +42,7 @@ async function handleDrainMessageCommand(message, args) {
             return await message.reply("> <⚠️> Please mention a voice channel or provide a channel ID.");
         }
 
-        const channelId = args[0].replace(/[<#>]/g, ""); // remove <#id> if mentioned
+        const channelId = args[0].replace(/[<#>]/g, "");
         const channel = await message.guild.channels.fetch(channelId).catch(() => null);
 
         if (!channel || channel.type !== 2) {
@@ -55,16 +58,20 @@ async function handleDrainMessageCommand(message, args) {
 
 async function drainChannel(context, channel) {
     const members = channel.members;
-    if (members.size === 0) {
+    const vcToolsId = context.client.user.id;
+
+    const membersToDrain = [...members.values()].filter(member => member.id !== vcToolsId);
+
+    if (membersToDrain.length === 0) {
         return await (context.reply || context.channel.send).call(context, {
-            content: `> <⚠️> There are no users to drain in **${channel.name}**.`,
+            content: `> <❇️> <#${channel.id}> is already empty.`,
             ephemeral: context.isCommand?.() ? true : undefined,
         });
     }
 
     let failures = [];
 
-    for (const [id, member] of members) {
+    for (const member of membersToDrain) {
         try {
             await member.voice.disconnect("Voice channel drained by command.");
         } catch (error) {
@@ -80,9 +87,38 @@ async function drainChannel(context, channel) {
     }
 
     await (context.reply || context.channel.send).call(context, {
-        content: `> <✅> Drained **${members.size}** users from **${channel.name}**.`,
+        content: `> <✅> Drained **${membersToDrain.length}** users from <#${channel.id}>.`,
         ephemeral: context.isCommand?.() ? false : undefined,
     });
+
+    // ─── VC Logging Notification ─────────────────────────────────────
+    try {
+        const settings = await getSettingsForGuild(channel.guild.id);
+        const logChannelId = settings?.vcLoggingChannelId;
+        if (logChannelId) {
+            const logChannel = await channel.guild.channels.fetch(logChannelId).catch(() => null);
+            if (logChannel) {
+                const now = new Date();
+                const minute = now.getMinutes().toString().padStart(2, "0");
+                const second = now.getSeconds().toString().padStart(2, "0");
+                const timestamp = `${minute}:${second}`;
+
+                const buildLog = (msg) => {
+                    return `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
+                };
+
+                const modTag = context.member?.user.tag || "Unknown Moderator";
+                const modId = context.member?.user.id || "UnknownID";
+                const channelName = channel.name || "Unknown Channel";
+
+                const logMsg = `${ansi.yellow}[MOD${ansi.darkGray}] [${ansi.white}${modId}${ansi.darkGray}] ${ansi.yellow}${modTag}${ansi.darkGray} drained ${ansi.white}${channelName}${ansi.darkGray}.`;
+
+                await logChannel.send(buildLog(logMsg)).catch(console.error);
+            }
+        }
+    } catch (error) {
+        console.error("[VC LOGGING ERROR]", error);
+    }
 }
 
 module.exports = { handleDrainSlashCommand, handleDrainMessageCommand };
