@@ -142,7 +142,7 @@ async function drainChannel(context, channel) {
                 const vcName = channel.name || "Unknown VC";
 
                 const logMessage = `\`\`\`ansi
-${bracket}[${white}${timestamp}${bracket}] [${roleColor}${roleName}${bracket}] [${white}${modId}${bracket}] [🔊${white}${vcName}${bracket}] ${roleColor}${modName}${bracket}:${messageGray} Drained the voice channel.${reset}
+${bracket}[${white}${timestamp}${bracket}] [${roleColor}${roleName}${bracket}] [${white}${modId}${bracket}] ${roleColor}${modName}${bracket} drained [🔊${white}${vcName}${bracket}]${reset}
 \`\`\``;
 
                 await logChannel.send(logMessage).catch(console.error);
