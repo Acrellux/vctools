@@ -230,47 +230,111 @@ const commands = [
   new SlashCommandBuilder()
     .setName("mod")
     .setDescription("Moderation tools for managing users.")
-    .addSubcommand((subcommand) =>
-      subcommand
+    // ----- mute -----
+    .addSubcommand(sub =>
+      sub
         .setName("mute")
         .setDescription("Server mute (timeout) a user.")
-        .addUserOption((option) =>
-          option
+        .addUserOption(opt =>
+          opt
             .setName("user")
             .setDescription("The user to mute.")
             .setRequired(true)
         )
+        .addStringOption(opt =>
+          opt
+            .setName("duration")
+            .setDescription("How long to mute (e.g. 10m, 2h). Defaults to 1h.")
+            .setRequired(false)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("reason")
+            .setDescription("Reason for the mute.")
+            .setRequired(false)
+        )
     )
-    .addSubcommand((subcommand) =>
-      subcommand
+    // ----- unmute -----
+    .addSubcommand(sub =>
+      sub
         .setName("unmute")
         .setDescription("Remove timeout from a user.")
-        .addUserOption((option) =>
-          option
+        .addUserOption(opt =>
+          opt
             .setName("user")
             .setDescription("The user to unmute.")
             .setRequired(true)
         )
+        .addStringOption(opt =>
+          opt
+            .setName("reason")
+            .setDescription("Reason for the unmute.")
+            .setRequired(false)
+        )
     )
-    .addSubcommand((subcommand) =>
-      subcommand
+    // ----- kick -----
+    .addSubcommand(sub =>
+      sub
         .setName("kick")
         .setDescription("Kick a user from the server.")
-        .addUserOption((option) =>
-          option
+        .addUserOption(opt =>
+          opt
             .setName("user")
             .setDescription("The user to kick.")
             .setRequired(true)
         )
+        .addStringOption(opt =>
+          opt
+            .setName("reason")
+            .setDescription("Reason for the kick.")
+            .setRequired(false)
+        )
     )
-    .addSubcommand((subcommand) =>
-      subcommand
+    // ----- ban -----
+    .addSubcommand(sub =>
+      sub
         .setName("ban")
         .setDescription("Ban a user from the server.")
-        .addUserOption((option) =>
-          option
+        .addUserOption(opt =>
+          opt
             .setName("user")
             .setDescription("The user to ban.")
+            .setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("reason")
+            .setDescription("Reason for the ban.")
+            .setRequired(false)
+        )
+    )
+    // ----- warn -----
+    .addSubcommand(sub =>
+      sub
+        .setName("warn")
+        .setDescription("Warn a user.")
+        .addUserOption(opt =>
+          opt
+            .setName("user")
+            .setDescription("The user to warn.")
+            .setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("reason")
+            .setDescription("Reason for the warning.")
+            .setRequired(false)
+        )
+    )
+    // ----- history -----
+    .addSubcommand(sub =>
+      sub
+        .setName("history")
+        .setDescription("View a user's moderation history.")
+        .addUserOption(opt =>
+          opt
+            .setName("user")
+            .setDescription("The user whose history you want to see.")
             .setRequired(true)
         )
     )

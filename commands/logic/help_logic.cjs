@@ -59,6 +59,7 @@ const helpTopics = {
 - \`vc\` - Manage voice channel permissions (kick, mute, unmute).
 - \`mod\` - Moderator commands for managing users (mute, unmute, kick, ban).
 - \`disallow\` - Remove your data from the VC Tools database.
+- \`drain\` - Disconnect users from a voice channel.
 > \`help\` - Show help topics on each of the commands above. Use \`help <command>\` to get specific help on a command.`,
 
   errors: `## **VC Tools ◈ Help ◈ Errors**
@@ -170,18 +171,38 @@ Of course, there are also privacy settings to control who can see your activity 
 - \`report close 123ABC\`
 - \`report edit 123ABC details Issue still happening, but with more details.\``,
 
+  drain: `## **VC Tools ◈ Help ◈ Drain**
+> **Drain Commands:**
+- \`drain <voice channel>\` — Disconnects all users from the specified voice channel.
+- Works through both slash commands and message commands.
+- You must have **Manage Server** permissions to use this command.
+
+> **Usage Examples:**
+- \`drain <channel>\`
+- \`/drain channel: <channel>\`
+> **Notes:**
+- VC Tools will log drained channels into the configured activity log channel, if set.
+- VC Tools will not disconnect itself, but will disconnect other bots.`,
+
   vc: `## **VC Tools ◈ Help ◈ VC Commands**
 > **Voice Channel Commands:**
 - \`vc kick <user>\` — Kicks a user from a voice channel.
-- \`vc mute <user>\` — Server mutes a user in a voice channel.
-- \`vc unmute <user>\` — Removes the server mute from a user.`,
+- \`vc mute <user>\` — Mutes a user in a voice channel.
+- \`vc unmute <user>\` — Removes the mute from a user in a voice channel.`,
 
-  mod: `## **VC Tools ◈ Help ◈ Moderator Commands**
+  mod: `## **VC Tools ◈ Help ◈ Mod Commands**
 > **Moderator Commands:**
-- \`mod mute <user> <reason>\` — Mute a user with a given reason.
-- \`mod unmute <user>\` — Unmute a muted user.
-- \`mod kick <user> <reason>\` — Kick a user from the server with a given reason.
-- \`mod ban <user> <reason>\` — Ban a user from the server with a given reason.`,
+- \`mod mute <user> <duration> <reason>\` — Timeout (mute) a user for a duration (default 60m).
+- \`mod unmute <user> <reason>\` — Remove a user's timeout (mute).
+- \`mod kick <user> <reason>\` — Kick a user from the server.
+- \`mod ban <user> <reason>\` — Ban a user from the server.
+- \`mod warn <user> <reason>\` — Warn a user in the server.
+- \`mod history <user>\` — View a user's moderation history.
+> **Notes:**
+- Duration formats: \`10m\`, \`2h\`, \`1d\` (minutes, hours, days supported).
+- Reason is optional, but recommended.
+- All actions are automatically recorded in moderation logs.
+- Abuse of mod commands may be reviewed using VC Tools records.`,
 
   disallow: `## **VC Tools ◈ Help ◈ Disallow**
 The disallow command removes your data from the VC Tools database.
