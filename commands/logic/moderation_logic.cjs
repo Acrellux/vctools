@@ -83,10 +83,26 @@ async function sendPaginatedHistory(context, channel, targetTag, records, author
   const last = Math.ceil(records.length / HISTORY_PAGE_SIZE) - 1;
 
   const controls = () => new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('history_first').setEmoji('⇤').setStyle(ButtonStyle.Primary).setDisabled(page === 0),
-    new ButtonBuilder().setCustomId('history_prev').setEmoji('◄').setStyle(ButtonStyle.Primary).setDisabled(page === 0),
-    new ButtonBuilder().setCustomId('history_next').setEmoji('►').setStyle(ButtonStyle.Primary).setDisabled(page === last),
-    new ButtonBuilder().setCustomId('history_last').setEmoji('⇥').setStyle(ButtonStyle.Primary).setDisabled(page === last),
+    new ButtonBuilder()
+      .setCustomId('history_first')
+      .setLabel('⇤')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(page === 0),
+    new ButtonBuilder()
+      .setCustomId('history_prev')
+      .setLabel('◄')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(page === 0),
+    new ButtonBuilder()
+      .setCustomId('history_next')
+      .setLabel('►')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(page === last),
+    new ButtonBuilder()
+      .setCustomId('history_last')
+      .setLabel('⇥')
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(page === last)
   );
 
   const msg = await channel.send({
