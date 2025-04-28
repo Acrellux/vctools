@@ -1,7 +1,14 @@
 // drain_logic.cjs
 
-const { getSettingsForGuild } = require("../settings.cjs"); // Assuming your settings helper
-const ansi = require("../util/ansi.cjs"); // Assuming you have your ansi helper
+const { getSettingsForGuild } = require("../settings.cjs"); // Your settings helper
+
+// Minimal inline ANSI object (no external import needed)
+const ansi = {
+    reset: "\u001b[0m",
+    white: "\u001b[37m",
+    darkGray: "\u001b[90m",
+    yellow: "\u001b[33m",
+};
 
 async function handleDrainSlashCommand(interaction) {
     try {
@@ -107,6 +114,7 @@ async function drainChannel(context, channel) {
                     return `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
                 };
 
+                // Safe fallback if context.member is missing
                 const modTag = context.member?.user.tag || "Unknown Moderator";
                 const modId = context.member?.user.id || "UnknownID";
                 const channelName = channel.name || "Unknown Channel";
