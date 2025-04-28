@@ -45,62 +45,75 @@ async function recordModerationAction({
 }
 
 /**
- * Build a paginated history embed for a given page
+ * Build a monospace table page wrapped in backticks
  */
-function buildHistoryEmbed(records, page, targetTag) {
+function buildHistoryPage(records, page) {
   const start = page * HISTORY_PAGE_SIZE;
   const slice = records.slice(start, start + HISTORY_PAGE_SIZE);
-  const description = slice.map(r => {
-    return `target: ${r.userId} | striker: ${r.moderatorId} | action: ${r.actionType}` +
-      ` | duration: ${r.duration ?? "n/a"} | reason: ${r.reason ?? "n/a"}`;
-  }).join("\n") || "No entries on this page.";
 
-  return new EmbedBuilder()
-    .setTitle(`Mod History for ${targetTag}`)
-    .setDescription(description)
-    .setFooter({ text: `Page ${page + 1}/${Math.ceil(records.length / HISTORY_PAGE_SIZE)}` })
-    .setColor("Blue");
+  const header = `ID         | User                | Moderator           | Timestamp           | Type    | Reason`;
+  const divider = header.replace(/[^|]/g, '-');
+  const rows = slice.map(r => {
+    const
+      id = String(r.id).padEnd(10),
+      user = r.userId.padEnd(20),
+      mod = r.moderatorId.padEnd(20),
+      ts = new Date(r.timestamp)
+        .toISOString()
+        .replace('T', ' ')
+        .slice(0, 19)
+        .padEnd(20),
+      typ = r.actionType.padEnd(7),
+      rea = (r.reason || '').substring(0, 30).padEnd(30);
+    return `${id} | ${user} | ${mod} | ${ts} | ${typ} | ${rea}`;
+  }).join('\n') || 'No entries on this page.';
+
+  return "```" + "\n"
+    + header + "\n"
+    + divider + "\n"
+    + rows + "\n"
+    + "```";
 }
 
 /**
- * Send the paginated history with ◀️/▶️ buttons and a 60s collector
+ * Paginated backtick‐table with ⇤ ◄ ► ⇥ buttons
  */
 async function sendPaginatedHistory(context, channel, targetTag, records, authorId) {
   let page = 0;
-  const row = () => new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId("history_prev")
-      .setEmoji("◀️")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page <= 0),
-    new ButtonBuilder()
-      .setCustomId("history_next")
-      .setEmoji("▶️")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page >= Math.ceil(records.length / HISTORY_PAGE_SIZE) - 1)
+  const last = Math.ceil(records.length / HISTORY_PAGE_SIZE) - 1;
+
+  const controls = () => new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('history_first').setEmoji('⇤').setStyle(ButtonStyle.Primary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId('history_prev').setEmoji('◄').setStyle(ButtonStyle.Primary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId('history_next').setEmoji('►').setStyle(ButtonStyle.Primary).setDisabled(page === last),
+    new ButtonBuilder().setCustomId('history_last').setEmoji('⇥').setStyle(ButtonStyle.Primary).setDisabled(page === last),
   );
 
-  const message = await channel.send({
-    embeds: [buildHistoryEmbed(records, page, targetTag)],
-    components: [row()]
+  const msg = await channel.send({
+    content: buildHistoryPage(records, page),
+    components: [controls()]
   });
 
-  const collector = message.createMessageComponentCollector({
+  const coll = msg.createMessageComponentCollector({
     filter: i => i.user.id === authorId,
     time: 60_000
   });
 
-  collector.on("collect", async i => {
-    if (i.customId === "history_prev") page--;
-    else if (i.customId === "history_next") page++;
+  coll.on('collect', async i => {
+    switch (i.customId) {
+      case 'history_first': page = 0; break;
+      case 'history_prev': page = Math.max(page - 1, 0); break;
+      case 'history_next': page = Math.min(page + 1, last); break;
+      case 'history_last': page = last; break;
+    }
     await i.update({
-      embeds: [buildHistoryEmbed(records, page, targetTag)],
-      components: [row()]
+      content: buildHistoryPage(records, page),
+      components: [controls()]
     });
   });
 
-  collector.on("end", () => {
-    message.edit({ components: [] }).catch(() => { });
+  coll.on('end', () => {
+    msg.edit({ components: [] }).catch(() => { });
   });
 }
 
@@ -158,19 +171,21 @@ async function handleModMessageCommand(message, args) {
       }
 
       case "history": {
+        // fetch records where user was either target or moderator
         const { data: records, error } = await supabase
           .from("mod_actions")
           .select("*")
-          .eq("guildId", message.guild.id)
-          .eq("userId", target.id)
+          .or(`userId.eq.${target.id},moderatorId.eq.${target.id}`)
           .order("timestamp", { ascending: false })
           .limit(HISTORY_FETCH_LIMIT);
+
         if (error) {
           return message.channel.send("> <❌> Error fetching mod history.");
         }
         if (!records.length) {
-          return message.channel.send(`> <❇️> No mod history for ${target.user.tag}.`);
+          return message.channel.send(`> <❇️> No history for ${target.user.tag}.`);
         }
+
         await sendPaginatedHistory(
           message,
           message.channel,
@@ -312,22 +327,18 @@ async function handleModSlashCommand(interaction) {
         const { data: records, error } = await supabase
           .from("mod_actions")
           .select("*")
-          .eq("guildId", interaction.guild.id)
-          .eq("userId", target.id)
+          .or(`userId.eq.${target.id},moderatorId.eq.${target.id}`)
           .order("timestamp", { ascending: false })
           .limit(HISTORY_FETCH_LIMIT);
+
         if (error) {
-          return interaction.reply({
-            content: "> <❌> Error fetching mod history.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "> <❌> Error fetching mod history.", ephemeral: true });
         }
         if (!records.length) {
-          return interaction.reply({
-            content: `> <❇️> No mod history for ${targetUser.tag}.`,
-            ephemeral: true,
-          });
+          return interaction.reply({ content: `> <❇️> No history for ${targetUser.tag}.`, ephemeral: true });
         }
+
+        // send publicly so buttons work
         const reply = await interaction.reply({ content: "Loading history...", fetchReply: true });
         await sendPaginatedHistory(
           interaction,
