@@ -2,14 +2,6 @@
 
 const { getSettingsForGuild } = require("../settings.cjs"); // Your settings helper
 
-// Correct faint ANSI colors (not bold!)
-const ansi = {
-    reset: "\u001b[0m",
-    white: "\u001b[2;37m",
-    darkGray: "\u001b[2;30m",
-    yellow: "\u001b[2;33m",
-};
-
 async function handleDrainSlashCommand(interaction) {
     try {
         if (!interaction.member.permissions.has("MoveMembers")) {
@@ -100,27 +92,60 @@ async function drainChannel(context, channel) {
 
     // ─── VC Logging Notification ─────────────────────────────────────
     try {
-        const settings = await getSettingsForGuild(channel.guild.id);
+        const guild = channel.guild;
+        const settings = await getSettingsForGuild(guild.id);
         const logChannelId = settings?.vcLoggingChannelId;
         if (logChannelId) {
-            const logChannel = await channel.guild.channels.fetch(logChannelId).catch(() => null);
+            const logChannel = await guild.channels.fetch(logChannelId).catch(() => null);
             if (logChannel) {
                 const now = new Date();
-                const minute = now.getMinutes().toString().padStart(2, "0");
-                const second = now.getSeconds().toString().padStart(2, "0");
-                const timestamp = `${minute}:${second}`;
+                const timestamp = now.toLocaleTimeString("en-US", {
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false,
+                });
 
-                const buildLog = (msg) => {
-                    return `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
-                };
+                const bracket = "\u001b[2;30m"; // Dark gray
+                const white = "\u001b[2;37m";
+                const red = "\u001b[2;31m";
+                const blue = "\u001b[2;34m";
+                const yellow = "\u001b[2;33m";
+                const messageGray = "\u001b[2;37m";
+                const reset = "\u001b[0m";
 
-                const modTag = context.member?.user.tag || "Unknown Moderator";
-                const modId = context.member?.user.id || "UnknownID";
-                const channelName = channel.name || "Unknown Channel";
+                // Fetch mod info safely
+                const modMember = await guild.members.fetch(context.user?.id || context.member?.user?.id).catch(() => null);
+                const modTag = modMember?.user?.tag || "Unknown Moderator";
+                const modId = modMember?.id || "UnknownID";
+                const modName = modMember?.displayName || modTag.split("#")[0];
 
-                const logMsg = `${ansi.yellow}[MOD${ansi.darkGray}] [${ansi.white}${modId}${ansi.darkGray}] ${ansi.yellow}${modTag}${ansi.darkGray} drained ${ansi.white}${channelName}${ansi.darkGray}.`;
+                // Decide role + color
+                let roleName = "Member";
+                let roleColor = white;
+                if (guild.ownerId === modId) {
+                    roleName = "Creator";
+                    roleColor = red;
+                } else if (modMember?.permissions.has("Administrator")) {
+                    roleName = "Admin";
+                    roleColor = blue;
+                } else if (
+                    modMember?.permissions.has("ManageGuild") ||
+                    modMember?.permissions.has("KickMembers") ||
+                    modMember?.permissions.has("MuteMembers") ||
+                    modMember?.permissions.has("BanMembers") ||
+                    modMember?.permissions.has("ManageMessages")
+                ) {
+                    roleName = "Mod";
+                    roleColor = yellow;
+                }
 
-                await logChannel.send(buildLog(logMsg)).catch(console.error);
+                const vcName = channel.name || "Unknown VC";
+
+                const logMessage = `\`\`\`ansi
+${bracket}[${white}${timestamp}${bracket}] [${roleColor}${roleName}${bracket}] [${white}${modId}${bracket}] [🔊${white}${vcName}${bracket}] ${roleColor}${modName}${bracket}:${messageGray} Drained the voice channel.${reset}
+\`\`\``;
+
+                await logChannel.send(logMessage).catch(console.error);
             }
         }
     } catch (error) {
