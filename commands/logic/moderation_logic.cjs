@@ -241,12 +241,12 @@ async function handleModMessageCommand(message, args) {
       // ask confirmation
       const confirmRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`confirm_delete_${id}`)
-          .setLabel("✅ Yes")
-          .setStyle(ButtonStyle.Danger),
+          .setCustomId(`confirm_delete_${deleteId}`)
+          .setLabel("Yes")
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-          .setCustomId(`cancel_delete_${id}`)
-          .setLabel("❌ No")
+          .setCustomId(`cancel_delete_${deleteId}`)
+          .setLabel("No")
           .setStyle(ButtonStyle.Secondary)
       );
       const confirmMsg = await message.channel.send({

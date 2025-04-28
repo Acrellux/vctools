@@ -21,7 +21,7 @@ function logErrorToChannel(guildId, errorMessage, client, context = "General") {
     return console.error("[ERROR] Missing guildId or client.");
 
   getSettingsForGuild(guildId)
-    .then((settings) => {
+    .then(async (settings) => {
       if (!settings || !settings.errorLogsChannelId) {
         console.error(`[ERROR] ${context}: ${errorMessage}`);
         return;
@@ -39,16 +39,21 @@ function logErrorToChannel(guildId, errorMessage, client, context = "General") {
         return;
       }
 
-      const censoredErrorMessage = errorMessage.split("C:\\Users\\")[1]
-        ? `C:\\Users\\Server\\${errorMessage
-          .split("C:\\Users\\")[1]
-          .split("\\")
-          .slice(1)
-          .join("\\")}`
-        : errorMessage;
+      // SAFELY replace only the path root
+      const censoredErrorMessage = errorMessage.replaceAll(
+        /C:\\Users\\[^\\]+\\/g,
+        "C:\\Users\\Server\\"
+      );
 
-      const formattedError = `> **Error in ${context}:**\n\`\`\`${censoredErrorMessage}\`\`\``;
-      channel.send(formattedError).catch(console.error);
+      const formattedError = `> **Error in ${context}:**\n\`\`\`\n${censoredErrorMessage}\n\`\`\``;
+
+      // If error is too big (Discord limit 2000 characters), shorten it
+      if (formattedError.length > 1900) {
+        const shortError = censoredErrorMessage.split("\n").slice(0, 10).join("\n");
+        await channel.send(`> **Error in ${context} (truncated):**\n\`\`\`\n${shortError}\n...\n\`\`\``).catch(console.error);
+      } else {
+        await channel.send(formattedError).catch(console.error);
+      }
     })
     .catch((err) => {
       console.error(`[ERROR] Failed to retrieve settings for logging:`, err);
