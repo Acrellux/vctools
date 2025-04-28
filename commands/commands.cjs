@@ -242,6 +242,49 @@ async function onInteractionCreate(interaction) {
             return await handleInitializeFlow(interaction, context.mode, action);
           }
         }
+      } else if (interaction.customId.startsWith("delete_")) {
+        const actionId = interaction.customId.split("_")[1];
+
+        await interaction.update({
+          content: `> Are you sure you want to delete moderation log \`${actionId}\`?`,
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`confirm_delete_${actionId}`)
+                .setLabel("✅ Confirm")
+                .setStyle(ButtonStyle.Danger),
+              new ButtonBuilder()
+                .setCustomId(`cancel_delete_${actionId}`)
+                .setLabel("❌ Cancel")
+                .setStyle(ButtonStyle.Secondary),
+            ),
+          ],
+        });
+      } else if (interaction.customId.startsWith("confirm_delete_")) {
+        const actionId = interaction.customId.split("_")[2];
+
+        const { error } = await supabase
+          .from("mod_actions")
+          .delete()
+          .eq("id", actionId);
+
+        if (error) {
+          console.error("[MOD_ACTION ERROR] Deleting:", error);
+          return interaction.update({ content: "> <❌> Failed to delete action.", components: [] });
+        }
+
+        await interaction.update({
+          content: `> <✅> Successfully deleted action \`${actionId}\`.`,
+          components: [],
+        });
+      }
+      else if (interaction.customId.startsWith("cancel_delete_")) {
+        const actionId = interaction.customId.split("_")[2];
+
+        await interaction.update({
+          content: `> <❇️> Deletion canceled for \`${actionId}\`.`,
+          components: [],
+        });
       }
 
       await handleAllInteractions(interaction);

@@ -250,7 +250,7 @@ async function handleModMessageCommand(message, args) {
           .setStyle(ButtonStyle.Secondary)
       );
       const confirmMsg = await message.channel.send({
-        content: `> <❔> Delete entry \`${id}\`?`,
+        content: `> <⚠️> Delete entry \`${id}\`?`,
         components: [confirmRow],
       });
       const coll = confirmMsg.createMessageComponentCollector({
@@ -455,15 +455,15 @@ async function handleModSlashCommand(interaction) {
       const confirmRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`confirm_delete_${deleteId}`)
-          .setLabel("✅ Yes")
-          .setStyle(ButtonStyle.Danger),
+          .setLabel("Yes")
+          .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
           .setCustomId(`cancel_delete_${deleteId}`)
-          .setLabel("❌ No")
+          .setLabel("No")
           .setStyle(ButtonStyle.Secondary)
       );
       const confirmMsg = await interaction.reply({
-        content: `> <❔> Delete entry \`${deleteId}\`?`,
+        content: `> <⚠️> Delete entry \`${deleteId}\`?`,
         components: [confirmRow],
         ephemeral: true,
         fetchReply: true,
