@@ -229,13 +229,15 @@ async function handleModMessageCommand(message, args) {
         .from("mod_actions")
         .select("id")
         .eq("id", id)
-        .single();
+        .maybeSingle();
       if (errExist) {
+        console.error("[MOD_ACTION ERROR] checking ID:", errExist);
         return message.channel.send("> <❌> Error checking action ID.");
       }
       if (!exists) {
         return message.channel.send("> <❌> Invalid action ID.");
       }
+
       // ask confirmation
       const confirmRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -442,8 +444,9 @@ async function handleModSlashCommand(interaction) {
         .from("mod_actions")
         .select("id")
         .eq("id", deleteId)
-        .single();
+        .maybeSingle();
       if (errExist) {
+        console.error("[MOD_ACTION ERROR] checking ID:", errExist);
         return interaction.reply({ content: "> <❌> Error checking action ID.", ephemeral: true });
       }
       if (!exists) {
