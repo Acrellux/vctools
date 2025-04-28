@@ -51,20 +51,20 @@ function buildHistoryPage(records, page) {
   const start = page * HISTORY_PAGE_SIZE;
   const slice = records.slice(start, start + HISTORY_PAGE_SIZE);
 
-  const header = `ID         | User                | Moderator           | Timestamp           | Type    | Reason`;
+  const header = `ID      | User                | Moderator           | Timestamp           | Type    | Reason`;
   const divider = header.replace(/[^|]/g, '-');
+
   const rows = slice.map(r => {
-    const
-      id = String(r.id).padEnd(10),
-      user = r.userId.padEnd(20),
-      mod = r.moderatorId.padEnd(20),
-      ts = new Date(r.timestamp)
-        .toISOString()
-        .replace('T', ' ')
-        .slice(0, 19)
-        .padEnd(20),
-      typ = r.actionType.padEnd(7),
-      rea = (r.reason || '').substring(0, 30).padEnd(30);
+    const id = String(r.id).substring(0, 8).padEnd(8); // ← shorten ID
+    const user = r.userId.padEnd(20);
+    const mod = r.moderatorId.padEnd(20);
+    const ts = new Date(r.timestamp)
+      .toISOString()
+      .replace('T', ' ')
+      .slice(0, 19)
+      .padEnd(20);
+    const typ = r.actionType.padEnd(7);
+    const rea = (r.reason || '').substring(0, 30).padEnd(30);
     return `${id} | ${user} | ${mod} | ${ts} | ${typ} | ${rea}`;
   }).join('\n') || 'No entries on this page.';
 
