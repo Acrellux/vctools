@@ -2,12 +2,12 @@
 
 const { getSettingsForGuild } = require("../settings.cjs"); // Your settings helper
 
-// Minimal inline ANSI object (no external import needed)
+// Correct faint ANSI colors (not bold!)
 const ansi = {
     reset: "\u001b[0m",
-    white: "\u001b[37m",
-    darkGray: "\u001b[90m",
-    yellow: "\u001b[33m",
+    white: "\u001b[2;37m",
+    darkGray: "\u001b[2;30m",
+    yellow: "\u001b[2;33m",
 };
 
 async function handleDrainSlashCommand(interaction) {
@@ -114,7 +114,6 @@ async function drainChannel(context, channel) {
                     return `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
                 };
 
-                // Safe fallback if context.member is missing
                 const modTag = context.member?.user.tag || "Unknown Moderator";
                 const modId = context.member?.user.id || "UnknownID";
                 const channelName = channel.name || "Unknown Channel";
