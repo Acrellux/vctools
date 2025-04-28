@@ -33,16 +33,14 @@ async function recordModerationAction({
   reason = null,
   duration = null, // seconds
 }) {
-  const { error } = await supabase
-    .from("mod_actions")
-    .insert([{
-      guildId,
-      userId,
-      moderatorId,
-      actionType,
-      reason,
-      duration,
-    }]);
+  const { error } = await supabase.from("mod_actions").insert([{
+    guildId,
+    userId,
+    moderatorId,
+    actionType,
+    reason,
+    duration,
+  }]);
   if (error) console.error("[MOD_ACTION ERROR]", error);
 }
 
@@ -112,29 +110,42 @@ async function sendPaginatedHistory(context, channel, targetTag, records, author
 async function handleModMessageCommand(message, args) {
   try {
     if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
-      return message.channel.send("> <❌> You do not have permission to use mod commands.");
+      return message.channel.send("> <❇️> You do not have permission to use mod commands.");
     }
 
+    const usage = {
+      mute: "> <❌> Usage: `>mod mute <user> <duration> <reason>`",
+      unmute: "> <❌> Usage: `>mod unmute <user> <reason>`",
+      kick: "> <❌> Usage: `>mod kick <user> <reason>`",
+      ban: "> <❌> Usage: `>mod ban <user> <reason>`",
+      warn: "> <❌> Usage: `>mod warn <user> <reason>`",
+      history: "> <❌> Usage: `>mod history <user>`",
+    };
+
     const sub = args[0]?.toLowerCase();
-    const userArg = args[1];
-    if (!sub || !userArg) {
+    if (!sub || !usage[sub]) {
       return message.channel.send(
-        "> <❌> Usage: `>mod <mute|unmute|kick|ban|warn|history> <user> [duration] [reason]`"
+        `> <❌> Unknown subcommand. Use one of: ${Object.keys(usage).map(s => "`" + s + "`").join(", ")}`
       );
+    }
+
+    const targetArg = args[1];
+    if (!targetArg) {
+      return message.channel.send(usage[sub]);
     }
 
     const target =
       message.mentions.members.first() ||
-      await message.guild.members.fetch(userArg).catch(() => null);
+      await message.guild.members.fetch(targetArg).catch(() => null);
     if (!target) {
-      return message.channel.send("> <❌> Could not find that user in this server.");
+      return message.channel.send("> <❇️> Could not find that user in this server.");
     }
 
     switch (sub) {
       case "warn": {
         const reason = args.slice(2).join(" ") || null;
         await message.channel.send(
-          `> <✅> Warned ${target.user.tag}${reason ? ` (Reason: ${reason})` : ""}.`
+          `> <🔨> Warned ${target.user.tag}${reason ? ` (Reason: ${reason})` : ""}.`
         );
         await recordModerationAction({
           guildId: message.guild.id,
@@ -186,7 +197,7 @@ async function handleModMessageCommand(message, args) {
         }
         await target.timeout(durationMs, reason || "No reason provided");
         await message.channel.send(
-          `> <✅> Muted ${target.user.tag} for ${durationSec}s${reason ? ` (Reason: ${reason})` : ""}.`
+          `> <🔨> Muted ${target.user.tag} for ${durationSec}s${reason ? ` (Reason: ${reason})` : ""}.`
         );
         await recordModerationAction({
           guildId: message.guild.id,
@@ -203,7 +214,7 @@ async function handleModMessageCommand(message, args) {
         const reason = args.slice(2).join(" ") || null;
         await target.timeout(null, reason || "No reason provided");
         await message.channel.send(
-          `> <✅> Unmuted ${target.user.tag}${reason ? ` (Reason: ${reason})` : ""}.`
+          `> <🔧> Unmuted ${target.user.tag}${reason ? ` (Reason: ${reason})` : ""}.`
         );
         await recordModerationAction({
           guildId: message.guild.id,
@@ -219,7 +230,7 @@ async function handleModMessageCommand(message, args) {
         const reason = args.slice(2).join(" ") || "No reason provided";
         await target.kick(reason);
         await message.channel.send(
-          `> <✅> Kicked ${target.user.tag} from the server (Reason: ${reason}).`
+          `> <🔨> Kicked ${target.user.tag} from the server (Reason: ${reason}).`
         );
         await recordModerationAction({
           guildId: message.guild.id,
@@ -235,7 +246,7 @@ async function handleModMessageCommand(message, args) {
         const reason = args.slice(2).join(" ") || "No reason provided";
         await target.ban({ reason });
         await message.channel.send(
-          `> <✅> Banned ${target.user.tag} from the server (Reason: ${reason}).`
+          `> <🔨> Banned ${target.user.tag} from the server (Reason: ${reason}).`
         );
         await recordModerationAction({
           guildId: message.guild.id,
@@ -246,11 +257,6 @@ async function handleModMessageCommand(message, args) {
         });
         break;
       }
-
-      default:
-        message.channel.send(
-          "> <❌> Unknown subcommand. Use `>mod mute|unmute|kick|ban|warn|history <user> [args]`."
-        );
     }
   } catch (error) {
     console.error(`[ERROR] handleModMessageCommand: ${error.stack}`);
@@ -271,7 +277,7 @@ async function handleModSlashCommand(interaction) {
   try {
     if (!interaction.memberPermissions.has(PermissionsBitField.Flags.KickMembers)) {
       return interaction.reply({
-        content: "> <❌> You do not have permission to use mod commands.",
+        content: "> <❇️> You do not have permission to use mod commands.",
         ephemeral: true,
       });
     }
@@ -281,7 +287,7 @@ async function handleModSlashCommand(interaction) {
     const target = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
     if (!target) {
       return interaction.reply({
-        content: "> <❌> Could not find that user in this server.",
+        content: "> <❇️> Could not find that user in this server.",
         ephemeral: true,
       });
     }
@@ -290,7 +296,7 @@ async function handleModSlashCommand(interaction) {
       case "warn": {
         const reason = interaction.options.getString("reason") || null;
         await interaction.reply({
-          content: `> <✅> Warned ${targetUser.tag}${reason ? ` (Reason: ${reason})` : ""}.`,
+          content: `> <🔨> Warned ${targetUser.tag}${reason ? ` (Reason: ${reason})` : ""}.`,
         });
         await recordModerationAction({
           guildId: interaction.guild.id,
@@ -322,7 +328,6 @@ async function handleModSlashCommand(interaction) {
             ephemeral: true,
           });
         }
-        // send public paginated embed since ephemeral can't have buttons
         const reply = await interaction.reply({ content: "Loading history...", fetchReply: true });
         await sendPaginatedHistory(
           interaction,
@@ -353,7 +358,7 @@ async function handleModSlashCommand(interaction) {
         }
         await target.timeout(durationMs, reason || "No reason provided");
         await interaction.reply({
-          content: `> <✅> Muted ${targetUser.tag} for ${durationSec}s${reason ? ` (Reason: ${reason})` : ""}.`,
+          content: `> <🔨> Muted ${targetUser.tag} for ${durationSec}s${reason ? ` (Reason: ${reason})` : ""}.`,
         });
         await recordModerationAction({
           guildId: interaction.guild.id,
@@ -370,7 +375,7 @@ async function handleModSlashCommand(interaction) {
         const reason = interaction.options.getString("reason") || null;
         await target.timeout(null, reason || "No reason provided");
         await interaction.reply({
-          content: `> <✅> Unmuted ${targetUser.tag}${reason ? ` (Reason: ${reason})` : ""}.`,
+          content: `> <🔧> Unmuted ${targetUser.tag}${reason ? ` (Reason: ${reason})` : ""}.`,
         });
         await recordModerationAction({
           guildId: interaction.guild.id,
@@ -386,7 +391,7 @@ async function handleModSlashCommand(interaction) {
         const reason = interaction.options.getString("reason") || "No reason provided";
         await target.kick(reason);
         await interaction.reply({
-          content: `> <✅> Kicked ${targetUser.tag} from the server (Reason: ${reason}).`,
+          content: `> <🔨> Kicked ${targetUser.tag} from the server (Reason: ${reason}).`,
         });
         await recordModerationAction({
           guildId: interaction.guild.id,
@@ -402,7 +407,7 @@ async function handleModSlashCommand(interaction) {
         const reason = interaction.options.getString("reason") || "No reason provided";
         await target.ban({ reason });
         await interaction.reply({
-          content: `> <✅> Banned ${targetUser.tag} from the server (Reason: ${reason}).`,
+          content: `> <🔨> Banned ${targetUser.tag} from the server (Reason: ${reason}).`,
         });
         await recordModerationAction({
           guildId: interaction.guild.id,
@@ -413,12 +418,6 @@ async function handleModSlashCommand(interaction) {
         });
         break;
       }
-
-      default:
-        return interaction.reply({
-          content: "> <❌> Unknown mod subcommand.",
-          ephemeral: true,
-        });
     }
   } catch (error) {
     console.error(`[ERROR] handleModSlashCommand: ${error.stack}`);
