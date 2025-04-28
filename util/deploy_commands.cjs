@@ -330,12 +330,18 @@ const commands = [
     .addSubcommand(sub =>
       sub
         .setName("history")
-        .setDescription("View a user's moderation history.")
+        .setDescription("View a user's moderation history or delete an entry.")
         .addUserOption(opt =>
           opt
             .setName("user")
             .setDescription("The user whose history you want to see.")
-            .setRequired(true)
+            .setRequired(false)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("delete_id")
+            .setDescription("The ID of the entry to delete.")
+            .setRequired(false)
         )
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),

@@ -51,28 +51,35 @@ function buildHistoryPage(records, page) {
   const start = page * HISTORY_PAGE_SIZE;
   const slice = records.slice(start, start + HISTORY_PAGE_SIZE);
 
-  const header = `ID      | User                | Moderator           | Timestamp           | Type    | Reason`;
+  // Determine column widths
+  const idWidth = Math.max(...records.map(r => String(r.id).length), 2);
+  const idHeader = 'ID'.padEnd(idWidth);
+  const userWidth = 20;
+  const modWidth = 20;
+  const tsWidth = 20;
+  const typeWidth = 7;
+  const reasonWidth = 30;
+
+  const header =
+    `${idHeader} | User${' '.repeat(userWidth - 4)} | Moderator${' '.repeat(modWidth - 9)} | ` +
+    `Timestamp${' '.repeat(tsWidth - 9)} | Type${' '.repeat(typeWidth - 4)} | Reason${' '.repeat(reasonWidth - 6)}`;
   const divider = header.replace(/[^|]/g, '-');
 
   const rows = slice.map(r => {
-    const id = String(r.id).substring(0, 8).padEnd(8); // ← shorten ID
-    const user = r.userId.padEnd(20);
-    const mod = r.moderatorId.padEnd(20);
+    const id = String(r.id).padEnd(idWidth);
+    const user = r.userId.padEnd(userWidth);
+    const mod = r.moderatorId.padEnd(modWidth);
     const ts = new Date(r.timestamp)
       .toISOString()
       .replace('T', ' ')
       .slice(0, 19)
-      .padEnd(20);
-    const typ = r.actionType.padEnd(7);
-    const rea = (r.reason || '').substring(0, 30).padEnd(30);
+      .padEnd(tsWidth);
+    const typ = r.actionType.padEnd(typeWidth);
+    const rea = (r.reason || '').substring(0, reasonWidth).padEnd(reasonWidth);
     return `${id} | ${user} | ${mod} | ${ts} | ${typ} | ${rea}`;
   }).join('\n') || 'No entries on this page.';
 
-  return "```" + "\n"
-    + header + "\n"
-    + divider + "\n"
-    + rows + "\n"
-    + "```";
+  return `\`\`\`\n${header}\n${divider}\n${rows}\n\`\`\``;
 }
 
 /**
@@ -83,30 +90,16 @@ async function sendPaginatedHistory(context, channel, targetTag, records, author
   const last = Math.ceil(records.length / HISTORY_PAGE_SIZE) - 1;
 
   const controls = () => new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId('history_first')
-      .setLabel('⇤')
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page === 0),
-    new ButtonBuilder()
-      .setCustomId('history_prev')
-      .setLabel('◄')
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page === 0),
-    new ButtonBuilder()
-      .setCustomId('history_next')
-      .setLabel('►')
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page === last),
-    new ButtonBuilder()
-      .setCustomId('history_last')
-      .setLabel('⇥')
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page === last)
+    new ButtonBuilder().setCustomId('history_first').setLabel('⇤').setStyle(ButtonStyle.Primary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId('history_prev').setLabel('◄').setStyle(ButtonStyle.Primary).setDisabled(page === 0),
+    new ButtonBuilder().setCustomId('history_next').setLabel('►').setStyle(ButtonStyle.Primary).setDisabled(page === last),
+    new ButtonBuilder().setCustomId('history_last').setLabel('⇥').setStyle(ButtonStyle.Primary).setDisabled(page === last)
   );
 
+  const sendContent = () => `Page ${page + 1}/${last + 1}\n` + buildHistoryPage(records, page);
+
   const msg = await channel.send({
-    content: buildHistoryPage(records, page),
+    content: sendContent(),
     components: [controls()]
   });
 
@@ -123,14 +116,12 @@ async function sendPaginatedHistory(context, channel, targetTag, records, author
       case 'history_last': page = last; break;
     }
     await i.update({
-      content: buildHistoryPage(records, page),
+      content: sendContent(),
       components: [controls()]
     });
   });
 
-  coll.on('end', () => {
-    msg.edit({ components: [] }).catch(() => { });
-  });
+  coll.on('end', () => msg.edit({ components: [] }).catch(() => { }));
 }
 
 /**
@@ -148,7 +139,7 @@ async function handleModMessageCommand(message, args) {
       kick: "> <❌> Usage: `>mod kick <user> <reason>`",
       ban: "> <❌> Usage: `>mod ban <user> <reason>`",
       warn: "> <❌> Usage: `>mod warn <user> <reason>`",
-      history: "> <❌> Usage: `>mod history <user>`",
+      history: "> <❌> Usage: `>mod history <user>`, `>mod history delete <action id>`",
     };
 
     const sub = args[0]?.toLowerCase();
@@ -187,7 +178,33 @@ async function handleModMessageCommand(message, args) {
       }
 
       case "history": {
-        // fetch records where user was either target or moderator
+        if (args[1]?.toLowerCase() === "delete") {
+          const id = args[2];
+          if (!id) {
+            return message.channel.send("> <❌> Usage: `>mod history delete <id>`");
+          }
+
+          const { error } = await supabase
+            .from("mod_actions")
+            .delete()
+            .eq("id", id);
+
+          if (error) {
+            return message.channel.send("> <❌> Error deleting history entry.");
+          }
+
+          return message.channel.send(`> <✅> Deleted entry \`${id}\`.`);
+        }
+
+        // otherwise view history (as you had)
+        const targetArg = args[1];
+        const target =
+          message.mentions.members.first() ||
+          await message.guild.members.fetch(targetArg).catch(() => null);
+        if (!target) {
+          return message.channel.send("> <❇️> Could not find that user in this server.");
+        }
+
         const { data: records, error } = await supabase
           .from("mod_actions")
           .select("*")
@@ -340,6 +357,37 @@ async function handleModSlashCommand(interaction) {
       }
 
       case "history": {
+        const deleteId = interaction.options.getString("delete_id");
+        const targetUser = interaction.options.getUser("user");
+
+        if (deleteId) {
+          const { error } = await supabase
+            .from("mod_actions")
+            .delete()
+            .eq("id", deleteId);
+
+          if (error) {
+            return interaction.reply({ content: "> <❌> Error deleting history entry.", ephemeral: true });
+          }
+
+          return interaction.reply({ content: `> <✅> Deleted entry \`${deleteId}\`.`, ephemeral: false });
+        }
+
+        if (!targetUser) {
+          return interaction.reply({
+            content: "> <❌> You must provide a user to view their history.",
+            ephemeral: true,
+          });
+        }
+
+        const target = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+        if (!target) {
+          return interaction.reply({
+            content: "> <❇️> Could not find that user in this server.",
+            ephemeral: true,
+          });
+        }
+
         const { data: records, error } = await supabase
           .from("mod_actions")
           .select("*")
@@ -354,7 +402,6 @@ async function handleModSlashCommand(interaction) {
           return interaction.reply({ content: `> <❇️> No history for ${targetUser.tag}.`, ephemeral: true });
         }
 
-        // send publicly so buttons work
         const reply = await interaction.reply({ content: "Loading history...", fetchReply: true });
         await sendPaginatedHistory(
           interaction,
