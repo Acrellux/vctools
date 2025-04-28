@@ -20,9 +20,10 @@ const MAX_TIMEOUT_MS = 28 * 24 * 60 * 60 * 1000;
 const HISTORY_FETCH_LIMIT = 10;
 const HISTORY_PAGE_SIZE = 5;
 const STARTING_ACTION_ID = 100000;
+const MAX_REASON_WORDS = 50;
 
 /**
- * Generate next sequential action ID
+ * Get next sequential action ID
  */
 async function getNextActionId() {
   const { data, error } = await supabase
@@ -34,7 +35,7 @@ async function getNextActionId() {
     console.error("[MOD_ACTION ERROR] fetching max id:", error);
     return STARTING_ACTION_ID;
   }
-  return data.length ? data[0].id + 1 : STARTING_ACTION_ID;
+  return data.length ? Number(data[0].id) + 1 : STARTING_ACTION_ID;
 }
 
 /**
@@ -46,9 +47,17 @@ async function recordModerationAction({
   moderatorId,
   actionType,
   reason = null,
-  duration = null, // seconds
+  duration = null,
 }) {
   const newId = await getNextActionId();
+  // auto-trim reason to MAX_REASON_WORDS
+  let trimmedReason = reason;
+  if (trimmedReason) {
+    const words = trimmedReason.split(/\s+/);
+    if (words.length > MAX_REASON_WORDS) {
+      trimmedReason = words.slice(0, MAX_REASON_WORDS).join(" ") + "...";
+    }
+  }
   const { error } = await supabase
     .from("mod_actions")
     .insert([{
@@ -57,7 +66,7 @@ async function recordModerationAction({
       userId,
       moderatorId,
       actionType,
-      reason,
+      reason: trimmedReason,
       duration,
     }]);
   if (error) console.error("[MOD_ACTION ERROR] inserting action:", error);
@@ -71,8 +80,6 @@ async function recordModerationAction({
 function buildHistoryPage(records, page) {
   const start = page * HISTORY_PAGE_SIZE;
   const slice = records.slice(start, start + HISTORY_PAGE_SIZE);
-
-  // Determine column widths based on first page or header minimums
   const idWidth = Math.max(...records.map(r => String(r.id).length), 2);
   const userWidth = 20;
   const modWidth = 20;
@@ -80,7 +87,6 @@ function buildHistoryPage(records, page) {
   const typeWidth = 7;
   const reasonWidth = 30;
 
-  // Header and divider
   const hdr =
     `${"ID".padEnd(idWidth)} | ` +
     `User`.padEnd(userWidth) + ` | ` +
@@ -90,21 +96,17 @@ function buildHistoryPage(records, page) {
     `Reason`.padEnd(reasonWidth);
   const divider = hdr.replace(/[^|]/g, "-");
 
-  // Helper to indent continuation lines under reason column
   const indent = " ".repeat(
     idWidth + 3 + userWidth + 3 + modWidth + 3 + tsWidth + 3 + typeWidth + 3
   );
 
-  // Build rows
   const rows = slice.map(r => {
-    // split reason into 5-word chunks
     const words = (r.reason || "").split(/\s+/);
     const chunks = [];
     for (let i = 0; i < words.length; i += 5) {
       chunks.push(words.slice(i, i + 5).join(" "));
     }
     if (!chunks.length) chunks.push("");
-    // first line includes all columns
     const idStr = String(r.id).padEnd(idWidth);
     const user = r.userId.padEnd(userWidth);
     const mod = r.moderatorId.padEnd(modWidth);
@@ -113,9 +115,9 @@ function buildHistoryPage(records, page) {
       .replace("T", " ")
       .slice(0, 19);
     const type = r.actionType.padEnd(typeWidth);
-    const firstReason = chunks[0].substring(0, reasonWidth).padEnd(reasonWidth);
-    let line = `${idStr} | ${user} | ${mod} | ${ts} | ${type} | ${firstReason}`;
-    // additional reason lines, indented
+    const first = chunks[0].substring(0, reasonWidth).padEnd(reasonWidth);
+
+    let line = `${idStr} | ${user} | ${mod} | ${ts} | ${type} | ${first}`;
     for (let j = 1; j < chunks.length; j++) {
       line += `\n${indent}${chunks[j].substring(0, reasonWidth).padEnd(reasonWidth)}`;
     }
@@ -171,18 +173,10 @@ async function sendPaginatedHistory(context, channel, targetTag, records, author
 
   coll.on("collect", async (i) => {
     switch (i.customId) {
-      case "history_first":
-        page = 0;
-        break;
-      case "history_prev":
-        page = Math.max(page - 1, 0);
-        break;
-      case "history_next":
-        page = Math.min(page + 1, last);
-        break;
-      case "history_last":
-        page = last;
-        break;
+      case "history_first": page = 0; break;
+      case "history_prev": page = Math.max(page - 1, 0); break;
+      case "history_next": page = Math.min(page + 1, last); break;
+      case "history_last": page = last; break;
     }
     await i.update({
       content: sendContent(),
@@ -224,12 +218,25 @@ async function handleModMessageCommand(message, args) {
       );
     }
 
-    // DELETE CONFIRMATION
+    // HISTORY DELETE
     if (sub === "history" && args[1]?.toLowerCase() === "delete") {
       const id = args[2];
       if (!id) {
         return message.channel.send("> <❌> Usage: `>mod history delete <action_id>`");
       }
+      // check existence
+      const { data: exists, error: errExist } = await supabase
+        .from("mod_actions")
+        .select("id")
+        .eq("id", id)
+        .single();
+      if (errExist) {
+        return message.channel.send("> <❌> Error checking action ID.");
+      }
+      if (!exists) {
+        return message.channel.send("> <❌> Invalid action ID.");
+      }
+      // ask confirmation
       const confirmRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`confirm_delete_${id}`)
@@ -241,32 +248,35 @@ async function handleModMessageCommand(message, args) {
           .setStyle(ButtonStyle.Secondary)
       );
       const confirmMsg = await message.channel.send({
-        content: `> <❔> Are you sure you want to delete action \`${id}\`?`,
+        content: `> <❔> Delete entry \`${id}\`?`,
         components: [confirmRow],
       });
-
       const coll = confirmMsg.createMessageComponentCollector({
         filter: (i) => i.user.id === message.author.id,
         time: 30_000,
       });
-
       coll.on("collect", async (i) => {
         if (i.customId === `confirm_delete_${id}`) {
-          await supabase.from("mod_actions").delete().eq("id", id);
-          await i.update({ content: `> <✅> Deleted entry \`${id}\`.`, components: [] });
+          const { data, error } = await supabase
+            .from("mod_actions")
+            .delete()
+            .eq("id", id);
+          if (error) {
+            return i.update({ content: "> <❌> Error deleting entry.", components: [] });
+          }
+          return i.update({ content: `> <✅> Deleted entry \`${id}\`.`, components: [] });
         } else {
-          await i.update({ content: `> <❌> Deletion cancelled.`, components: [] });
+          return i.update({ content: `> <❌> Deletion cancelled.`, components: [] });
         }
       });
-
-      return; // stop further handling
+      return;
     }
 
+    // other subs require a target user
     const targetArg = args[1];
     if (!targetArg) {
       return message.channel.send(usage[sub]);
     }
-
     const target =
       message.mentions.members.first() ||
       (await message.guild.members.fetch(targetArg).catch(() => null));
@@ -289,15 +299,14 @@ async function handleModMessageCommand(message, args) {
           }. [ID: ${actionId}]`
         );
       }
+
       case "history": {
-        // fallback: view history
         const { data: records, error } = await supabase
           .from("mod_actions")
           .select("*")
           .or(`userId.eq.${target.id},moderatorId.eq.${target.id}`)
           .order("timestamp", { ascending: false })
           .limit(HISTORY_FETCH_LIMIT);
-
         if (error) {
           return message.channel.send("> <❌> Error fetching mod history.");
         }
@@ -312,15 +321,13 @@ async function handleModMessageCommand(message, args) {
           message.author.id
         );
       }
+
       case "mute": {
-        let durationMs, durationSec;
-        let reason;
+        let durationMs, durationSec, reason;
         if (args[2] && ms(args[2])) {
           durationMs = ms(args[2]);
           if (durationMs > MAX_TIMEOUT_MS) {
-            return message.channel.send(
-              "> <❌> Duration too long. Max timeout is 28 days."
-            );
+            return message.channel.send("> <❌> Duration too long. Max timeout is 28 days.");
           }
           durationSec = durationMs / 1000;
           reason = args.slice(3).join(" ") || null;
@@ -343,6 +350,7 @@ async function handleModMessageCommand(message, args) {
           }. [ID: ${actionIdMute}]`
         );
       }
+
       case "unmute": {
         const reasonUn = args.slice(2).join(" ") || null;
         await target.timeout(null, reasonUn || "No reason provided");
@@ -358,6 +366,7 @@ async function handleModMessageCommand(message, args) {
           }. [ID: ${actionIdUn}]`
         );
       }
+
       case "kick": {
         const reasonK = args.slice(2).join(" ") || "No reason provided";
         await target.kick(reasonK);
@@ -372,6 +381,7 @@ async function handleModMessageCommand(message, args) {
           `> <🔨> Kicked ${target.user.tag} (Reason: ${reasonK}). [ID: ${actionIdKick}]`
         );
       }
+
       case "ban": {
         const reasonB = args.slice(2).join(" ") || "No reason provided";
         await target.ban({ reason: reasonB });
@@ -404,9 +414,7 @@ async function handleModMessageCommand(message, args) {
  */
 async function handleModSlashCommand(interaction) {
   try {
-    if (
-      !interaction.memberPermissions.has(PermissionsBitField.Flags.KickMembers)
-    ) {
+    if (!interaction.memberPermissions.has(PermissionsBitField.Flags.KickMembers)) {
       return interaction.reply({
         content: "> <❇️> You do not have permission to use mod commands.",
         ephemeral: true,
@@ -416,14 +424,31 @@ async function handleModSlashCommand(interaction) {
     const sub = interaction.options.getSubcommand();
     const targetUser = interaction.options.getUser("user");
     const deleteId = interaction.options.getString("delete_id");
-    const target =
-      sub === "history" && deleteId
-        ? null
-        : await interaction.guild.members
-          .fetch(targetUser?.id)
-          .catch(() => null);
+    let target = null;
+    if (sub !== "history" || !deleteId) {
+      target = await interaction.guild.members.fetch(targetUser?.id).catch(() => null);
+      if (!target) {
+        return interaction.reply({
+          content: "> <❇️> Could not find that user in this server.",
+          ephemeral: true,
+        });
+      }
+    }
 
+    // slash: history delete confirmation
     if (sub === "history" && deleteId) {
+      // check existence
+      const { data: exists, error: errExist } = await supabase
+        .from("mod_actions")
+        .select("id")
+        .eq("id", deleteId)
+        .single();
+      if (errExist) {
+        return interaction.reply({ content: "> <❌> Error checking action ID.", ephemeral: true });
+      }
+      if (!exists) {
+        return interaction.reply({ content: "> <❌> Invalid action ID.", ephemeral: true });
+      }
       const confirmRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`confirm_delete_${deleteId}`)
@@ -440,25 +465,22 @@ async function handleModSlashCommand(interaction) {
         ephemeral: true,
         fetchReply: true,
       });
-
       const coll = confirmMsg.createMessageComponentCollector({
         filter: (i) => i.user.id === interaction.user.id,
         time: 30_000,
       });
       coll.on("collect", async (i) => {
         if (i.customId === `confirm_delete_${deleteId}`) {
-          await supabase.from("mod_actions").delete().eq("id", deleteId);
-          await i.update({
-            content: `> <✅> Deleted entry \`${deleteId}\`.`,
-            components: [],
-            ephemeral: true,
-          });
+          const { data, error } = await supabase
+            .from("mod_actions")
+            .delete()
+            .eq("id", deleteId);
+          if (error) {
+            return i.update({ content: "> <❌> Error deleting entry.", components: [] });
+          }
+          return i.update({ content: `> <✅> Deleted entry \`${deleteId}\`.`, components: [] });
         } else {
-          await i.update({
-            content: `> <❌> Deletion cancelled.`,
-            components: [],
-            ephemeral: true,
-          });
+          return i.update({ content: `> <❌> Deletion cancelled.`, components: [] });
         }
       });
       return;
@@ -481,12 +503,6 @@ async function handleModSlashCommand(interaction) {
       }
 
       case "history": {
-        if (!targetUser) {
-          return interaction.reply({
-            content: "> <❌> Provide a user or delete_id to delete.",
-            ephemeral: true,
-          });
-        }
         const { data: records, error } = await supabase
           .from("mod_actions")
           .select("*")
@@ -494,21 +510,12 @@ async function handleModSlashCommand(interaction) {
           .order("timestamp", { ascending: false })
           .limit(HISTORY_FETCH_LIMIT);
         if (error) {
-          return interaction.reply({
-            content: "> <❌> Error fetching mod history.",
-            ephemeral: true,
-          });
+          return interaction.reply({ content: "> <❌> Error fetching mod history.", ephemeral: true });
         }
         if (!records.length) {
-          return interaction.reply({
-            content: `> <❇️> No history for ${targetUser.tag}.`,
-            ephemeral: true,
-          });
+          return interaction.reply({ content: `> <❇️> No history for ${targetUser.tag}.`, ephemeral: true });
         }
-        const reply = await interaction.reply({
-          content: "Loading history...",
-          fetchReply: true,
-        });
+        const reply = await interaction.reply({ content: "Loading history...", fetchReply: true });
         return sendPaginatedHistory(
           interaction,
           reply.channel,
@@ -526,7 +533,7 @@ async function handleModSlashCommand(interaction) {
           durationMs = ms(durationStr);
           if (durationMs > MAX_TIMEOUT_MS) {
             return interaction.reply({
-              content: "> <❌> Duration too long. Max is 28d.",
+              content: "> <❌> Duration too long. Max is 28 days.",
               ephemeral: true,
             });
           }
