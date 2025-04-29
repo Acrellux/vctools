@@ -1,3 +1,5 @@
+// moderation_logic.cjs
+
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 const supabase = createClient(
@@ -20,9 +22,7 @@ const HISTORY_PAGE_SIZE = 5;
 const STARTING_ACTION_ID = 100000;
 const MAX_REASON_WORDS = 50;
 
-/**
- * Get next sequential action ID
- */
+/** Get next sequential action ID */
 async function getNextActionId() {
   const { data, error } = await supabase
     .from("mod_actions")
@@ -36,9 +36,7 @@ async function getNextActionId() {
   return data.length ? Number(data[0].id) + 1 : STARTING_ACTION_ID;
 }
 
-/**
- * Record a moderation action in Supabase with sequential integer ID
- */
+/** Record a moderation action in Supabase */
 async function recordModerationAction({
   guildId,
   userId,
@@ -48,11 +46,11 @@ async function recordModerationAction({
   duration = null,
 }) {
   const newId = await getNextActionId();
-  let trimmedReason = reason;
-  if (trimmedReason) {
-    const words = trimmedReason.split(/\s+/);
+  let trimmed = reason;
+  if (trimmed) {
+    const words = trimmed.split(/\s+/);
     if (words.length > MAX_REASON_WORDS) {
-      trimmedReason = words.slice(0, MAX_REASON_WORDS).join(" ") + "...";
+      trimmed = words.slice(0, MAX_REASON_WORDS).join(" ") + "...";
     }
   }
   const { error } = await supabase
@@ -63,128 +61,113 @@ async function recordModerationAction({
       userId,
       moderatorId,
       actionType,
-      reason: trimmedReason,
+      reason: trimmed,
       duration,
     }]);
   if (error) console.error("[MOD_ACTION ERROR] inserting action:", error);
   return newId;
 }
 
-/**
- * Build a monospace table page wrapped in backticks
- */
-function buildHistoryPage(records, page) {
+/** Delete a moderation action by ID */
+async function deleteModerationAction(id) {
+  const { error, count } = await supabase
+    .from("mod_actions")
+    .delete({ count: "exact" })
+    .eq("id", id);
+  if (error) console.error("[MOD_ACTION ERROR] deleting action:", error);
+  return count > 0;
+}
+
+/** Build one page of history table */
+function buildHistoryPage(records, page, usersMap) {
   const start = page * HISTORY_PAGE_SIZE;
   const slice = records.slice(start, start + HISTORY_PAGE_SIZE);
-  const idWidth = Math.max(...records.map(r => String(r.id).length), 2);
-  const userWidth = 20;
-  const modWidth = 20;
-  const tsWidth = 19;
-  const typeWidth = 7;
-  const reasonWidth = 30;
+  const idW = Math.max(...records.map(r => String(r.id).length), 2);
+  const userW = 20, modW = 20, tsW = 19, typeW = 7, reasonW = 30;
 
   const hdr =
-    `${"ID".padEnd(idWidth)} | ` +
-    `User`.padEnd(userWidth) + ` | ` +
-    `Moderator`.padEnd(modWidth) + ` | ` +
-    `Timestamp`.padEnd(tsWidth) + ` | ` +
-    `Type`.padEnd(typeWidth) + ` | ` +
-    `Reason`.padEnd(reasonWidth);
+    `${"ID".padEnd(idW)} | ` +
+    `User`.padEnd(userW) + ` | ` +
+    `Moderator`.padEnd(modW) + ` | ` +
+    `Timestamp`.padEnd(tsW) + ` | ` +
+    `Type`.padEnd(typeW) + ` | ` +
+    `Reason`.padEnd(reasonW);
   const divider = hdr.replace(/[^|]/g, "-");
 
   const rows = slice.map(r => {
-    const id = String(r.id).padEnd(idWidth);
-    const user = r.userId.padEnd(userWidth);
-    const mod = r.moderatorId.padEnd(modWidth);
+    const id = String(r.id).padEnd(idW);
+    const user = (usersMap.get(r.userId) || r.userId).padEnd(userW);
+    const mod = (usersMap.get(r.moderatorId) || r.moderatorId).padEnd(modW);
     const ts = new Date(r.timestamp)
       .toISOString()
       .replace("T", " ")
       .slice(0, 19)
-      .padEnd(tsWidth);
-    const typ = r.actionType.padEnd(typeWidth);
-    const rea = (r.reason || "").substring(0, reasonWidth).padEnd(reasonWidth);
+      .padEnd(tsW);
+    const typ = r.actionType.padEnd(typeW);
+    const rea = (r.reason || "").substring(0, reasonW).padEnd(reasonW);
     return `${id} | ${user} | ${mod} | ${ts} | ${typ} | ${rea}`;
   }).join("\n") || "No entries on this page.";
 
   return ["```", hdr, divider, rows, "```"].join("\n");
 }
 
-/**
- * Paginated backtick‐table with ⇤ ◄ ► ⇥ buttons and page numbers
- */
+/** Send paginated history with buttons */
 async function sendPaginatedHistory(context, channel, targetTag, records, authorId) {
   let page = 0;
   const last = Math.ceil(records.length / HISTORY_PAGE_SIZE) - 1;
+
+  // resolve user tags
+  const usersMap = new Map();
+  for (const r of records) {
+    if (!usersMap.has(r.userId)) {
+      const u = await context.client.users.fetch(r.userId).catch(() => null);
+      usersMap.set(r.userId, u ? u.tag : r.userId);
+    }
+    if (!usersMap.has(r.moderatorId)) {
+      const m = await context.client.users.fetch(r.moderatorId).catch(() => null);
+      usersMap.set(r.moderatorId, m ? m.tag : r.moderatorId);
+    }
+  }
+
   const controls = () => new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("history_first")
-      .setLabel("⇤")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page === 0),
+      .setCustomId("history_first").setLabel("⇤").setStyle(ButtonStyle.Primary).setDisabled(page === 0),
     new ButtonBuilder()
-      .setCustomId("history_prev")
-      .setLabel("◄")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page === 0),
+      .setCustomId("history_prev").setLabel("◄").setStyle(ButtonStyle.Primary).setDisabled(page === 0),
     new ButtonBuilder()
-      .setCustomId("history_next")
-      .setLabel("►")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page === last),
+      .setCustomId("history_next").setLabel("►").setStyle(ButtonStyle.Primary).setDisabled(page === last),
     new ButtonBuilder()
-      .setCustomId("history_last")
-      .setLabel("⇥")
-      .setStyle(ButtonStyle.Primary)
-      .setDisabled(page === last)
+      .setCustomId("history_last").setLabel("⇥").setStyle(ButtonStyle.Primary).setDisabled(page === last)
   );
 
-  const content = () =>
+  const makeContent = () =>
     `**History for ${targetTag} — Page ${page + 1}/${last + 1}**\n` +
-    buildHistoryPage(records, page);
+    buildHistoryPage(records, page, usersMap);
 
-  const msg = await channel.send({
-    content: content(),
-    components: [controls()],
-  });
-
+  const msg = await channel.send({ content: makeContent(), components: [controls()] });
   const coll = msg.createMessageComponentCollector({
-    filter: (i) => i.user.id === authorId,
-    time: 60_000,
+    filter: i => i.user.id === authorId,
+    time: 60_000
   });
 
-  coll.on("collect", async (i) => {
-    switch (i.customId) {
-      case "history_first":
-        page = 0;
-        break;
-      case "history_prev":
-        page = Math.max(page - 1, 0);
-        break;
-      case "history_next":
-        page = Math.min(page + 1, last);
-        break;
-      case "history_last":
-        page = last;
-        break;
-    }
-    await i.update({
-      content: content(),
-      components: [controls()],
-    });
+  coll.on("collect", async i => {
+    if (i.customId === "history_first") page = 0;
+    if (i.customId === "history_prev") page = Math.max(page - 1, 0);
+    if (i.customId === "history_next") page = Math.min(page + 1, last);
+    if (i.customId === "history_last") page = last;
+    await i.update({ content: makeContent(), components: [controls()] });
   });
 
-  coll.on("end", () => {
-    msg.edit({ components: [] }).catch(() => { });
-  });
+  coll.on("end", () => msg.edit({ components: [] }).catch(() => { }));
 }
 
 /**
- * Message-based handler: >mod <subcommand> <user> [duration] [reason]
+ * Message-based handler: >mod <subcommand> ...
  */
 async function handleModMessageCommand(message, args) {
   try {
     if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
-      return message.channel.send("> <❇️> You do not have permission to use mod commands.");
+      return message.channel.send("> <❇️> You do not have permission.");
     }
 
     const usage = {
@@ -194,32 +177,44 @@ async function handleModMessageCommand(message, args) {
       ban: "> <❌> Usage: `>mod ban <user> <reason>`",
       warn: "> <❌> Usage: `>mod warn <user> <reason>`",
       history: "> <❌> Usage: `>mod history <user>`",
+      delete: "> <❌> Usage: `>mod delete <id>`",
     };
 
     const sub = args[0]?.toLowerCase();
     if (!sub || !usage[sub]) {
+      return message.channel.send(`> <❌> Unknown subcommand. Use: ${Object.keys(usage).map(s => `\`${s}\``).join(", ")}`);
+    }
+
+    // DELETE
+    if (sub === "delete") {
+      const id = Number(args[1]);
+      if (!id) return message.channel.send(usage.delete);
+      const ok = await deleteModerationAction(id);
       return message.channel.send(
-        `> <❌> Unknown subcommand. Use: ${Object.keys(usage)
-          .map((s) => "`" + s + "`")
-          .join(", ")}`
+        ok
+          ? `> <🗑️> Deleted mod action **${id}**.`
+          : `> <❇️> No entry with ID **${id}** found.`
       );
     }
 
+    // all others need a user
     const targetArg = args[1];
-    if (!targetArg) {
-      return message.channel.send(usage[sub]);
+    if (!targetArg) return message.channel.send(usage[sub]);
+
+    const target = message.mentions.members.first()
+      || await message.guild.members.fetch(targetArg).catch(() => null);
+    if (!target) {
+      return message.channel.send("> <❇️> Could not find that user.");
     }
 
-    const target =
-      message.mentions.members.first() ||
-      (await message.guild.members.fetch(targetArg).catch(() => null));
-    if (!target) {
-      return message.channel.send("> <❇️> Could not find that user in this server.");
-    }
+    // helper: DM the target
+    const dmTarget = async lines => {
+      try { await target.send(lines.join("\n")); } catch { }
+    };
 
     switch (sub) {
       case "warn": {
-        const reason = args.slice(2).join(" ") || null;
+        const reason = args.slice(2).join(" ") || "No reason";
         const id = await recordModerationAction({
           guildId: message.guild.id,
           userId: target.id,
@@ -227,9 +222,12 @@ async function handleModMessageCommand(message, args) {
           actionType: "warn",
           reason,
         });
-        return message.channel.send(
-          `> <🔨> Warned ${target.user.tag}${reason ? ` (Reason: ${reason})` : ""}. [ID: ${id}]`
-        );
+        await dmTarget([
+          `> <⚠️> You have been \`warned\` in **${message.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return message.channel.send(`> <🔨> Warned ${target.user.tag}. [ID: ${id}]`);
       }
 
       case "history": {
@@ -261,18 +259,18 @@ async function handleModMessageCommand(message, args) {
         if (args[2] && ms(args[2])) {
           durationMs = ms(args[2]);
           if (durationMs > MAX_TIMEOUT_MS) {
-            return message.channel.send("> <❌> Duration too long. Max timeout is 28 days.");
+            return message.channel.send("> <❌> Duration too long. Max 28 days.");
           }
           durationSec = durationMs / 1000;
-          reason = args.slice(3).join(" ") || null;
+          reason = args.slice(3).join(" ") || "No reason";
         } else {
           durationMs = 3600000;
           durationSec = 3600;
-          reason = args.slice(2).join(" ") || null;
+          reason = args.slice(2).join(" ") || "No reason";
         }
 
-        await target.timeout(durationMs, reason || "No reason provided");
-        const muteId = await recordModerationAction({
+        await target.timeout(durationMs, reason);
+        const id = await recordModerationAction({
           guildId: message.guild.id,
           userId: target.id,
           moderatorId: message.member.id,
@@ -280,72 +278,79 @@ async function handleModMessageCommand(message, args) {
           reason,
           duration: durationSec,
         });
-        return message.channel.send(
-          `> <🔨> Muted ${target.user.tag} for ${durationSec}s${reason ? ` (Reason: ${reason})` : ""
-          }. [ID: ${muteId}]`
-        );
+        const human = ms(durationMs, { long: true });
+
+        await dmTarget([
+          `> <⚠️> You have been \`muted\` for \`${human}\` in **${message.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return message.channel.send(`> <🔨> Muted ${target.user.tag}. [ID: ${id}]`);
       }
 
       case "unmute": {
-        const reason = args.slice(2).join(" ") || null;
-        await target.timeout(null, reason || "No reason provided");
-        const unmuteId = await recordModerationAction({
+        const reason = args.slice(2).join(" ") || "No reason";
+        await target.timeout(null, reason);
+        const id = await recordModerationAction({
           guildId: message.guild.id,
           userId: target.id,
           moderatorId: message.member.id,
           actionType: "unmute",
           reason,
         });
-        return message.channel.send(
-          `> <🔧> Unmuted ${target.user.tag}${reason ? ` (Reason: ${reason})` : ""
-          }. [ID: ${unmuteId}]`
-        );
+        await dmTarget([
+          `> <⚠️> You have been \`unmuted\` in **${message.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return message.channel.send(`> <🔓> Unmuted ${target.user.tag}. [ID: ${id}]`);
       }
 
       case "kick": {
-        const reason = args.slice(2).join(" ") || "No reason provided";
+        const reason = args.slice(2).join(" ") || "No reason";
         await target.kick(reason);
-        const kickId = await recordModerationAction({
+        const id = await recordModerationAction({
           guildId: message.guild.id,
           userId: target.id,
           moderatorId: message.member.id,
           actionType: "kick",
           reason,
         });
-        return message.channel.send(
-          `> <🔨> Kicked ${target.user.tag} (Reason: ${reason}). [ID: ${kickId}]`
-        );
+        await dmTarget([
+          `> <⚠️> You have been \`kicked\` from **${message.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return message.channel.send(`> <🔨> Kicked ${target.user.tag}. [ID: ${id}]`);
       }
 
       case "ban": {
-        const reason = args.slice(2).join(" ") || "No reason provided";
+        const reason = args.slice(2).join(" ") || "No reason";
         await target.ban({ reason });
-        const banId = await recordModerationAction({
+        const id = await recordModerationAction({
           guildId: message.guild.id,
           userId: target.id,
           moderatorId: message.member.id,
           actionType: "ban",
           reason,
         });
-        return message.channel.send(
-          `> <🔨> Banned ${target.user.tag} (Reason: ${reason}). [ID: ${banId}]`
-        );
+        await dmTarget([
+          `> <⚠️> You have been \`banned\` from **${message.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return message.channel.send(`> <🔨> Banned ${target.user.tag}. [ID: ${id}]`);
       }
     }
-  } catch (error) {
-    console.error(`[ERROR] handleModMessageCommand: ${error.stack}`);
-    await logErrorToChannel(
-      message.guild?.id,
-      error.stack,
-      message.client,
-      "handleModMessageCommand"
-    );
+  } catch (err) {
+    console.error(`[ERROR] handleModMessageCommand: ${err.stack}`);
+    await logErrorToChannel(message.guild?.id, err.stack, message.client, "handleModMessageCommand");
     message.channel.send("> <❌> An error occurred using mod commands.");
   }
 }
 
 /**
- * Slash-based /mod <subcommand> <user> [duration] [reason]
+ * Slash-based /mod <subcommand> ...
  */
 async function handleModSlashCommand(interaction) {
   try {
@@ -354,6 +359,22 @@ async function handleModSlashCommand(interaction) {
     }
 
     const sub = interaction.options.getSubcommand();
+    const dmTarget = async (member, lines) => {
+      try { await member.send(lines.join("\n")); } catch { }
+    };
+
+    // DELETE
+    if (sub === "delete") {
+      const id = interaction.options.getInteger("id");
+      const ok = await deleteModerationAction(id);
+      return interaction.reply({
+        content: ok
+          ? `> <🗑️> Deleted mod action **${id}**.`
+          : `> <❇️> No entry with ID **${id}** found.`,
+        ephemeral: true,
+      });
+    }
+
     const targetUser = interaction.options.getUser("user");
     const target = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
     if (!target) {
@@ -362,7 +383,7 @@ async function handleModSlashCommand(interaction) {
 
     switch (sub) {
       case "warn": {
-        const reason = interaction.options.getString("reason") || null;
+        const reason = interaction.options.getString("reason") || "No reason";
         const id = await recordModerationAction({
           guildId: interaction.guild.id,
           userId: target.id,
@@ -370,10 +391,12 @@ async function handleModSlashCommand(interaction) {
           actionType: "warn",
           reason,
         });
-        return interaction.reply({
-          content: `> <🔨> Warned ${targetUser.tag}${reason ? ` (Reason: ${reason})` : ""
-            }. [ID: ${id}]`,
-        });
+        await dmTarget(target, [
+          `> <⚠️> You have been \`warned\` in **${interaction.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return interaction.reply({ content: `> <🔨> Warned ${targetUser.tag}. [ID: ${id}]` });
       }
 
       case "history": {
@@ -389,14 +412,14 @@ async function handleModSlashCommand(interaction) {
         if (!records.length) {
           return interaction.reply({ content: `> <❇️> No history for ${targetUser.tag}.`, ephemeral: true });
         }
-        const reply = await interaction.reply({ content: "Loading history...", fetchReply: true });
-        return sendPaginatedHistory(interaction, reply.channel, targetUser.tag, records, interaction.user.id);
+        const replyMsg = await interaction.reply({ content: "Loading history...", fetchReply: true });
+        return sendPaginatedHistory(interaction, replyMsg.channel, targetUser.tag, records, interaction.user.id);
       }
 
       case "mute": {
         const durationStr = interaction.options.getString("duration");
         let durationMs, durationSec;
-        const reason = interaction.options.getString("reason") || null;
+        const reason = interaction.options.getString("reason") || "No reason";
         if (durationStr && ms(durationStr)) {
           durationMs = ms(durationStr);
           if (durationMs > MAX_TIMEOUT_MS) {
@@ -407,7 +430,7 @@ async function handleModSlashCommand(interaction) {
           durationMs = 3600000;
           durationSec = 3600;
         }
-        await target.timeout(durationMs, reason || "No reason provided");
+        await target.timeout(durationMs, reason);
         const id = await recordModerationAction({
           guildId: interaction.guild.id,
           userId: target.id,
@@ -416,15 +439,18 @@ async function handleModSlashCommand(interaction) {
           reason,
           duration: durationSec,
         });
-        return interaction.reply({
-          content: `> <🔨> Muted ${targetUser.tag} for ${durationSec}s${reason ? ` (Reason: ${reason})` : ""
-            }. [ID: ${id}]`,
-        });
+        const human = ms(durationMs, { long: true });
+        await dmTarget(target, [
+          `> <⚠️> You have been \`muted\` for \`${human}\` in **${interaction.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return interaction.reply({ content: `> <🔨> Muted ${targetUser.tag}. [ID: ${id}]` });
       }
 
       case "unmute": {
-        const reason = interaction.options.getString("reason") || null;
-        await target.timeout(null, reason || "No reason provided");
+        const reason = interaction.options.getString("reason") || "No reason";
+        await target.timeout(null, reason);
         const id = await recordModerationAction({
           guildId: interaction.guild.id,
           userId: target.id,
@@ -432,14 +458,16 @@ async function handleModSlashCommand(interaction) {
           actionType: "unmute",
           reason,
         });
-        return interaction.reply({
-          content: `> <🔧> Unmuted ${targetUser.tag}${reason ? ` (Reason: ${reason})` : ""
-            }. [ID: ${id}]`,
-        });
+        await dmTarget(target, [
+          `> <⚠️> You have been \`unmuted\` in **${interaction.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return interaction.reply({ content: `> <🔓> Unmuted ${targetUser.tag}. [ID: ${id}]` });
       }
 
       case "kick": {
-        const reason = interaction.options.getString("reason") || "No reason provided";
+        const reason = interaction.options.getString("reason") || "No reason";
         await target.kick(reason);
         const id = await recordModerationAction({
           guildId: interaction.guild.id,
@@ -448,13 +476,16 @@ async function handleModSlashCommand(interaction) {
           actionType: "kick",
           reason,
         });
-        return interaction.reply({
-          content: `> <🔨> Kicked ${targetUser.tag} (Reason: ${reason}). [ID: ${id}]`,
-        });
+        await dmTarget(target, [
+          `> <⚠️> You have been \`kicked\` from **${interaction.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return interaction.reply({ content: `> <🔨> Kicked ${targetUser.tag}. [ID: ${id}]` });
       }
 
       case "ban": {
-        const reason = interaction.options.getString("reason") || "No reason provided";
+        const reason = interaction.options.getString("reason") || "No reason";
         await target.ban({ reason });
         const id = await recordModerationAction({
           guildId: interaction.guild.id,
@@ -463,20 +494,25 @@ async function handleModSlashCommand(interaction) {
           actionType: "ban",
           reason,
         });
-        return interaction.reply({
-          content: `> <🔨> Banned ${targetUser.tag} (Reason: ${reason}). [ID: ${id}]`,
-        });
+        await dmTarget(target, [
+          `> <⚠️> You have been \`banned\` from **${interaction.guild.name}**.`,
+          `> \`Reason: ${reason}\``,
+          `> \`Action ID: ${id}\``
+        ]);
+        return interaction.reply({ content: `> <🔨> Banned ${targetUser.tag}. [ID: ${id}]` });
       }
     }
-  } catch (error) {
-    console.error(`[ERROR] handleModSlashCommand: ${error.stack}`);
+  } catch (err) {
+    console.error(`[ERROR] handleModSlashCommand: ${err.stack}`);
     await logErrorToChannel(
       interaction.guild?.id,
-      error.stack,
+      err.stack,
       interaction.client,
       "handleModSlashCommand"
     );
-    if (!interaction.replied) interaction.reply({ content: "> <❌> An error occurred.", ephemeral: true });
+    if (!interaction.replied) {
+      interaction.reply({ content: "> <❌> An error occurred.", ephemeral: true });
+    }
   }
 }
 
