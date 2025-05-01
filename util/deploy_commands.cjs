@@ -338,6 +338,18 @@ const commands = [
             .setRequired(true) // history must have a user
         )
     )
+    // ----- unban -----
+    .addSubcommand(sub =>
+      sub
+        .setName("unban")
+        .setDescription("Unban a previously banned user.")
+        .addUserOption(opt =>
+          opt
+            .setName("user")
+            .setDescription("The user to unban.")
+            .setRequired(true)
+        )
+    )
     // ----- delete -----
     .addSubcommand(sub =>
       sub
