@@ -7,7 +7,7 @@ async function handleDrainSlashCommand(interaction) {
         if (!interaction.member.permissions.has("MoveMembers")) {
             return await interaction.reply({
                 content: "> <❇️> You don't have permission to drain voice channels.",
-                ephemeral: true,
+                ephemeral: false,
             });
         }
 
@@ -15,7 +15,7 @@ async function handleDrainSlashCommand(interaction) {
         if (!channel || channel.type !== 2) {
             return await interaction.reply({
                 content: "> <⚠️> You must select a valid voice channel.",
-                ephemeral: true,
+                ephemeral: false,
             });
         }
 
@@ -25,7 +25,7 @@ async function handleDrainSlashCommand(interaction) {
         if (!interaction.replied) {
             await interaction.reply({
                 content: "> <❌> An error occurred draining the voice channel.",
-                ephemeral: true,
+                ephemeral: false,
             });
         }
     }

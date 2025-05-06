@@ -240,11 +240,6 @@ const commands = [
             .setRequired(false)
         )
     )
-    .addSubcommand(sub =>
-      sub
-        .setName("drain")
-        .setDescription("Disconnect everyone from your current VC.")
-    )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMembers),
 
   // ==============================
