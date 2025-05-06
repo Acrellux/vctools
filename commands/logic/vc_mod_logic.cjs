@@ -13,7 +13,7 @@ const { logErrorToChannel } = require("./helpers.cjs");
  */
 async function handleVCSlashCommand(interaction) {
   try {
-    // Permission check:
+    // Permission check
     if (
       !interaction.member.permissions.has(
         PermissionsBitField.Flags.ManageMembers
@@ -25,106 +25,107 @@ async function handleVCSlashCommand(interaction) {
       });
     }
 
-    const subcommand = interaction.options.getSubcommand();
+    const sub = interaction.options.getSubcommand();
     const guild = interaction.guild;
     const issuer = await guild.members.fetch(interaction.user.id);
-    let target, member;
 
-    switch (subcommand) {
-      case "mute": {
-        target = interaction.options.getUser("user");
-        if (!target) {
-          return interaction.reply({
-            content: "> <❌> Please specify a user to mute.",
-            ephemeral: true,
-          });
-        }
-        member = await guild.members.fetch(target.id);
-        if (!member || !member.voice.channel) {
-          return interaction.reply({
-            content: "> <⚠️> That user is not in a voice channel.",
-            ephemeral: true,
-          });
-        }
-        await member.voice.setMute(true, `Muted by ${interaction.user.tag}`);
+    // ──────── Drain ─────────
+    if (sub === "drain") {
+      if (!issuer.voice.channel) {
         return interaction.reply({
-          content: `> <🔇> Muted ${member.displayName} in voice channel.`,
+          content: "> <❌> You must be in a voice channel to drain it.",
           ephemeral: true,
         });
       }
-      case "unmute": {
-        target = interaction.options.getUser("user");
-        if (!target) {
-          return interaction.reply({
-            content: "> <❌> Please specify a user to unmute.",
-            ephemeral: true,
-          });
+      const channel = issuer.voice.channel;
+      for (const [, member] of channel.members) {
+        try {
+          await member.voice.disconnect(`Drained by ${interaction.user.tag}`);
+        } catch (err) {
+          console.error(`Failed to drain ${member.user.tag}: ${err.message}`);
         }
-        member = await guild.members.fetch(target.id);
-        if (!member || !member.voice.channel) {
-          return interaction.reply({
-            content: "> <⚠️> That user is not in a voice channel.",
-            ephemeral: true,
-          });
-        }
-        await member.voice.setMute(false, `Unmuted by ${interaction.user.tag}`);
-        return interaction.reply({
-          content: `> <🔊> Unmuted ${member.displayName} in voice channel.`,
-          ephemeral: true,
-        });
       }
-      case "kick": {
-        target = interaction.options.getUser("user");
-        if (!target) {
-          return interaction.reply({
-            content: "> <❌> Please specify a user to kick from voice.",
-            ephemeral: true,
-          });
-        }
-        member = await guild.members.fetch(target.id);
-        if (!member || !member.voice.channel) {
-          return interaction.reply({
-            content: "> <⚠️> That user is not in a voice channel.",
-            ephemeral: true,
-          });
-        }
-        await member.voice.disconnect(`Kicked by ${interaction.user.tag}`);
-        return interaction.reply({
-          content: `> <🚫> Kicked ${member.displayName} from voice channel.`,
-          ephemeral: true,
-        });
-      }
-      case "drain": {
-        // For slash commands, we assume the issuer must be in a VC.
-        if (!issuer.voice.channel) {
-          return interaction.reply({
-            content: "> <❌> You must be in a voice channel to drain it.",
-            ephemeral: true,
-          });
-        }
-        const channel = issuer.voice.channel;
-        const disconnectPromises = channel.members.map(async (m) => {
-          try {
-            await m.voice.disconnect(`Drained by ${interaction.user.tag}`);
-          } catch (err) {
-            console.error(`Failed to disconnect ${m.user.tag}: ${err.message}`);
-          }
-        });
-        await Promise.all(disconnectPromises);
-        return interaction.reply({
-          content: `> <💥> Drained all users from ${channel.name}.`,
-          ephemeral: true,
-        });
-      }
-      default:
-        return interaction.reply({
-          content:
-            "> <❌> Unknown subcommand. Options: mute, unmute, kick, drain.",
-          ephemeral: true,
-        });
+      return interaction.reply({
+        content: `> <💥> Drained all users from ${channel.name}.`,
+        ephemeral: true,
+      });
     }
+
+    // ──────── Parse targets ─────────
+    const usersInput = interaction.options.getString("users") || "";
+    const ids = [];
+
+    // mentions
+    const mentionRx = /<@!?(\\d{17,19})>/g;
+    let m;
+    while ((m = mentionRx.exec(usersInput))) ids.push(m[1]);
+
+    // plain IDs
+    for (const part of usersInput.split(/[\s,]+/)) {
+      if (/^\\d{17,19}$/.test(part) && !ids.includes(part)) {
+        ids.push(part);
+      }
+    }
+
+    // fallback single-user option
+    const single = interaction.options.getUser("user");
+    if (!ids.length && single) ids.push(single.id);
+
+    if (!ids.length) {
+      return interaction.reply({
+        content: "> <❌> No valid users provided.",
+        ephemeral: true,
+      });
+    }
+
+    // ──────── Apply action ─────────
+    const results = [];
+    for (const id of ids) {
+      const member = await guild.members
+        .fetch(id)
+        .catch(() => null);
+      if (!member) {
+        results.push(`❌ ${id}`);
+        continue;
+      }
+      if (!member.voice.channel) {
+        results.push(`⚠️ ${member.displayName}`);
+        continue;
+      }
+
+      try {
+        if (sub === "mute") {
+          await member.voice.setMute(true, `Muted by ${interaction.user.tag}`);
+          results.push(member.displayName);
+        } else if (sub === "unmute") {
+          await member.voice.setMute(false, `Unmuted by ${interaction.user.tag}`);
+          results.push(member.displayName);
+        } else if (sub === "kick") {
+          await member.voice.disconnect(`Kicked by ${interaction.user.tag}`);
+          results.push(member.displayName);
+        } else {
+          return interaction.reply({
+            content: "> <❌> Unknown subcommand.",
+            ephemeral: true,
+          });
+        }
+      } catch (err) {
+        console.error(`[VC] ${sub} failed for ${id}: ${err.message}`);
+        results.push(`❌ ${member.displayName}`);
+      }
+    }
+
+    // ──────── Reply ─────────
+    const emoji =
+      sub === "unmute" ? "🔊" : sub === "mute" ? "🔇" : "🚫";
+    return interaction.reply({
+      content: `> <${emoji}> ${sub.charAt(0).toUpperCase() + sub.slice(1)}d: ${results.join(
+        ", "
+      )}`,
+      ephemeral: true,
+    });
   } catch (error) {
-    console.error(`[ERROR] handleVCSlashCommand: ${error.message}`);
+    console.error(`[ERROR] handleVCSlashCommand: ${error.stack}`);
     await logErrorToChannel(
       interaction.guild.id,
       error.stack,
@@ -151,102 +152,92 @@ async function handleVCSlashCommand(interaction) {
  */
 async function handleVCMessageCommand(message, args = []) {
   try {
+    // permission
     if (
-      !message.member.permissions.has(PermissionsBitField.Flags.ManageMembers)
+      !message.member.permissions.has(
+        PermissionsBitField.Flags.ManageMembers
+      )
     ) {
-      return message.reply(
-        "> <❌> You do not have permission to manage members."
-      );
+      return message.reply("> <❌> You do not have permission to manage members.");
     }
+
     if (!args.length) {
       return message.reply(
         "> <❌> Please provide a subcommand: `mute`, `unmute`, `kick`, or `drain`"
       );
     }
 
-    const subcommand = args[0].toLowerCase();
+    const sub = args[0].toLowerCase();
     const guild = message.guild;
     const issuer = await guild.members.fetch(message.author.id);
-    let target, member;
 
-    switch (subcommand) {
-      case "mute": {
-        target = message.mentions.users.first() || { id: args[1] };
-        if (!target.id) {
-          return message.reply(
-            "> <❌> Please mention a user or provide a user ID for mute."
-          );
-        }
-        member = await guild.members.fetch(target.id).catch(() => null);
-        if (!member || !member.voice.channel) {
-          return message.reply("> <❇️> That user is not in a voice channel.");
-        }
-        await member.voice.setMute(true, `Muted by ${message.author.tag}`);
+    // drain
+    if (sub === "drain") {
+      let channel = issuer.voice.channel || message.mentions.channels.first();
+      if (!channel || channel.type !== ChannelType.GuildVoice) {
         return message.reply(
-          `> <🔇> Muted ${member.displayName} in voice channel.`
+          "> <❌> You must be in or mention a valid voice channel to drain."
         );
       }
-      case "unmute": {
-        target = message.mentions.users.first() || { id: args[1] };
-        if (!target.id) {
-          return message.reply(
-            "> <❌> Please mention a user or provide a user ID for unmute."
-          );
-        }
-        member = await guild.members.fetch(target.id).catch(() => null);
-        if (!member || !member.voice.channel) {
-          return message.reply("> <❇️> That user is not in a voice channel.");
-        }
-        await member.voice.setMute(false, `Unmuted by ${message.author.tag}`);
-        return message.reply(
-          `> <🔊> Unmuted ${member.displayName} in voice channel.`
-        );
+      for (const [, m] of channel.members) {
+        try {
+          await m.voice.disconnect(`Drained by ${message.author.tag}`);
+        } catch { }
       }
-      case "kick": {
-        target = message.mentions.users.first() || { id: args[1] };
-        if (!target.id) {
-          return message.reply(
-            "> <❌> Please mention a user or provide a user ID to kick from voice."
-          );
-        }
-        member = await guild.members.fetch(target.id).catch(() => null);
-        if (!member || !member.voice.channel) {
-          return message.reply("> <❇️> That user is not in a voice channel.");
-        }
-        await member.voice.disconnect(`Kicked by ${message.author.tag}`);
-        return message.reply(
-          `> <🚫> Kicked ${member.displayName} from voice channel.`
-        );
-      }
-      case "drain": {
-        // For drain, if the issuer isn't in a voice channel, allow them to mention one.
-        let channel;
-        if (issuer.voice.channel) {
-          channel = issuer.voice.channel;
-        } else {
-          channel = message.mentions.channels.first();
-        }
-        if (!channel || channel.type !== ChannelType.GuildVoice) {
-          return message.reply(
-            "> <❌> You must be in a voice channel or mention a valid voice channel to drain."
-          );
-        }
-        for (const [id, m] of channel.members) {
-          try {
-            await m.voice.disconnect(`Drained by ${message.author.tag}`);
-          } catch (err) {
-            console.error(`Failed to disconnect ${m.user.tag}: ${err.message}`);
-          }
-        }
-        return message.reply(`> <🕳️> Drained all users from ${channel.name}.`);
-      }
-      default:
-        return message.reply(
-          "> <❌> Unknown subcommand. Options: `mute`, `unmute`, `kick`, `drain`"
-        );
+      return message.reply(`> <🕳️> Drained all users from ${channel.name}.`);
     }
+
+    // collect targets
+    const ids = [];
+    const mentions = message.mentions.members;
+    if (mentions.size) {
+      ids.push(...mentions.keys());
+    } else if (args[1]) {
+      for (const id of args[1].split(/[\s,]+/)) {
+        if (/^\d{17,19}$/.test(id)) ids.push(id);
+      }
+    }
+
+    if (!ids.length) {
+      return message.reply(`> <❌> Please mention or list at least one user to ${sub}.`);
+    }
+
+    // apply action
+    const results = [];
+    const actionPast = { mute: "Muted", unmute: "Unmuted", kick: "Kicked" }[sub] || sub;
+    const emoji = { mute: "🔇", unmute: "🔊", kick: "🚫" }[sub] || "";
+
+    for (const id of ids) {
+      const member = await guild.members.fetch(id).catch(() => null);
+      if (!member) {
+        results.push(`❌ ${id}`);
+        continue;
+      }
+      if (!member.voice.channel) {
+        results.push(`⚠️ ${member.displayName}`);
+        continue;
+      }
+      try {
+        if (sub === "mute") {
+          await member.voice.setMute(true, `Muted by ${message.author.tag}`);
+        } else if (sub === "unmute") {
+          await member.voice.setMute(false, `Unmuted by ${message.author.tag}`);
+        } else if (sub === "kick") {
+          await member.voice.disconnect(`Kicked by ${message.author.tag}`);
+        } else {
+          return message.reply("> <❌> Unknown subcommand.");
+        }
+        results.push(member.displayName);
+      } catch {
+        results.push(`❌ ${member.displayName}`);
+      }
+    }
+
+    return message.reply(
+      `> <${emoji}> ${actionPast}: ${results.join(", ")}`
+    );
   } catch (error) {
-    console.error(`[ERROR] handleVCMessageCommand: ${error.message}`);
+    console.error(`[ERROR] handleVCMessageCommand: ${error.stack}`);
     await logErrorToChannel(
       message.guild.id,
       error.stack,

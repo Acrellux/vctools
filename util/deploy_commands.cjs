@@ -189,62 +189,91 @@ const commands = [
   new SlashCommandBuilder()
     .setName("vc")
     .setDescription("Manage users in Voice Channels.")
-    .addSubcommand((subcommand) =>
-      subcommand
+    .addSubcommand(sub =>
+      sub
         .setName("mute")
-        .setDescription("Mute a user in a VC.")
-        .addUserOption((option) =>
-          option
+        .setDescription("Mute user(s) in a VC.")
+        .addStringOption(opt =>
+          opt
+            .setName("users")
+            .setDescription("Mentions or IDs (space/comma-separated).")
+            .setRequired(false)
+        )
+        .addUserOption(opt =>
+          opt
             .setName("user")
-            .setDescription("The user to mute.")
-            .setRequired(true)
+            .setDescription("Single-user fallback.")
+            .setRequired(false)
         )
     )
-    .addSubcommand((subcommand) =>
-      subcommand
+    .addSubcommand(sub =>
+      sub
         .setName("unmute")
-        .setDescription("Unmute a user in a VC.")
-        .addUserOption((option) =>
-          option
+        .setDescription("Unmute user(s) in a VC.")
+        .addStringOption(opt =>
+          opt
+            .setName("users")
+            .setDescription("Mentions or IDs (space/comma-separated).")
+            .setRequired(false)
+        )
+        .addUserOption(opt =>
+          opt
             .setName("user")
-            .setDescription("The user to unmute.")
-            .setRequired(true)
+            .setDescription("Single-user fallback.")
+            .setRequired(false)
         )
     )
-    .addSubcommand((subcommand) =>
-      subcommand
+    .addSubcommand(sub =>
+      sub
         .setName("kick")
-        .setDescription("Kick a user from the current VC.")
-        .addUserOption((option) =>
-          option
+        .setDescription("Kick user(s) from a VC.")
+        .addStringOption(opt =>
+          opt
+            .setName("users")
+            .setDescription("Mentions or IDs (space/comma-separated).")
+            .setRequired(false)
+        )
+        .addUserOption(opt =>
+          opt
             .setName("user")
-            .setDescription("The user to kick.")
-            .setRequired(true)
+            .setDescription("Single-user fallback.")
+            .setRequired(false)
         )
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.MuteMembers),
+    .addSubcommand(sub =>
+      sub
+        .setName("drain")
+        .setDescription("Disconnect everyone from your current VC.")
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMembers),
 
   // ==============================
-  // MODERATION COMMANDS
+  // MOD COMMAND
   // ==============================
   new SlashCommandBuilder()
     .setName("mod")
     .setDescription("Moderation tools for managing users.")
-    // ----- mute -----
+    // mute
     .addSubcommand(sub =>
       sub
         .setName("mute")
-        .setDescription("Server mute (timeout) a user.")
+        .setDescription("Server-timeout user(s).")
+        .addStringOption(opt =>
+          opt
+            .setName("users")
+            .setDescription("Mentions or IDs (space/comma-separated).")
+            .setRequired(false)
+        )
         .addUserOption(opt =>
           opt
             .setName("user")
-            .setDescription("The user to mute.")
-            .setRequired(true)
+            .setDescription("Single-user fallback.")
+            .setRequired(false)
         )
         .addStringOption(opt =>
           opt
             .setName("duration")
-            .setDescription("How long to mute (e.g. 10m, 2h). Defaults to 1h.")
+            .setDescription("e.g. 10m, 2h (defaults 1h).")
             .setRequired(false)
         )
         .addStringOption(opt =>
@@ -254,16 +283,22 @@ const commands = [
             .setRequired(false)
         )
     )
-    // ----- unmute -----
+    // unmute
     .addSubcommand(sub =>
       sub
         .setName("unmute")
-        .setDescription("Remove timeout from a user.")
+        .setDescription("Remove timeout from user(s).")
+        .addStringOption(opt =>
+          opt
+            .setName("users")
+            .setDescription("Mentions or IDs (space/comma-separated).")
+            .setRequired(false)
+        )
         .addUserOption(opt =>
           opt
             .setName("user")
-            .setDescription("The user to unmute.")
-            .setRequired(true)
+            .setDescription("Single-user fallback.")
+            .setRequired(false)
         )
         .addStringOption(opt =>
           opt
@@ -272,16 +307,22 @@ const commands = [
             .setRequired(false)
         )
     )
-    // ----- kick -----
+    // kick
     .addSubcommand(sub =>
       sub
         .setName("kick")
-        .setDescription("Kick a user from the server.")
+        .setDescription("Kick user(s) from the server.")
+        .addStringOption(opt =>
+          opt
+            .setName("users")
+            .setDescription("Mentions or IDs (space/comma-separated).")
+            .setRequired(false)
+        )
         .addUserOption(opt =>
           opt
             .setName("user")
-            .setDescription("The user to kick.")
-            .setRequired(true)
+            .setDescription("Single-user fallback.")
+            .setRequired(false)
         )
         .addStringOption(opt =>
           opt
@@ -290,16 +331,22 @@ const commands = [
             .setRequired(false)
         )
     )
-    // ----- ban -----
+    // ban
     .addSubcommand(sub =>
       sub
         .setName("ban")
-        .setDescription("Ban a user from the server.")
+        .setDescription("Ban user(s) from the server.")
+        .addStringOption(opt =>
+          opt
+            .setName("users")
+            .setDescription("Mentions or IDs (space/comma-separated).")
+            .setRequired(false)
+        )
         .addUserOption(opt =>
           opt
             .setName("user")
-            .setDescription("The user to ban.")
-            .setRequired(true)
+            .setDescription("Single-user fallback.")
+            .setRequired(false)
         )
         .addStringOption(opt =>
           opt
@@ -308,7 +355,7 @@ const commands = [
             .setRequired(false)
         )
     )
-    // ----- warn -----
+    // warn
     .addSubcommand(sub =>
       sub
         .setName("warn")
@@ -326,7 +373,7 @@ const commands = [
             .setRequired(false)
         )
     )
-    // ----- history -----
+    // history
     .addSubcommand(sub =>
       sub
         .setName("history")
@@ -334,11 +381,11 @@ const commands = [
         .addUserOption(opt =>
           opt
             .setName("user")
-            .setDescription("The user whose history you want to see.")
-            .setRequired(true) // history must have a user
+            .setDescription("The user whose history you want.")
+            .setRequired(true)
         )
     )
-    // ----- unban -----
+    // unban
     .addSubcommand(sub =>
       sub
         .setName("unban")
@@ -350,7 +397,7 @@ const commands = [
             .setRequired(true)
         )
     )
-    // ----- delete -----
+    // delete
     .addSubcommand(sub =>
       sub
         .setName("delete")
@@ -358,7 +405,7 @@ const commands = [
         .addIntegerOption(opt =>
           opt
             .setName("id")
-            .setDescription("The ID of the action to delete.")
+            .setDescription("The ID of the action.")
             .setRequired(true)
         )
     )
