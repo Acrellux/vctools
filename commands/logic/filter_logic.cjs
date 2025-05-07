@@ -25,7 +25,7 @@ Use the buttons or slash subcommands to manage your filter:
 • \`/filter add <word>\`  
 • \`/filter remove <word>\`  
 • \`/filter list\`  
-• \`/filter level <moderate|strict>\``;
+• \`/filter level <moderate|strict|build>\``;
 
   // If this was a button interaction, update in place
   if (interactionOrMessage.isButton?.()) {
@@ -107,8 +107,8 @@ async function handleFilterMessageCommand(message, args) {
 
   if (sub === "level") {
     const lvl = args[1]?.toLowerCase();
-    if (!["moderate", "strict"].includes(lvl)) {
-      return message.channel.send("> <❌> Level must be `moderate` or `strict`.");
+    if (!["moderate", "strict", "build"].includes(lvl)) {
+      return message.channel.send("> <❌> Level must be `moderate`, `strict`, or `build`.");
     }
     await updateSettingsForGuild(guild.id, { filterLevel: lvl }, guild);
     return message.channel.send(`> <✅> Filter level set to \`${lvl}\`.`);
@@ -155,7 +155,7 @@ async function handleFilterSlashCommand(interaction) {
 
   if (sub === "level") {
     const lvl = interaction.options.getString("level").toLowerCase();
-    if (!["moderate", "strict"].includes(lvl)) {
+    if (!["moderate", "strict", "build"].includes(lvl)) {
       return interaction.reply({ content: "<❌> Invalid level.", ephemeral: true });
     }
     await updateSettingsForGuild(guild.id, { filterLevel: lvl }, guild);

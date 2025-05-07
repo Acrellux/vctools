@@ -148,7 +148,7 @@ Of course, there are also privacy settings to control who can see your activity 
   filter: `## **VC Tools ◈ Help ◈ Filter**
 > **Filter Management Overview:**
 - Use \`settings filter\` to manage the profanity filter.
-- **Filter Level:** Choose between \`moderate\` and \`strict\`.
+- **Filter Level:** Choose between \`build\`, \`moderate\`, and \`strict\`.
   - **Moderate:** Aggressive filtering (e.g. common curse words like the f word and s word are censored).
   - **Strict:** Lenient filtering (common curse words are allowed, only severe terms are censored).
 - **Custom Filter Words:** You can add or remove words from the filter.
@@ -156,7 +156,7 @@ Of course, there are also privacy settings to control who can see your activity 
 - \`filter add <word>\` – Add a word to the filter list.
 - \`filter remove <word>\` – Remove a word from the filter list.
 - \`filter list\` – List all custom words in the filter.
-- \`filter level <moderate|strict>\` – Set the filter level.`,
+- \`filter level <build|moderate|strict>\` – Set the filter level.`,
 
   report: `## **VC Tools ◈ Help ◈ Report**
 > **Report Commands:**
