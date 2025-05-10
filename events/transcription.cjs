@@ -388,7 +388,7 @@ async function processQueue() {
       `[QUEUE] Transcription for user ${userId}: ${transcriptionText}`
     );
     resolve(transcriptionText);
-    await safeDeleteFile(wavFilePath).catch(console.error);
+    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 500);
   } catch (err) {
     console.error(
       `[QUEUE] Error processing audio for user ${userId}: ${err.message}`
