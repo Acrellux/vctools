@@ -54,7 +54,7 @@ async function handleSafeUserMessageCommand(message, args) {
     }
     const subCmd = args[0]?.toLowerCase();
     const guildId = message.guild.id;
-    const settings = getSettingsForGuild(guildId);
+    const settings = await getSettingsForGuild(guildId);
 
     switch (subCmd) {
       case "list": {
@@ -139,7 +139,7 @@ async function handlesafeUserslashCommand(interaction) {
 
     const subCmd = interaction.options.getSubcommand(true); // list|add|remove
     const guildId = interaction.guild.id;
-    const settings = getSettingsForGuild(guildId);
+    const settings = await getSettingsForGuild(guildId);
 
     switch (subCmd) {
       case "list": {

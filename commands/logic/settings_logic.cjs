@@ -45,6 +45,10 @@ const {
   handleTranscriptionSettingChange,
   showTranscriptionSettingsUI,
 } = require("./transcription_logic.cjs");
+const {
+  showPrefixSettingsUI,
+  handlePrefixSettingsFlow,
+} = require("./prefix_logic.cjs");
 const { showErrorLogsSettingsUI } = require("./errorlogs_logic.cjs");
 
 async function handleSettingsFlow(interaction, mode, action) {
@@ -57,6 +61,11 @@ async function handleSettingsFlow(interaction, mode, action) {
     if (mode === "vc" || mode === "vcsettings") {
       await handleVCSettingsFlow(interaction, action);
       return;
+    }
+
+    // Prefix settings flow
+    if (mode === "prefix") {
+      return handlePrefixSettingsFlow(interaction);
     }
 
     let confirmation = "";
@@ -201,9 +210,8 @@ async function handleSettingsFlow(interaction, mode, action) {
 
       await interaction.deferUpdate();
       await interaction.followUp({
-        content: `> <✅> Admin Role set to **${
-          role ? role.name : "Unknown"
-        }**.`,
+        content: `> <✅> Admin Role set to **${role ? role.name : "Unknown"
+          }**.`,
         ephemeral: true,
       });
 
@@ -224,21 +232,18 @@ async function handleSettingsFlow(interaction, mode, action) {
 
         const updatedSettings = await getSettingsForGuild(guild.id);
         const contentMessage = `## **Bot Settings**
-  > **Admin Role:** ${
-    updatedSettings.adminRoleId
-      ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
-        "Unknown Role"
-      : "Not set"
-  }
-  > **Moderator Role:** ${
-    updatedSettings.modRoleId
-      ? guild.roles.cache.get(updatedSettings.modRoleId)?.name ||
-        "Unknown Role"
-      : "Not set"
-  }
-  > **Notify for Activity Reports:** ${
-    updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-  }`;
+  > **Admin Role:** ${updatedSettings.adminRoleId
+            ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
+            "Unknown Role"
+            : "Not set"
+          }
+  > **Moderator Role:** ${updatedSettings.modRoleId
+            ? guild.roles.cache.get(updatedSettings.modRoleId)?.name ||
+            "Unknown Role"
+            : "Not set"
+          }
+  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
+          }`;
 
         const adminRoleDropdown = createRoleDropdown(
           `bot:select-admin-role:${userId}`,
@@ -282,9 +287,8 @@ async function handleSettingsFlow(interaction, mode, action) {
 
         await interaction.update({ content: contentMessage, components });
         await interaction.followUp({
-          content: `> <✅> Notify for Activity Reports has been ${
-            newValue ? "enabled" : "disabled"
-          }.`,
+          content: `> <✅> Notify for Activity Reports has been ${newValue ? "enabled" : "disabled"
+            }.`,
           ephemeral: true,
         });
         return;
@@ -299,15 +303,13 @@ async function handleSettingsFlow(interaction, mode, action) {
         const role = guild.roles.cache.get(updatedSettings.adminRoleId);
         const contentMessage = `## **Bot Settings**
   > **Admin Role:** ${role ? role.name : "Not set"}
-  > **Moderator Role:** ${
-    updatedSettings.modRoleId
-      ? guild.roles.cache.get(updatedSettings.modRoleId)?.name ||
-        "Unknown Role"
-      : "Not set"
-  }
-  > **Notify for Activity Reports:** ${
-    updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-  }`;
+  > **Moderator Role:** ${updatedSettings.modRoleId
+            ? guild.roles.cache.get(updatedSettings.modRoleId)?.name ||
+            "Unknown Role"
+            : "Not set"
+          }
+  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
+          }`;
         const adminRoleDropdown = createRoleDropdown(
           `bot:select-admin-role:${userId}`,
           guild,
@@ -347,9 +349,8 @@ async function handleSettingsFlow(interaction, mode, action) {
 
         await interaction.update({ content: contentMessage, components });
         await interaction.followUp({
-          content: `> <✅> Admin Role set to **${
-            role ? role.name : "Unknown"
-          }**.`,
+          content: `> <✅> Admin Role set to **${role ? role.name : "Unknown"
+            }**.`,
           ephemeral: true,
         });
         return;
@@ -363,16 +364,14 @@ async function handleSettingsFlow(interaction, mode, action) {
         const updatedSettings = await getSettingsForGuild(guild.id);
         const role = guild.roles.cache.get(updatedSettings.modRoleId);
         const contentMessage = `## **Bot Settings**
-  > **Admin Role:** ${
-    updatedSettings.adminRoleId
-      ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
-        "Unknown Role"
-      : "Not set"
-  }
+  > **Admin Role:** ${updatedSettings.adminRoleId
+            ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
+            "Unknown Role"
+            : "Not set"
+          }
   > **Moderator Role:** ${role ? role.name : "Not set"}
-  > **Notify for Activity Reports:** ${
-    updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-  }`;
+  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
+          }`;
         const adminRoleDropdown = createRoleDropdown(
           `bot:select-admin-role:${userId}`,
           guild,
@@ -412,9 +411,8 @@ async function handleSettingsFlow(interaction, mode, action) {
 
         await interaction.update({ content: contentMessage, components });
         await interaction.followUp({
-          content: `> <✅> Moderator Role set to **${
-            role ? role.name : "Unknown"
-          }**.`,
+          content: `> <✅> Moderator Role set to **${role ? role.name : "Unknown"
+            }**.`,
           ephemeral: true,
         });
         return;
@@ -506,6 +504,9 @@ async function handleSettingsMessageCommand(message, args) {
       case "bot":
         await showBotSettingsUI(message, false);
         break;
+      case "prefix":
+        await showPrefixSettingsUI(message, false);
+        break;
       case "toggle":
         if (!args[1]) {
           return message.channel.send(
@@ -517,27 +518,23 @@ async function handleSettingsMessageCommand(message, args) {
         switch (args[1]) {
           case "transcription":
             update.transcriptionEnabled = !settings.transcriptionEnabled;
-            toggleMessage = `> <✅> Transcription has been **${
-              update.transcriptionEnabled ? "enabled" : "disabled"
-            }**.`;
+            toggleMessage = `> <✅> Transcription has been **${update.transcriptionEnabled ? "enabled" : "disabled"
+              }**.`;
             break;
           case "errorlogs":
             update.errorLogsEnabled = !settings.errorLogsEnabled;
-            toggleMessage = `> <✅> Error logging has been **${
-              update.errorLogsEnabled ? "enabled" : "disabled"
-            }**.`;
+            toggleMessage = `> <✅> Error logging has been **${update.errorLogsEnabled ? "enabled" : "disabled"
+              }**.`;
             break;
           case "vc-notify-badwords":
             update.notifyBadWord = !settings.notifyBadWord;
-            toggleMessage = `> <✅> VC bad words notification has been **${
-              update.notifyBadWord ? "enabled" : "disabled"
-            }**.`;
+            toggleMessage = `> <✅> VC bad words notification has been **${update.notifyBadWord ? "enabled" : "disabled"
+              }**.`;
             break;
           case "vc-notify-loud":
             update.notifyLoudUser = !settings.notifyLoudUser;
-            toggleMessage = `> <✅> Loud user detection has been **${
-              update.notifyLoudUser ? "enabled" : "disabled"
-            }**.`;
+            toggleMessage = `> <✅> Loud user detection has been **${update.notifyLoudUser ? "enabled" : "disabled"
+              }**.`;
             break;
           default:
             return message.channel.send(
@@ -730,7 +727,7 @@ async function handleSettingsMessageCommand(message, args) {
       }
       default:
         await message.channel.send(
-          "> **Use `>settings transcription`, `>settings errorlogs`, `>settings vc`, or `>settings bot` to configure settings.**"
+          "> **Use `>settings transcription`, `>settings errorlogs`, `>settings vc`, `settings prefix`, or `>settings bot` to configure settings.**"
         );
     }
   } catch (error) {
@@ -788,6 +785,9 @@ async function handleSettingsSlashCommand(interaction) {
       case "bot":
         await showBotSettingsUI(interaction, false);
         break;
+      case "prefix":
+        await showPrefixSettingsUI(interaction, false);
+        break;
       case "toggle": {
         const option = interaction.options.getString("option");
         const guild = interaction.guild;
@@ -796,24 +796,20 @@ async function handleSettingsSlashCommand(interaction) {
         let replyMessage = "";
         if (option === "transcription") {
           update.transcriptionEnabled = !settings.transcriptionEnabled;
-          replyMessage = `> <✅> Transcription has been **${
-            update.transcriptionEnabled ? "enabled" : "disabled"
-          }**.`;
+          replyMessage = `> <✅> Transcription has been **${update.transcriptionEnabled ? "enabled" : "disabled"
+            }**.`;
         } else if (option === "errorlogs") {
           update.errorLogsEnabled = !settings.errorLogsEnabled;
-          replyMessage = `> <✅> Error logging has been **${
-            update.errorLogsEnabled ? "enabled" : "disabled"
-          }**.`;
+          replyMessage = `> <✅> Error logging has been **${update.errorLogsEnabled ? "enabled" : "disabled"
+            }**.`;
         } else if (option === "vc-notify-badwords") {
           update.notifyBadWord = !settings.notifyBadWord;
-          replyMessage = `> <✅> VC bad words notification has been **${
-            update.notifyBadWord ? "enabled" : "disabled"
-          }**.`;
+          replyMessage = `> <✅> VC bad words notification has been **${update.notifyBadWord ? "enabled" : "disabled"
+            }**.`;
         } else if (option === "vc-notify-loud") {
           update.notifyLoudUser = !settings.notifyLoudUser;
-          replyMessage = `> <✅> Loud user detection has been **${
-            update.notifyLoudUser ? "enabled" : "disabled"
-          }**.`;
+          replyMessage = `> <✅> Loud user detection has been **${update.notifyLoudUser ? "enabled" : "disabled"
+            }**.`;
         }
         if (replyMessage) {
           await updateSettingsForGuild(guild.id, update, guild);
@@ -1004,7 +1000,7 @@ async function handleSettingsSlashCommand(interaction) {
       default:
         await interaction.reply({
           content:
-            "> <❌> Invalid settings category. Use `/settings transcription`, `/settings errorlogs`, `/settings vc`, or `/settings bot`.",
+            "> <❌> Invalid settings category. Use `/settings transcription`, `settings prefix`, `/settings errorlogs`, `/settings vc`, or `/settings bot`.",
           ephemeral: true,
         });
     }

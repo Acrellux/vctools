@@ -174,14 +174,26 @@ const initiateLoudnessWarning = async (
     rate: 48000,
   });
 
+  let lastActiveTime = Date.now();
+  const QUIET_THRESHOLD_RMS = 500;        // Customize as needed
+  const QUIET_TIMEOUT_MS = 4000;          // Time of low RMS before finalizing
+
+  loudnessDetector.on("data", (rms) => {
+    if (rms >= QUIET_THRESHOLD_RMS) {
+      lastActiveTime = Date.now(); // User is talking above quiet threshold
+      if (typeof updateTimestamp === "function") updateTimestamp();
+    } else {
+      const silentDuration = Date.now() - lastActiveTime;
+      if (silentDuration >= QUIET_TIMEOUT_MS) {
+        console.warn(`[QUIET FINALIZE] ${userId} silent (low RMS) for ${silentDuration}ms`);
+        loudnessDetector.destroy(); // Stop processing further
+      }
+    }
+  });
+
   audioStream
     .pipe(opusDecoderForLoudness)
-    .pipe(loudnessDetector)
-    .on("data", () => {
-      if (typeof updateTimestamp === "function") {
-        updateTimestamp();
-      }
-    });
+    .pipe(loudnessDetector);
 };
 
 /**
@@ -196,7 +208,7 @@ const initiateLoudnessWarning = async (
  * @param {VoiceState} oldState - The previous voice state.
  * @param {VoiceState} newState - The updated voice state.
  */
-async function detectMuteDeafenDisconnectChanges(oldState, newState) {
+async function detectUserActivityChanges(oldState, newState) {
   const guild = newState.guild;
   const member = newState.member;
   if (!guild || !member) return;
@@ -349,6 +361,15 @@ async function detectMuteDeafenDisconnectChanges(oldState, newState) {
     const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
+
+  // 6) Screen share start/stop
+  if (oldState.streaming !== newState.streaming) {
+    const action = newState.streaming
+      ? "started screen sharing"
+      : "stopped screen sharing";
+    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
+    await activityChannel.send(buildLog(logMsg)).catch(console.error);
+  }
 }
 
 /************************************************************************************************
@@ -363,7 +384,7 @@ async function execute(oldState, newState, client) {
   if (newState.member?.user.bot) return;
 
   // Detect mute and deafen changes
-  await detectMuteDeafenDisconnectChanges(oldState, newState);
+  await detectUserActivityChanges(oldState, newState);
 
   if (!newState.guild) {
     console.error("[ERROR] Guild object is missing!");
@@ -452,13 +473,8 @@ async function execute(oldState, newState, client) {
     if (connection) {
       await disconnectAndReset(connection);
     }
-    connection = await joinChannel(client, newState.channelId, guild);
-    if (connection) {
-      console.log(`[INFO] Rejoined new channel ${newState.channelId}`);
-      audioListeningFunctions(connection, guild);
-    } else {
-      console.error("[ERROR] Failed to join new voice channel after move.");
-    }
+    await manageVoiceChannels(guild, client);
+
     return;
   }
 
@@ -743,7 +759,11 @@ function audioListeningFunctions(connection, guild) {
     fs.mkdirSync(path.dirname(pcmPath), { recursive: true });
     const pcmWriter = fs.createWriteStream(pcmPath, { flags: "w" });
     const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 1, rate: 48000 });
-    audioStream.pipe(decoder).pipe(pcmWriter);
+    try {
+      audioStream.pipe(decoder).pipe(pcmWriter);
+    } catch (err) {
+      console.warn(`[PIPE ERROR] ${err.message}`);
+    }
     outputStreams[userId] = pcmWriter;
 
     // Silence-based fallback if stop never fires
@@ -819,26 +839,48 @@ function audioListeningFunctions(connection, guild) {
 
   /* ───────────────────────── HELPER: CLEANUP ───────────────────────── */
   function cleanup(userId) {
+    // Clean up the output file stream safely
     if (outputStreams[userId]) {
+      const writer = outputStreams[userId];
+
+      // Unpipe anything still connected to the stream if possible
       try {
-        outputStreams[userId].destroy();
+        if (!writer.destroyed) {
+          writer.end(); // allow graceful finish of any buffered writes
+        }
       } catch (e) {
-        console.warn(`[CLEANUP] Error closing stream for ${userId}: ${e.message}`);
+        console.warn(`[CLEANUP] Error ending stream for ${userId}: ${e.message}`);
       }
+
+      // Always attach error handler to suppress future uncaughts
+      writer.on("error", (err) => {
+        console.warn(`[PCM WRITER ERROR] ${err.message}`);
+      });
+
+      // Finally destroy and clean
+      try {
+        writer.destroy();
+      } catch (e) {
+        console.warn(`[CLEANUP] Error destroying stream for ${userId}: ${e.message}`);
+      }
+
+      delete outputStreams[userId];
     }
 
+    // Clean up userSubscriptions if they exist
     if (userSubscriptions[userId]) {
       try {
-        userSubscriptions[userId].destroy?.(); // Just in case it’s closable
-        delete userSubscriptions[userId];
+        userSubscriptions[userId].destroy?.(); // in case it's a stream
       } catch (e) {
         console.warn(`[CLEANUP] Error cleaning subscription for ${userId}: ${e.message}`);
       }
+      delete userSubscriptions[userId];
     }
 
-    delete outputStreams[userId];
+    // Clean up tracking ID
     delete userAudioIds[userId];
   }
+
 }
 
 module.exports = { execute };

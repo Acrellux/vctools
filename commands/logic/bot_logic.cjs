@@ -68,8 +68,7 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
     const adminRole = adminRoleId ? guild.roles.cache.get(adminRoleId) : null;
     const modRole = modRoleId ? guild.roles.cache.get(modRoleId) : null;
     console.log(
-      `[DEBUG] Retrieved roles: Admin: ${
-        adminRole ? adminRole.name : "Not set"
+      `[DEBUG] Retrieved roles: Admin: ${adminRole ? adminRole.name : "Not set"
       }, Moderator: ${modRole ? modRole.name : "Not set"}`
     );
 
@@ -84,12 +83,10 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
     const contentMessage = `## ◈ **Bot Settings**
 > **Admin Role:** ${adminRole ? adminRole.name : "Not set"}
 > **Moderator Role:** ${modRole ? modRole.name : "Not set"}
-> **Notify for Activity Reports:** ${
-      settings.notifyActivityReports ? "Enabled" : "Disabled"
-    }
-> **VC Event Logging Channel:** ${
-      vcLoggingChannel ? vcLoggingChannel.name : "Not set"
-    }
+> **Notify for Activity Reports:** ${settings.notifyActivityReports ? "Enabled" : "Disabled"
+      }
+> **VC Event Logging Channel:** ${vcLoggingChannel ? vcLoggingChannel.name : "Not set"
+      }
 > **VC Event Logging:** ${settings.vcLoggingEnabled ? "Enabled" : "Disabled"}`;
 
     const userId =
@@ -158,6 +155,39 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       vcLoggingChannelDropdown
     );
 
+    // ─── PREFIX TOGGLE BUTTONS ────────────────────────────────────────
+    // your format is: prefixes: { slash: true, "!": true, ">": true }
+    const prefixSettings = settings.prefixes || { slash: true, "!": true, ">": true };
+
+    const prefixRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`bot:toggle-prefix-slash:${userId}`)
+        .setLabel(
+          prefixSettings.slash
+            ? "Disable Slash (/) Prefix"
+            : "Enable Slash (/) Prefix"
+        )
+        .setStyle(prefixSettings.slash ? ButtonStyle.Danger : ButtonStyle.Success),
+
+      new ButtonBuilder()
+        .setCustomId(`bot:toggle-prefix-!:${userId}`)
+        .setLabel(
+          prefixSettings["!"]
+            ? 'Disable "!" Prefix'
+            : 'Enable "!" Prefix'
+        )
+        .setStyle(prefixSettings["!"] ? ButtonStyle.Danger : ButtonStyle.Success),
+
+      new ButtonBuilder()
+        .setCustomId(`bot:toggle-prefix->:${userId}`)
+        .setLabel(
+          prefixSettings[">"]
+            ? 'Disable ">" Prefix'
+            : 'Enable ">" Prefix'
+        )
+        .setStyle(prefixSettings[">"] ? ButtonStyle.Danger : ButtonStyle.Success)
+    );
+    
     // Aggregate all components
     const components = [
       adminRoleDropdown,
@@ -165,6 +195,7 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       toggleRow,
       vcLoggingChannelRow,
       toggleVcLoggingRow,
+      prefixRow,
     ];
 
     // Send or update the message based on whether interactionOrMessage is repliable

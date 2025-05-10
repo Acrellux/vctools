@@ -246,18 +246,29 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
     );
 
     if (settings.kickOnSoundboardSpam) {
+      // 1) Use a single ISO timestamp for insert & query
+      const now = new Date();
+      const isoNow = now.toISOString();
+
+      // 2) Insert soundboard usage
       const { error: insertError } = await supabase
         .from("soundboard_spam_log")
         .insert({
           userid: user_id,
           guildid: guild_id,
-          timestamp: now.toISOString(),
+          timestamp: isoNow,
         });
       if (insertError) {
         console.error("[ERROR] Inserting soundboard usage:", insertError);
       }
+      console.log(`[DEBUG] Inserted soundboard log at: ${isoNow}`);
 
+      // 3) Give Supabase a moment to register the write
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // 4) Query the last 2 seconds
       const twoSecondsAgo = new Date(now.getTime() - 2000).toISOString();
+      console.log(`[DEBUG] Querying log entries since: ${twoSecondsAgo}`);
       const { data: usageData, error: queryError } = await supabase
         .from("soundboard_spam_log")
         .select("*")
@@ -266,14 +277,20 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
       if (queryError) {
         console.error("[ERROR] Querying soundboard usage:", queryError);
       }
-      const usageCount = usageData ? usageData.length : 0;
-      console.log(
-        `[DEBUG] User ${user_id} soundboard usage count in last 2s: ${usageCount}`
+      console.log(`[DEBUG] Retrieved ${usageData?.length || 0} entries`);
+      usageData?.forEach(entry =>
+        console.log(`[DEBUG] Entry timestamp: ${entry.timestamp}`)
       );
 
-      if (usageCount >= 5) {
+      // 5) If they hit the spam threshold, kick them
+      if ((usageData?.length || 0) >= 5) {
         if (member && member.voice?.channel) {
           await member.voice.disconnect("Soundboard spam detected");
+          // clear all their entries so they only ever get kicked once per spam burst
+          await supabase
+            .from("soundboard_spam_log")
+            .delete()
+            .eq("userid", user_id);
 
           // Log to activity-logs if vcLoggingEnabled is true
           if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
@@ -334,22 +351,23 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
               dmError.message
             );
           }
+
           console.log(
             `[INFO] Kicked user ${user_id} from VC for soundboard spam.`
           );
         }
       }
-      // Cleanup: delete entries older than 5 seconds
+
+      // 6) Cleanup old records older than 5s
       const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
       const { error: cleanupError } = await supabase
         .from("soundboard_spam_log")
         .delete()
         .lt("timestamp", fiveSecondsAgo);
-
       if (cleanupError) {
         console.error("[ERROR] Cleaning up soundboard spam log:", cleanupError);
       } else {
-        console.log("[INFO] Old soundboard spam logs (older than 5s) cleared.");
+        console.log("[INFO] Old soundboard spam logs cleared.");
       }
     }
   } catch (error) {
@@ -586,7 +604,7 @@ client.once("ready", async () => {
 
   // Cleanup old reports
   setInterval(async () => {
-    try { 
+    try {
       await cleanupOldReports(client);
     } catch (error) {
       console.error("[ERROR] Failed to cleanup old reports:", error.message);

@@ -109,6 +109,7 @@ Of course, there are also privacy settings to control who can see your activity 
 - \`settings toggle transcription\` - Enable or disable transcription.
 - \`settings set-channel transcription <#channel>\` - Set the transcription logs channel.
 - \`settings set-role transcription <@role>\` - Set the role for transcription log access.
+- \`settings prefix\` - Configure command prefixes for the bot.
 > **Usage Example:**
 - \`settings toggle transcription\`
 - \`settings set-channel transcription #transcription-logs\`
@@ -537,7 +538,7 @@ async function handleHelpMessageCommand(message, args) {
 // Slash command help handler
 async function handleHelpSlashCommand(interaction) {
   try {
-    const subCommandName = interaction.options.getString("topic") || "";
+    const subCommandName = interaction.options.getSubcommand();
 
     if (subCommandName.toLowerCase().startsWith("error ")) {
       const code = subCommandName.split(" ")[1]?.toUpperCase();

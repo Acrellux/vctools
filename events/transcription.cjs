@@ -45,32 +45,33 @@ const {
 async function updateProfanityFilter(guildId) {
   const settings = await getSettingsForGuild(guildId);
   const customWords = settings?.filterCustom || [];
-  const filterLevel = settings?.filterLevel || "moderate";
+  const filterLevel = settings?.filterLevel || "moderate"; // strict, moderate, build
 
-  // Reset the dictionary to defaults.
-  leoProfanity.loadDictionary();
+  if (filterLevel === "build") {
+    console.log(`[PROFANITY] Guild ${guildId} is using the 'build' filter. Skipping leo-profanity entirely.`);
+  } else {
+    // Full leo-profanity reset
+    leoProfanity.loadDictionary();
 
-  // Add custom words.
-  customWords.forEach((word) => {
-    leoProfanity.add(word);
-  });
+    // Add user-defined custom banned words
+    customWords.forEach((word) => {
+      leoProfanity.add(word);
+    });
 
-  // In strict mode, remove allowed common words so they are not censored.
-  if (filterLevel === "moderate") {
-    console.log(
-      `[PROFANITY] Guild ${guildId} is using the moderate filter. Modifying leo-profanity to not censor necessary words...`
-    );
-    const jsonFilePath = "./moderation/profanityFilterModerate.json";
-    try {
-      const data = fs.readFileSync(jsonFilePath, "utf8");
-      const jsonData = JSON.parse(data);
-      const allowedCommon = jsonData.moderate || [];
-      allowedCommon.forEach((word) => {
-        leoProfanity.remove(word);
-      });
-    } catch (error) {
-      console.error("Error loading profanity filter JSON:", error);
+    if (filterLevel === "moderate") {
+      console.log(`[PROFANITY] Guild ${guildId} is using the moderate filter. Removing allowed common words...`);
+      try {
+        const jsonData = JSON.parse(fs.readFileSync("./moderation/profanityFilterModerate.json", "utf8"));
+        const allowedCommon = jsonData.moderate || [];
+        allowedCommon.forEach((word) => {
+          leoProfanity.remove(word);
+        });
+      } catch (err) {
+        console.error("Error loading moderate filter exceptions:", err);
+      }
     }
+
+    // If strict: just keep the full leo dictionary (plus custom words), no removals
   }
 }
 
@@ -532,7 +533,24 @@ ${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${nameColor}${u
 \`\`\``;
 
     try {
-      await channel.send(formattedMessage);
+      const maxLength = 1900; // buffer for closing code block
+      const rawLines = formattedMessage.split("\n");
+      let currentBlock = "```ansi\n";
+
+      for (const line of rawLines) {
+        if ((currentBlock + line + "\n```").length > maxLength) {
+          currentBlock += "```";
+          await channel.send(currentBlock).catch(console.error);
+          currentBlock = "```ansi\n";
+        }
+        currentBlock += line + "\n";
+      }
+
+      if (currentBlock.trim() !== "```ansi") {
+        currentBlock += "```";
+        await channel.send(currentBlock).catch(console.error);
+      }
+
       console.log(`[✅] Sent transcription to ${channel.name}`);
     } catch (err) {
       console.error(`[❌] Failed to send transcription: ${err.message}`);
@@ -569,7 +587,8 @@ async function convertOpusToWav(pcmPath, wavFilePath) {
   return new Promise((resolve, reject) => {
     ffmpeg(pcmPath)
       .inputFormat("s16le")      // raw 16‑bit little‑endian PCM
-      .audioFrequency(16000)     // Whisper works best at 16 kHz mono
+      .inputOptions(['-ar 48000', '-ac 1'])   // tell FFmpeg what it *really* receives
+      .audioFrequency(16000)                 // then resample
       .audioChannels(1)
       .audioCodec("pcm_s16le")
       .toFormat("wav")

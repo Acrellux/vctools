@@ -6,10 +6,9 @@ const {
   ButtonStyle,
   Message,
   Interaction,
-  PermissionsBitField,
 } = require("discord.js");
 
-// Import settings helpers from your original settings.cjs
+// Import your Supabase‐based settings helpers
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
@@ -18,14 +17,11 @@ const {
   revokeUserConsent,
 } = require("./settings.cjs");
 
-// Import interaction context storage
+// Import your interaction context store and logging helper
 const { interactionContexts } = require("../database/contextStore.cjs");
 const { logErrorToChannel } = require("./logic/helpers.cjs");
 
-// Define required permissions
-const requiredManagerPermissions = ["ManageGuild"];
-
-// Import logic functions from the other files
+// Import all your command logic modules
 const {
   handleSettingsFlow,
   handleSettingsMessageCommand,
@@ -35,20 +31,20 @@ const {
   showTranscriptionSettingsUI,
   handleTranscriptionSettingChange,
 } = require("./logic/transcription_logic.cjs");
-const {
-  handleTranscriptionFlow,
-} = require("./initialization/transcription.cjs");
+const { handleTranscriptionFlow } = require("./initialization/transcription.cjs");
 const {
   showErrorLogsSettingsUI,
   handleErrorLogsFlow,
 } = require("./logic/errorlogs_logic.cjs");
-const { handleDrainSlashCommand,
+const {
+  handleDrainSlashCommand,
   handleDrainMessageCommand,
 } = require("./logic/drain_logic.cjs");
 const {
   showVCSettingsUI,
   handleVCSettingsFlow,
 } = require("./logic/vc_logic.cjs");
+const { handlePrefixSettingsFlow } = require("./logic/prefix_logic.cjs");
 const {
   handleVCSlashCommand,
   handleVCMessageCommand,
@@ -65,7 +61,6 @@ const {
 const {
   handleHelpMessageCommand,
   handleHelpSlashCommand,
-  showHelpContent,
 } = require("./logic/help_logic.cjs");
 const {
   handleModMessageCommand,
@@ -89,7 +84,9 @@ const {
   handleDisallowMessageCommand,
   handleDisallowSlashCommand,
 } = require("./logic/disallow_logic.cjs");
-const { handleAllInteractions } = require("./logic/interaction_logic.cjs");
+const {
+  handleAllInteractions,
+} = require("./logic/interaction_logic.cjs");
 const {
   handleNotifyMessageCommand,
   handleNotifySlashCommand,
@@ -105,13 +102,39 @@ const {
 
 /* =============================
    MESSAGE-BASED COMMAND ROUTING
-============================ */
+============================= */
 async function onMessageCreate(message) {
   try {
-
     if (message.author.bot) return;
-    const prefixes = [">", "!"];
-    if (!prefixes.some((p) => message.content.startsWith(p))) return;
+
+    // ────── check enabled prefixes ──────
+    const settings = (await getSettingsForGuild(message.guild.id)) || {};
+    const prefixes = settings.prefixes || { slash: true, greater: true, exclamation: true };
+
+    let used = null;
+    if (message.content.startsWith(">")) used = "greater";
+    else if (message.content.startsWith("!")) used = "exclamation";
+
+    // If the message doesn't start with a command prefix, ignore it
+    if (!used) return;
+
+    // If that prefix type is disabled, respond with fallback options
+    if (!prefixes[used]) {
+      let reply = "> <❌> That command prefix is not enabled.\n";
+
+      const fallback = [];
+      if (prefixes.greater && used !== "greater") fallback.push("the `>` prefix");
+      if (prefixes.exclamation && used !== "exclamation") fallback.push("the `!` prefix");
+      if (prefixes.slash) fallback.push("`/slash` commands");
+
+      reply += fallback.length
+        ? `You can try using ${fallback.join(" or ")} instead.`
+        : "No commands are currently enabled.";
+
+      await message.channel.send(reply);
+      return;
+    }
+    // ──────────────────────────────────
 
     const args = message.content.slice(1).trim().split(/\s+/);
     const command = args.shift().toLowerCase();
@@ -174,11 +197,37 @@ async function onMessageCreate(message) {
 }
 
 /* =============================
-     INTERACTION-BASED COMMAND ROUTING
+   INTERACTION-BASED COMMAND ROUTING
 ============================= */
 async function onInteractionCreate(interaction) {
   try {
     if (interaction.isChatInputCommand()) {
+      // ────── ignore slash if disabled ──────
+      const settings = (await getSettingsForGuild(interaction.guild.id)) || {};
+      if (!settings.prefixes?.slash) {
+        const enabledPrefixes = settings.prefixes || {};
+        const alternatives = [];
+
+        if (enabledPrefixes.greater) alternatives.push("the `> prefix`");
+        if (enabledPrefixes.exclamation) alternatives.push("the `! prefix`");
+
+        const fallbackMessage = alternatives.length
+          ? `You can still use ${alternatives.join(" or ")} instead.`
+          : "No command prefixes are currently enabled.";
+
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: [
+              "> <❌> Slash commands are disabled on this server.",
+              fallbackMessage,
+            ].join("\n"),
+            ephemeral: false,
+          });
+        }
+        return;
+      }
+      // ─────────────────────────────────────
+
       switch (interaction.commandName) {
         case "settings":
           await handleSettingsSlashCommand(interaction);
@@ -217,23 +266,24 @@ async function onInteractionCreate(interaction) {
           await handleDrainSlashCommand(interaction);
           break;
         default:
-          console.log(`[DEBUG] Unhandled command: ${interaction.commandName}`);
+          console.log(`[DEBUG] Unhandled slash command: ${interaction.commandName}`);
       }
     } else if (interaction.isModalSubmit()) {
-      return await handleReportSubmission(interaction);
+      await handleReportSubmission(interaction);
     } else if (interaction.isButton() || interaction.isStringSelectMenu()) {
       if (interaction.customId.startsWith("help:")) {
         return;
       } else if (interaction.customId.startsWith("notify:")) {
         return handleNotifyFlow(interaction);
+      } else if (interaction.isButton() && interaction.customId.startsWith("prefix:")) {
+        return handlePrefixSettingsFlow(interaction);
       } else if (
         interaction.customId.startsWith("report:open:") ||
         interaction.customId.startsWith("activity:open:")
       ) {
         return handleReportInteractions(interaction);
       } else if (interaction.customId.startsWith("init:")) {
-        const [_, action] = interaction.customId.split(":");
-
+        const [, action] = interaction.customId.split(":");
         const context = interactionContexts.get(interaction.user.id);
         if (context?.mode === "init") {
           if (context.initMethod === "transcription") {

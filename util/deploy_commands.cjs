@@ -29,6 +29,9 @@ const commands = [
     .addSubcommand((subcommand) =>
       subcommand.setName("bot").setDescription("Manage bot permissions.")
     )
+    .addSubcommand((s) =>
+      s.setName("prefixes").setDescription("Toggle which prefixes are enabled")
+    )
     .addSubcommand((subcommand) =>
       subcommand
         .setName("toggle")
