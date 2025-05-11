@@ -25,6 +25,8 @@ const DAYS_THRESHOLD = 30;
 async function cleanupOldReports(client) {
     const cutoff = new Date(Date.now() - DAYS_THRESHOLD * 24 * 60 * 60 * 1000).toISOString();
 
+    console.log(`[CLEANUP] Beginning cleanup - ${new Date().toISOString()}`);
+
     // Fetch all old reports
     const { data: oldReports, error: fetchError } = await supabase
         .from("reports")
