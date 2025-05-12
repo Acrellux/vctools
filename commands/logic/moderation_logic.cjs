@@ -588,6 +588,21 @@ async function handleModSlashCommand(interaction) {
             ]);
             results.push(user.tag);
           }
+        } else if (sub === "warn") {
+          const member = await interaction.guild.members.fetch(id);
+          const recId = await recordModerationAction({
+            guildId: interaction.guild.id,
+            userId: id,
+            moderatorId: interaction.user.id,
+            actionType: "warn",
+            reason,
+          });
+          await dmLines(member.user, [
+            `> <⚠️> You have been \`warned\` in **${interaction.guild.name}**.`,
+            `> \`Reason: ${reason}\``,
+            `> \`Action ID: ${recId}\``
+          ]);
+          results.push(member.user.tag);
         }
       } catch {
         results.push(`❌ ${id}`);
