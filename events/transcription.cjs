@@ -527,10 +527,9 @@ async function postTranscription(guild, userId, transcription) {
 
     const voiceChannelName = member?.voice?.channel?.name || "Unknown Channel";
 
-    const formattedMessage = `\`\`\`ansi
+    const formattedMessage = `ansi
 ${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${nameColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${member?.displayName || `User ${userId}`
-      }${bracket}:${messageColor} ${transcription}${reset}
-\`\`\``;
+      }${bracket}:${messageColor} ${transcription}${reset}`;
 
     try {
       const maxLength = 1900; // Buffer space for code block endings
