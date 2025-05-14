@@ -527,7 +527,7 @@ async function postTranscription(guild, userId, transcription) {
 
     const voiceChannelName = member?.voice?.channel?.name || "Unknown Channel";
 
-    const formattedMessage = `ansi
+    const formattedMessage = `
 ${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${nameColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${member?.displayName || `User ${userId}`
       }${bracket}:${messageColor} ${transcription}${reset}`;
 
