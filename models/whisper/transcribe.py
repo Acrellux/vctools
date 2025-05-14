@@ -36,7 +36,7 @@ def transcribe_audio(wav_file):
 
     # Whisper Transcription
     try:
-        model = whisper.load_model("base")
+        model = whisper.load_model("medium")
         result = model.transcribe(wav_file)
         print(json.dumps({"text": result["text"]}))  # ✅ JSON OUTPUT ONLY
     except Exception as e:
