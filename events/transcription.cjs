@@ -533,20 +533,22 @@ ${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${nameColor}${u
 \`\`\``;
 
     try {
-      const maxLength = 1900; // buffer for closing code block
+      const maxLength = 1900; // Buffer space for code block endings
       const rawLines = formattedMessage.split("\n");
       let currentBlock = "```ansi\n";
 
       for (const line of rawLines) {
+        // Check if adding this line would exceed the max length (including the closing ``` line)
         if ((currentBlock + line + "\n```").length > maxLength) {
-          currentBlock += "```";
+          currentBlock += "```"; // Close current block
           await channel.send(currentBlock).catch(console.error);
-          currentBlock = "```ansi\n";
+          currentBlock = "```ansi\n"; // Start new block
         }
         currentBlock += line + "\n";
       }
 
-      if (currentBlock.trim() !== "```ansi") {
+      // Send any remaining content in the buffer
+      if (currentBlock !== "```ansi\n") {
         currentBlock += "```";
         await channel.send(currentBlock).catch(console.error);
       }
