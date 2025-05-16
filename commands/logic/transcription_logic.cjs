@@ -51,20 +51,17 @@ async function showTranscriptionSettingsUI(
         "> <❌> You do not have the required permissions to use this command. (CMD_ERR_008)";
       if (interactionOrMessage instanceof Message) {
         await interactionOrMessage.channel.send({
-          content: contentMessage,
-          components,
+          content: noPermMsg,
         });
       } else if (interactionOrMessage.isMessageComponent()) {
-        // If it's a button/select menu interaction
-        await interactionOrMessage.reply({
-          content: contentMessage,
-          components,
+        await interactionOrMessage.update({
+          content: noPermMsg,
+          components: [],
         });
       } else {
-        // If it's a slash command interaction
         await interactionOrMessage.editReply({
-          content: contentMessage,
-          components,
+          content: noPermMsg,
+          components: [],
         });
       }
       return;
@@ -76,14 +73,12 @@ async function showTranscriptionSettingsUI(
         : interactionOrMessage.user.id;
     const contentMessage = `## ◈ **Transcription Settings**
   > **Transcription:** ${settings.transcriptionEnabled ? "Enabled" : "Disabled"}
-  > **Transcription Logs Channel:** ${
-    settings.channelId ? `<#${settings.channelId}>` : "Not set"
-  }
-  > **Transcription Logs Role:** ${
-    settings.allowedRoleId
-      ? guild.roles.cache.get(settings.allowedRoleId)?.name || "Unknown Role"
-      : "Not set"
-  }`;
+  > **Transcription Logs Channel:** ${settings.channelId ? `<#${settings.channelId}>` : "Not set"
+      }
+  > **Transcription Logs Role:** ${settings.allowedRoleId
+        ? guild.roles.cache.get(settings.allowedRoleId)?.name || "Unknown Role"
+        : "Not set"
+      }`;
 
     const transcriptionButtons = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
