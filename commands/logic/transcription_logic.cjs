@@ -111,7 +111,12 @@ async function showTranscriptionSettingsUI(
       transcriptionRoleDropdown,
     ];
 
-    if (interactionOrMessage.isRepliable?.()) {
+    if (interactionOrMessage.isMessageComponent?.()) {
+      await interactionOrMessage.update({
+        content: contentMessage,
+        components,
+      });
+    } else if (interactionOrMessage.isRepliable?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
         await interactionOrMessage.editReply({
           content: contentMessage,
