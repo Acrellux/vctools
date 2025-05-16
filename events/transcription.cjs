@@ -466,7 +466,7 @@ async function transcribeAudio(wavFilePath) {
  * @param {string} userId - The user ID.
  * @param {string} transcription - The transcription text.
  */
-async function postTranscription(guild, userId, transcription) {
+async function postTranscription(guild, userId, transcription, channelId) {
   try {
     const channel = await ensureTranscriptionChannel(guild);
     if (!channel) {
@@ -525,7 +525,10 @@ async function postTranscription(guild, userId, transcription) {
       }
     )}${bracket}]${reset}`;
 
-    const voiceChannelName = member?.voice?.channel?.name || "Unknown Channel";
+    let voiceChannelName = "Unknown Channel";
+    if (channelId && guild.channels.cache.has(channelId)) {
+      voiceChannelName = guild.channels.cache.get(channelId)?.name || "Unknown Channel";
+    }
 
     const formattedMessage = `
 ${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${nameColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${member?.displayName || `User ${userId}`

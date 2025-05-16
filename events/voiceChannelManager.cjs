@@ -788,14 +788,15 @@ function audioListeningFunctions(connection, guild) {
     console.log(`[DEBUG] STOP triggered for ${userId}`);
     if (!currentlySpeaking.has(userId)) return;
     currentlySpeaking.delete(userId);
-
+    const member = guild.members.cache.get(userId);
+    const chanId = member?.voice?.channel?.id || null;
     const unique = userAudioIds[userId];
     if (!unique) return;                               // never recorded
 
     /* schedule finalisation after GRACE_PERIOD_MS of silence */
     const wait = GRACE_PERIOD_MS - (Date.now() - (userLastSpokeTime[userId] || 0));
     perUserSilenceTimer[userId] = setTimeout(() => {
-      if (!currentlySpeaking.has(userId)) finalizeUserAudio(userId, guild, unique);
+      if (!currentlySpeaking.has(userId)) finalizeUserAudio(userId, guild, unique, chanId);
       clearTimeout(perUserSilenceTimer[userId]);
       delete perUserSilenceTimer[userId];
     }, wait > 0 ? wait : 0);
@@ -809,7 +810,7 @@ function audioListeningFunctions(connection, guild) {
 
   /* ───────────────────────── FINALISE & TRANSCRIBE ───────────────────────── */
 
-  async function finalizeUserAudio(userId, guild, unique) {
+  async function finalizeUserAudio(userId, guild, unique, channelId) {
     const base = path.join(__dirname, "../../temp_audio", `${userId}-${unique}`);
     const pcm = `${base}.pcm`;
     const wav = `${base}.wav`;
@@ -826,7 +827,7 @@ function audioListeningFunctions(connection, guild) {
       await convertOpusToWav(pcm, wav);
       const text = await transcribeAudio(wav);
       if (text) {
-        await postTranscription(guild, userId, text);
+        await postTranscription(guild, userId, text, channelId);
       }
     } catch (err) {
       console.error(`[FINALIZE] user=${userId} → ${err.message}`);
