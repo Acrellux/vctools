@@ -507,14 +507,17 @@ async function execute(oldState, newState, client) {
     if (!connection) {
       console.log("[INFO] Bot is not in a voice channel. Joining now...");
       connection = await joinChannel(client, newState.channelId, guild);
-      if (connection) {
-        console.log("[INFO] Voice connection established.");
-        audioListeningFunctions(connection, guild);
-      } else {
+      if (!connection) {
         console.error("[ERROR] Failed to join voice channel.");
         return;
       }
+      console.log("[INFO] Voice connection established.");
+    } else {
+      console.log("[INFO] Reusing existing voice connection.");
     }
+
+    // ✅ Ensure listeners are always set up
+    audioListeningFunctions(connection, guild);
 
     if (await hasUserConsented(userId)) {
       console.log(
