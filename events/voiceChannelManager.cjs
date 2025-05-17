@@ -781,7 +781,7 @@ function audioListeningFunctions(connection, guild) {
 
         if (currentlySpeaking.has(userId)) {
           currentlySpeaking.delete(userId);
-          finalizeUserAudio(userId, guild, unique);
+          finalizeUserAudio(userId, guild, unique, chanId);
         }
       }
     }, 1000);
