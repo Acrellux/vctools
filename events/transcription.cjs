@@ -1,7 +1,3 @@
-// Fix for UDP discovery issue in Discord.js
-process.env.DISCORDJS_DISABLE_UDP = "true";
-console.log("[BOOT] UDP discovery disabled.");
-
 // =========================================
 // DEPENDENCIES & CONFIGURATION
 // =========================================
