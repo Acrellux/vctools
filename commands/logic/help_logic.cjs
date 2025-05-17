@@ -199,7 +199,7 @@ Of course, there are also privacy settings to control who can see your activity 
 - \`mod ban <user> <reason>\` — Ban a user from the server.
 - \`mod warn <user> <reason>\` — Warn a user in the server.
 - \`mod history <user>\` — View a user's moderation history.
-- \`mod history mod history delete <action id>\` — Delete a specific action from a user's moderation history.
+- \`mod delete <action id>\` — Delete a specific action from a user's moderation history.
 > **Notes:**
 - Duration formats: \`10m\`, \`2h\`, \`1d\` (minutes, hours, days supported).
 - Reason is optional, but recommended.

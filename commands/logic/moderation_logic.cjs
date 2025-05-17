@@ -208,8 +208,14 @@ async function handleModMessageCommand(message, args) {
       }
     }
 
-    const dmLines = (memberOrUser, lines) => {
-      try { memberOrUser.send(lines.join("\n")); } catch { }
+    const dmLines = async (memberOrUser, lines) => {
+      try {
+        await memberOrUser.send(lines.join("\n"));
+      } catch (err) {
+        if (err.code !== 50007) {
+          console.error(`[DM ERROR] Failed to DM ${memberOrUser?.tag || memberOrUser?.id}:`, err);
+        }
+      }
     };
 
     switch (sub) {
@@ -324,7 +330,6 @@ async function handleModMessageCommand(message, args) {
         const results = [];
         for (const member of targets.values()) {
           try {
-            await member.kick(reason);
             const id = await recordModerationAction({
               guildId: message.guild.id,
               userId: member.id,
@@ -337,6 +342,7 @@ async function handleModMessageCommand(message, args) {
               `> \`Reason: ${reason}\``,
               `> \`Action ID: ${id}\``
             ]);
+            await member.kick(reason);
             results.push(member.user.tag);
           } catch {
             results.push(`❌ ${member.user.tag}`);
@@ -350,7 +356,6 @@ async function handleModMessageCommand(message, args) {
         const results = [];
         for (const member of targets.values()) {
           try {
-            await member.ban({ reason });
             const id = await recordModerationAction({
               guildId: message.guild.id,
               userId: member.id,
@@ -363,6 +368,7 @@ async function handleModMessageCommand(message, args) {
               `> \`Reason: ${reason}\``,
               `> \`Action ID: ${id}\``
             ]);
+            await member.ban({ reason });
             results.push(member.user.tag);
           } catch {
             results.push(`❌ ${member.user.tag}`);
@@ -450,7 +456,13 @@ async function handleModSlashCommand(interaction) {
     }
 
     const dmLines = async (userOrMember, lines) => {
-      try { await userOrMember.send(lines.join("\n")); } catch { }
+      try {
+        await userOrMember.send(lines.join("\n"));
+      } catch (err) {
+        if (err.code !== 50007) {
+          console.error("[DM ERROR]", err);
+        }
+      }
     };
 
     // DELETE
@@ -537,7 +549,6 @@ async function handleModSlashCommand(interaction) {
           results.push(member.user.tag);
         } else if (sub === "kick") {
           const member = await interaction.guild.members.fetch(id);
-          await member.kick(reason);
           const recId = await recordModerationAction({
             guildId: interaction.guild.id,
             userId: id,
@@ -550,10 +561,10 @@ async function handleModSlashCommand(interaction) {
             `> \`Reason: ${reason}\``,
             `> \`Action ID: ${recId}\``
           ]);
+          await member.kick(reason);
           results.push(member.user.tag);
         } else if (sub === "ban") {
           const member = await interaction.guild.members.fetch(id);
-          await member.ban({ reason });
           const recId = await recordModerationAction({
             guildId: interaction.guild.id,
             userId: id,
@@ -566,6 +577,7 @@ async function handleModSlashCommand(interaction) {
             `> \`Reason: ${reason}\``,
             `> \`Action ID: ${recId}\``
           ]);
+          await member.ban({ reason });
           results.push(member.user.tag);
         } else if (sub === "unban") {
           const bans = await interaction.guild.bans.fetch();
