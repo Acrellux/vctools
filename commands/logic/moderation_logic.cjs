@@ -34,6 +34,13 @@ async function getNextActionId() {
   return data.length ? Number(data[0].id) + 1 : STARTING_ACTION_ID;
 }
 
+function cannotModerateTarget(moderator, target) {
+  // Check if target is the guild owner
+  if (target.id === target.guild.ownerId) return true;
+  // Check if moderator's highest role is lower than or equal to target's
+  return moderator.roles.highest.comparePositionTo(target.roles.highest) <= 0;
+}
+
 /** Record a moderation action in Supabase */
 async function recordModerationAction({
   guildId,
@@ -223,6 +230,12 @@ async function handleModMessageCommand(message, args) {
         const reason = args.slice(2).join(" ") || "No reason";
         const results = [];
         for (const member of targets.values()) {
+          if (cannotModerateTarget(message.member, member)) {
+            await message.channel.send(
+              `> <❌> You cannot perform this action on **${member.user.tag}**.`
+            );
+            continue;
+          }
           const id = await recordModerationAction({
             guildId: message.guild.id,
             userId: member.id,
@@ -283,6 +296,12 @@ async function handleModMessageCommand(message, args) {
         const results = [];
 
         for (const member of targets.values()) {
+          if (cannotModerateTarget(message.member, member)) {
+            await message.channel.send(
+              `> <❌> You cannot perform this action on **${member.user.tag}**.`
+            );
+            continue;
+          }
           try {
             await member.timeout(durationMs, reason);
             const id = await recordModerationAction({
@@ -311,6 +330,12 @@ async function handleModMessageCommand(message, args) {
         const reason = args.slice(2).join(" ") || "No reason";
         const results = [];
         for (const member of targets.values()) {
+          if (cannotModerateTarget(message.member, member)) {
+            await message.channel.send(
+              `> <❌> You cannot perform this action on **${member.user.tag}**.`
+            );
+            continue;
+          }
           try {
             await member.timeout(null, reason);
             dmLines(member.user, [
@@ -329,6 +354,12 @@ async function handleModMessageCommand(message, args) {
         const reason = args.slice(2).join(" ") || "No reason";
         const results = [];
         for (const member of targets.values()) {
+          if (cannotModerateTarget(message.member, member)) {
+            await message.channel.send(
+              `> <❌> You cannot perform this action on **${member.user.tag}**.`
+            );
+            continue;
+          }
           try {
             const id = await recordModerationAction({
               guildId: message.guild.id,
@@ -355,6 +386,12 @@ async function handleModMessageCommand(message, args) {
         const reason = args.slice(2).join(" ") || "No reason";
         const results = [];
         for (const member of targets.values()) {
+          if (cannotModerateTarget(message.member, member)) {
+            await message.channel.send(
+              `> <❌> You cannot perform this action on **${member.user.tag}**.`
+            );
+            continue;
+          }
           try {
             const id = await recordModerationAction({
               guildId: message.guild.id,
@@ -524,6 +561,13 @@ async function handleModSlashCommand(interaction) {
       try {
         if (sub === "mute") {
           const member = await interaction.guild.members.fetch(id);
+          if (cannotModerateTarget(interaction.member, member)) {
+            await interaction.followUp({
+              content: `> <❌> You cannot perform this action on **${member.user.tag}**.`,
+              ephemeral: true,
+            });
+            continue;
+          }
           await member.timeout(durationMs, reason);
           const recId = await recordModerationAction({
             guildId: interaction.guild.id,
@@ -541,6 +585,13 @@ async function handleModSlashCommand(interaction) {
           results.push(member.user.tag);
         } else if (sub === "unmute") {
           const member = await interaction.guild.members.fetch(id);
+          if (cannotModerateTarget(interaction.member, member)) {
+            await interaction.followUp({
+              content: `> <❌> You cannot perform this action on **${member.user.tag}**.`,
+              ephemeral: true,
+            });
+            continue;
+          }
           await member.timeout(null, reason);
           await dmLines(member.user, [
             `> <🔓> You have been \`unmuted\` in **${interaction.guild.name}**.`,
@@ -549,6 +600,13 @@ async function handleModSlashCommand(interaction) {
           results.push(member.user.tag);
         } else if (sub === "kick") {
           const member = await interaction.guild.members.fetch(id);
+          if (cannotModerateTarget(interaction.member, member)) {
+            await interaction.followUp({
+              content: `> <❌> You cannot perform this action on **${member.user.tag}**.`,
+              ephemeral: true,
+            });
+            continue;
+          }
           const recId = await recordModerationAction({
             guildId: interaction.guild.id,
             userId: id,
@@ -565,6 +623,13 @@ async function handleModSlashCommand(interaction) {
           results.push(member.user.tag);
         } else if (sub === "ban") {
           const member = await interaction.guild.members.fetch(id);
+          if (cannotModerateTarget(interaction.member, member)) {
+            await interaction.followUp({
+              content: `> <❌> You cannot perform this action on **${member.user.tag}**.`,
+              ephemeral: true,
+            });
+            continue;
+          }
           const recId = await recordModerationAction({
             guildId: interaction.guild.id,
             userId: id,
