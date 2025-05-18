@@ -171,28 +171,22 @@ async function sendPaginatedHistory(context, channel, targetTag, records, author
  */
 async function handleModMessageCommand(message, args) {
   try {
+    // Permission check
     if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
       return message.channel.send("> <❇️> You do not have permission.");
     }
 
+    // Which subcommand did they ask for?
+    const sub = args[0]?.toLowerCase();
+    const valid = ["mute", "unmute", "ban", "kick", "unban", "warn", "history", "delete"];
+
+    // Usage snippets for those cases that need them
     const usage = {
-      mute: "> <❌> Usage: `>mod mute <user> <duration> <reason>`",
-      unmute: "> <❌> Usage: `>mod unmute <user> <reason>`",
-      ban: "> <❌> Usage: `>mod ban <user> <reason>`",
-      unban: "> <❌> Usage: `>mod unban <user> <reason>`",
-      warn: "> <❌> Usage: `>mod warn <user> <reason>`",
-      history: "> <❌> Usage: `>mod history <user>`",
       delete: "> <❌> Usage: `>mod delete <id>`",
+      unban: "> <❌> Usage: `>mod unban <user> <reason>`"
     };
 
-    const sub = args[0]?.toLowerCase();
-    if (!sub || !usage[sub]) {
-      return message.channel.send(
-        `> <❌> Unknown subcommand. Use: ${Object.keys(usage).map(s => `\`${s}\``).join(", ")}`
-      );
-    }
-
-    // DELETE
+    // DELETE has its own argument pattern
     if (sub === "delete") {
       const id = Number(args[1]);
       if (!id) return message.channel.send(usage.delete);
@@ -204,36 +198,46 @@ async function handleModMessageCommand(message, args) {
       );
     }
 
-    // For most commands we need mentions
-    const targets = message.mentions.members;
-    if (!targets || !targets.size) {
-      // allow >mod unban <userID> with no mention
-      if (sub === "unban" && args[1]) {
-        // we'll handle below
+    // For all other commands (except delete & unban) we need a member mention or lookup
+    let targets = message.mentions.members;
+    if ((!targets || !targets.size) && sub !== "unban" && args[1]) {
+      const search = args[1].toLowerCase();
+      const found = message.guild.members.cache.find(m =>
+        m.user.username.toLowerCase() === search ||
+        m.displayName.toLowerCase() === search
+      );
+      if (found) {
+        targets = new Map([[found.id, found]]);
       } else {
-        return message.channel.send(usage[sub]);
+        return message.channel.send(`> <❌> Could not find user: ${args[1]}`);
       }
     }
 
+    // UNBAN works off a raw ID, not a GuildMember
+    if (sub === "unban") {
+      const idArg = args[1];
+      if (!idArg) return message.channel.send(usage.unban);
+      const userId = idArg.replace(/[<@!>]/g, "");
+      targets = new Map([[userId, { id: userId }]]);
+    }
+
+    // Helper to DM someone
     const dmLines = async (memberOrUser, lines) => {
       try {
         await memberOrUser.send(lines.join("\n"));
       } catch (err) {
-        if (err.code !== 50007) {
-          console.error(`[DM ERROR] Failed to DM ${memberOrUser?.tag || memberOrUser?.id}:`, err);
-        }
+        if (err.code !== 50007) console.error("[DM ERROR]", err);
       }
     };
 
+    // Now dispatch by subcommand
     switch (sub) {
       case "warn": {
         const reason = args.slice(2).join(" ") || "No reason";
         const results = [];
         for (const member of targets.values()) {
           if (cannotModerateTarget(message.member, member)) {
-            await message.channel.send(
-              `> <❌> You cannot perform this action on **${member.user.tag}**.`
-            );
+            await message.channel.send(`> <❌> You cannot perform this action on **${member.user.tag}**.`);
             continue;
           }
           const id = await recordModerationAction({
@@ -243,7 +247,7 @@ async function handleModMessageCommand(message, args) {
             actionType: "warn",
             reason,
           });
-          dmLines(member.user, [
+          await dmLines(member.user, [
             `> <⚠️> You have been \`warned\` in **${message.guild.name}**.`,
             `> \`Reason: ${reason}\``,
             `> \`Action ID: ${id}\``
@@ -258,7 +262,7 @@ async function handleModMessageCommand(message, args) {
         const { data: records, error } = await supabase
           .from("mod_actions")
           .select("*")
-          .or(`\`userId.eq.\${userId},moderatorId.eq.\${userId}\``)
+          .or(`userId.eq.${userId},moderatorId.eq.${userId}`)
           .order("timestamp", { ascending: false })
           .limit(HISTORY_FETCH_LIMIT);
 
@@ -278,7 +282,6 @@ async function handleModMessageCommand(message, args) {
       }
 
       case "mute": {
-        // parse duration+reason once
         let durationMs, durationSec, reason;
         if (args[2] && ms(args[2])) {
           durationMs = ms(args[2]);
@@ -294,12 +297,9 @@ async function handleModMessageCommand(message, args) {
         }
         const human = ms(durationMs, { long: true });
         const results = [];
-
         for (const member of targets.values()) {
           if (cannotModerateTarget(message.member, member)) {
-            await message.channel.send(
-              `> <❌> You cannot perform this action on **${member.user.tag}**.`
-            );
+            await message.channel.send(`> <❌> You cannot perform this action on **${member.user.tag}**.`);
             continue;
           }
           try {
@@ -312,7 +312,7 @@ async function handleModMessageCommand(message, args) {
               reason,
               duration: durationSec,
             });
-            dmLines(member.user, [
+            await dmLines(member.user, [
               `> <⚠️> You have been \`muted\` for \`${human}\` in **${message.guild.name}**.`,
               `> \`Reason: ${reason}\``,
               `> \`Action ID: ${id}\``
@@ -322,7 +322,6 @@ async function handleModMessageCommand(message, args) {
             results.push(`❌ ${member.user.tag}`);
           }
         }
-
         return message.channel.send(`> <🔨> Muted: ${results.join(", ")}`);
       }
 
@@ -331,14 +330,12 @@ async function handleModMessageCommand(message, args) {
         const results = [];
         for (const member of targets.values()) {
           if (cannotModerateTarget(message.member, member)) {
-            await message.channel.send(
-              `> <❌> You cannot perform this action on **${member.user.tag}**.`
-            );
+            await message.channel.send(`> <❌> You cannot perform this action on **${member.user.tag}**.`);
             continue;
           }
           try {
             await member.timeout(null, reason);
-            dmLines(member.user, [
+            await dmLines(member.user, [
               `> <🔓> You have been \`unmuted\` in **${message.guild.name}**.`,
               `> \`Reason: ${reason}\``
             ]);
@@ -361,6 +358,7 @@ async function handleModMessageCommand(message, args) {
             continue;
           }
           try {
+            // record the action and DM the user
             const id = await recordModerationAction({
               guildId: message.guild.id,
               userId: member.id,
@@ -368,11 +366,12 @@ async function handleModMessageCommand(message, args) {
               actionType: "kick",
               reason,
             });
-            dmLines(member.user, [
+            await dmLines(member.user, [
               `> <⚠️> You have been \`kicked\` from **${message.guild.name}**.`,
               `> \`Reason: ${reason}\``,
-              `> \`Action ID: ${id}\``
+              `> \`Action ID: ${id}\``,
             ]);
+            // actually kick them
             await member.kick(reason);
             results.push(member.user.tag);
           } catch {
@@ -387,9 +386,7 @@ async function handleModMessageCommand(message, args) {
         const results = [];
         for (const member of targets.values()) {
           if (cannotModerateTarget(message.member, member)) {
-            await message.channel.send(
-              `> <❌> You cannot perform this action on **${member.user.tag}**.`
-            );
+            await message.channel.send(`> <❌> You cannot perform this action on **${member.user.tag}**.`);
             continue;
           }
           try {
@@ -400,7 +397,7 @@ async function handleModMessageCommand(message, args) {
               actionType: "ban",
               reason,
             });
-            dmLines(member.user, [
+            await dmLines(member.user, [
               `> <⚠️> You have been \`banned\` from **${message.guild.name}**.`,
               `> \`Reason: ${reason}\``,
               `> \`Action ID: ${id}\``
@@ -416,41 +413,42 @@ async function handleModMessageCommand(message, args) {
 
       case "unban": {
         const reason = args.slice(2).join(" ") || "No reason";
-        const results = [];
+        const raw = args[1];
+        if (!/^\d{17,19}$/.test(raw)) {
+          return message.channel.send(usage.unban);
+        }
         const bans = await message.guild.bans.fetch();
-
-        // allow passing IDs if no mentions
-        const ids = targets.size
-          ? [...targets.values()].map(m => m.id)
-          : [args[1]];
-
-        for (const id of ids) {
-          if (!bans.has(id)) {
-            results.push(`❇️ ${id}`);
-            continue;
-          }
-          try {
-            await message.guild.members.unban(id, reason);
-            const idRecord = await recordModerationAction({
-              guildId: message.guild.id,
-              userId: id,
-              moderatorId: message.member.id,
-              actionType: "unban",
-              reason,
-            });
-            const user = await message.client.users.fetch(id);
-            dmLines(user, [
+        if (!bans.has(raw)) {
+          return message.channel.send(`> <❌> No ban found for ID: \`${raw}\``);
+        }
+        try {
+          await message.guild.members.unban(raw, reason);
+          const idRecord = await recordModerationAction({
+            guildId: message.guild.id,
+            userId: raw,
+            moderatorId: message.member.id,
+            actionType: "unban",
+            reason,
+          });
+          const user = await message.client.users.fetch(raw).catch(() => null);
+          if (user) {
+            await dmLines(user, [
               `> <🔓> You have been \`unbanned\` in **${message.guild.name}**.`,
               `> \`Reason: ${reason}\``,
               `> \`Action ID: ${idRecord}\``
             ]);
-            results.push(user.tag);
-          } catch {
-            results.push(`❌ ${id}`);
           }
+          return message.channel.send(`> <🔓> Unbanned: ${user?.tag || raw}`);
+        } catch {
+          return message.channel.send(`> <❌> Failed to unban \`${raw}\``);
         }
-        return message.channel.send(`> <🔓> Unbanned: ${results.join(", ")}`);
       }
+
+      default:
+        // everything else
+        return message.channel.send(
+          `> <❌> Unknown subcommand. Use: ${valid.map(s => `\`${s}\``).join(", ")}`
+        );
     }
   } catch (err) {
     console.error(`[ERROR] handleModMessageCommand: ${err.stack}`);
@@ -460,7 +458,7 @@ async function handleModMessageCommand(message, args) {
       message.client,
       "handleModMessageCommand"
     );
-    message.channel.send("> <❌> An error occurred using mod commands.");
+    return message.channel.send("> <❌> An error occurred using mod commands.");
   }
 }
 
@@ -475,21 +473,34 @@ async function handleModSlashCommand(interaction) {
 
     const sub = interaction.options.getSubcommand();
     const usersInput = interaction.options.getString("users") || "";
-    // extract mentioned IDs
-    const idRegex = /<@!?(\\d{17,19})>/g;
+    const singleUser = interaction.options.getUser("user");
+
     const ids = [];
-    let m;
-    while ((m = idRegex.exec(usersInput)) !== null) {
-      ids.push(m[1]);
+
+    // Extract mentions from usersInput (fixed regex — removed extra backslash)
+    const idRegex = /<@!?(\\d{17,19})>/g;
+    let match;
+    while ((match = idRegex.exec(usersInput)) !== null) {
+      ids.push(match[1]);
     }
-    // also accept plain IDs
+
+    // Extract plain numeric IDs from the string
     for (const part of usersInput.split(/[\s,]+/)) {
       if (/^\d{17,19}$/.test(part) && !ids.includes(part)) {
         ids.push(part);
       }
     }
+
+    // Fallback to single user option if nothing found
+    if (!ids.length && singleUser) {
+      ids.push(singleUser.id);
+    }
+
     if (!ids.length && sub !== "delete" && sub !== "history") {
-      return interaction.reply({ content: "> <❌> No valid users provided.", ephemeral: true });
+      return interaction.reply({
+        content: "> <❌> No valid users provided.",
+        ephemeral: true,
+      });
     }
 
     const dmLines = async (userOrMember, lines) => {
@@ -647,7 +658,7 @@ async function handleModSlashCommand(interaction) {
         } else if (sub === "unban") {
           const bans = await interaction.guild.bans.fetch();
           if (!bans.has(id)) {
-            results.push(`❇️ ${id}`);
+            results.push(`${id}`);
           } else {
             await interaction.guild.members.unban(id, reason);
             const recId = await recordModerationAction({
@@ -687,9 +698,23 @@ async function handleModSlashCommand(interaction) {
     }
 
     const emoji = sub === "unmute" || sub === "unban" ? "🔓" : "🔨";
-    return interaction.reply({
-      content: `> <${emoji}> ${sub.charAt(0).toUpperCase() + sub.slice(1)}d: ${results.join(", ")}`,
-    });
+    const pastTense = {
+      mute: "Muted",
+      unmute: "Unmuted",
+      warn: "Warned",
+      kick: "Kicked",
+      ban: "Banned",
+      unban: "Unbanned",
+    };
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({
+        content: `> <${emoji}> ${pastTense[sub] || sub}: ${results.join(", ")}`,
+      });
+    } else {
+      await interaction.followUp({
+        content: `> <${emoji}> ${pastTense[sub] || sub}: ${results.join(", ")}`,
+      });
+    }
   } catch (err) {
     console.error(`[ERROR] handleModSlashCommand: ${err.stack}`);
     await logErrorToChannel(

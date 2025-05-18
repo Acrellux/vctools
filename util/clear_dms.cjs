@@ -1,4 +1,4 @@
-/// node ./util/clear_dms.js <userid>
+/// node ./util/clear_dms.cjs <userid>
 
 const { Client, GatewayIntentBits } = require("discord.js");
 require("dotenv").config();
