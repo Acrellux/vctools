@@ -56,13 +56,13 @@ async function handleSafeChannelMessageCommand(message, args) {
       case "list": {
         const safeChannels = settings.safeChannels || [];
         if (safeChannels.length === 0) {
-          return message.channel.send("> **No safe channels set.**");
+          return message.channel.send("> <❇️> **No safe channels set.**");
         }
         const channelList = safeChannels.map((id) => {
           const channel = message.guild.channels.cache.get(id) || null;
           return channel ? `<#${channel.id}>` : `Unknown(${id})`;
         });
-        message.channel.send(`> **Safe Channels:** ${channelList.join(", ")}`);
+        message.channel.send(`> <🔒> **Safe Channels:** ${channelList.join(", ")}`);
         break;
       }
       case "add": {
@@ -153,7 +153,7 @@ async function handlesafeChannelslashCommand(interaction) {
           })
         );
         return interaction.reply({
-          content: `> **Safe Channels:** ${channelList.join(", ")}`,
+          content: `> <🔒> **Safe Channels:** ${channelList.join(", ")}`,
           ephemeral: false,
         });
       }
