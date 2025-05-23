@@ -557,7 +557,7 @@ async function handleSettingsMessageCommand(message, args) {
           case "add": {
             if (!args[2]) {
               return message.channel.send(
-                "> <❌> Usage: `>settings filter add <word>`"
+                "> <❌> Usage: `settings filter add <word>`"
               );
             }
             const wordToAdd = args[2].toLowerCase();
@@ -580,7 +580,7 @@ async function handleSettingsMessageCommand(message, args) {
           case "remove": {
             if (!args[2]) {
               return message.channel.send(
-                "> <❌> Usage: `>settings filter remove <word>`"
+                "> <❌> Usage: `settings filter remove <word>`"
               );
             }
             const wordToRemove = args[2].toLowerCase();
@@ -616,7 +616,7 @@ async function handleSettingsMessageCommand(message, args) {
               !["moderate", "strict"].includes(args[2].toLowerCase())
             ) {
               return message.channel.send(
-                "> <❌> Usage: `>settings filter level <moderate|strict>`"
+                "> <❌> Usage: `settings filter level <moderate|strict>`"
               );
             }
             const newLevel = args[2].toLowerCase();
@@ -637,7 +637,7 @@ async function handleSettingsMessageCommand(message, args) {
       case "set-channel": {
         if (!args[1] || !args[2]) {
           return message.channel.send(
-            "> <❌> Usage: `>settings set-channel <transcription|errorlogs> #channel`"
+            "> <❌> Usage: `settings set-channel <transcription|errorlogs> #channel`"
           );
         }
         const channelMention = args[2];
@@ -682,7 +682,7 @@ async function handleSettingsMessageCommand(message, args) {
       case "set-role": {
         if (!args[1] || !args[2]) {
           return message.channel.send(
-            "> <❌> Usage: `>settings set-role <transcription|errorlogs|vc|admin|moderator> @role`"
+            "> <❌> Usage: `settings set-role <transcription|errorlogs|vc|admin|moderator> @role`"
           );
         }
         const roleMention = args[2];
@@ -727,7 +727,7 @@ async function handleSettingsMessageCommand(message, args) {
       }
       default:
         await message.channel.send(
-          "> **Use `>settings transcription`, `>settings errorlogs`, `>settings vc`, `settings prefix`, or `>settings bot` to configure settings.**"
+          "> Use `settings transcription`, `settings errorlogs`, `settings vc`, `settings prefix`, or `settings bot` to configure settings."
         );
     }
   } catch (error) {
