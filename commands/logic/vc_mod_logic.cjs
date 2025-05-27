@@ -6,7 +6,7 @@ const {
   ButtonStyle,
 } = require("discord.js");
 const { logErrorToChannel } = require("./helpers.cjs");
-const { getSettingsForGuild } = require("./settings.cjs");
+const { getSettingsForGuild } = require("../settings.cjs");
 
 const ansi = {
   darkGray: "\u001b[2;30m",
