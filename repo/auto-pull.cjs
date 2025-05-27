@@ -8,6 +8,7 @@ const { exec, spawn } = require("child_process");
 const { Client, GatewayIntentBits } = require("discord.js");
 require("dotenv").config();
 
+const repoPath = path.resolve(__dirname);
 const botPath = `../index.cjs`;
 const lockFile = `./vc_tools.lock`;
 let botProcess = null;
@@ -33,8 +34,11 @@ async function sendUpdateLog(version) {
       reset: '\u001b[0m',
     };
 
-    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
-    const unix = `<t:${Math.floor(Date.now() / 1000)}:F>`;
+    const timestamp = new Date().toLocaleTimeString("en-US", {
+      hour12: false,
+      minute: "2-digit",
+      second: "2-digit",
+    });
 
     await channel.send(
       "```ansi\n" +

@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Events } = require("discord.js");
+﻿const { Client, GatewayIntentBits, Events } = require("discord.js");
 // Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
 process.env.DISCORDJS_DISABLE_UDP = "true";
 const fs = require("fs");
@@ -574,7 +574,6 @@ client.once("ready", async () => {
 
   const now = new Date();
   const timestamp = now.toLocaleTimeString("en-US", {
-    hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
@@ -595,7 +594,7 @@ client.once("ready", async () => {
         `${ansi.darkGray}[${ansi.blue}${timestamp}${ansi.darkGray}] ` +
         `${ansi.lightGray}VC Tools is now ${ansi.blue}online${ansi.darkGray}.${ansi.reset}` +
         "\n```" +
-        `\n${unix}\n> <@&1339506674909577226>`
+        `\n${timestamp}\n> <@&1339506674909577226>`
       );
       console.log("[INFO] Startup message sent to boot channel.");
     }
