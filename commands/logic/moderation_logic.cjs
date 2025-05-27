@@ -411,10 +411,16 @@ async function handleModMessageCommand(msg, args) {
       }
     }
 
-    const result = confirms.join("\n\n");
-    return msg.channel.send(
-      result || "> <❌> Usage: `>mod <mute|warn|kick|ban|unban|unmute> <user> [duration] [reason]`"
-    );
+    const result = confirms.join("\n\n") || {
+      mute: "> <❌> Usage: `>mod mute <user> [duration] [reason]`",
+      warn: "> <❌> Usage: `>mod warn <user> [reason]`",
+      kick: "> <❌> Usage: `>mod kick <user> [reason]`",
+      ban: "> <❌> Usage: `>mod ban <user> [reason]`",
+      unban: "> <❌> Usage: `>mod unban <user ID> [reason]`",
+      unmute: "> <❌> Usage: `>mod unmute <user> [reason]`",
+    }[sub] || "> <❌> Something went wrong.";
+
+    return msg.channel.send(result);
   } catch (err) {
     console.error("[handleModMessageCommand] " + err.stack);
     await logErrorToChannel(
@@ -578,13 +584,16 @@ async function handleModSlashCommand(inter) {
       })
     );
 
-    const result = confirms.join("\n\n");
-    return inter.reply({
-      content:
-        result ||
-        "> <❌> Usage: `/mod <mute|warn|kick|ban|unban|unmute> user:<@mention> [duration] [reason]`",
-      ephemeral: false,
-    });
+    const result = confirms.join("\n\n") || {
+      mute: "> <❌> Usage: `/mod mute user:<@user> duration:<e.g. 1h> reason:<text>`",
+      warn: "> <❌> Usage: `/mod warn user:<@user> reason:<text>`",
+      kick: "> <❌> Usage: `/mod kick user:<@user> reason:<text>`",
+      ban: "> <❌> Usage: `/mod ban user:<@user> reason:<text>`",
+      unban: "> <❌> Usage: `/mod unban user:<user ID> reason:<text>`",
+      unmute: "> <❌> Usage: `/mod unmute user:<@user> reason:<text>`",
+    }[sub] || "> <❌> Something went wrong.";
+
+    return inter.reply({ content: result, ephemeral: false });
   } catch (err) {
     console.error("[handleModSlashCommand] " + err.stack);
     await logErrorToChannel(
