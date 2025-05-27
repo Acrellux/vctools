@@ -411,7 +411,10 @@ async function handleModMessageCommand(msg, args) {
       }
     }
 
-    return msg.channel.send(confirms.join("\n\n"));
+    const result = confirms.join("\n\n");
+    return msg.channel.send(
+      result || "> <❌> Usage: `>mod <mute|warn|kick|ban|unban|unmute> <user> [duration] [reason]`"
+    );
   } catch (err) {
     console.error("[handleModMessageCommand] " + err.stack);
     await logErrorToChannel(
@@ -575,7 +578,13 @@ async function handleModSlashCommand(inter) {
       })
     );
 
-    return inter.reply({ content: confirms.join("\n\n"), ephemeral: false });
+    const result = confirms.join("\n\n");
+    return inter.reply({
+      content:
+        result ||
+        "> <❌> Usage: `/mod <mute|warn|kick|ban|unban|unmute> user:<@mention> [duration] [reason]`",
+      ephemeral: false,
+    });
   } catch (err) {
     console.error("[handleModSlashCommand] " + err.stack);
     await logErrorToChannel(
