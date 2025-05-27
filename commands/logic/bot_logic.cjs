@@ -155,39 +155,6 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       vcLoggingChannelDropdown
     );
 
-    // ─── PREFIX TOGGLE BUTTONS ────────────────────────────────────────
-    // your format is: prefixes: { slash: true, "!": true, ">": true }
-    const prefixSettings = settings.prefixes || { slash: true, "!": true, ">": true };
-
-    const prefixRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`bot:toggle-prefix-slash:${userId}`)
-        .setLabel(
-          prefixSettings.slash
-            ? "Disable Slash (/) Prefix"
-            : "Enable Slash (/) Prefix"
-        )
-        .setStyle(prefixSettings.slash ? ButtonStyle.Danger : ButtonStyle.Success),
-
-      new ButtonBuilder()
-        .setCustomId(`bot:toggle-prefix-!:${userId}`)
-        .setLabel(
-          prefixSettings["!"]
-            ? 'Disable "!" Prefix'
-            : 'Enable "!" Prefix'
-        )
-        .setStyle(prefixSettings["!"] ? ButtonStyle.Danger : ButtonStyle.Success),
-
-      new ButtonBuilder()
-        .setCustomId(`bot:toggle-prefix->:${userId}`)
-        .setLabel(
-          prefixSettings[">"]
-            ? 'Disable ">" Prefix'
-            : 'Enable ">" Prefix'
-        )
-        .setStyle(prefixSettings[">"] ? ButtonStyle.Danger : ButtonStyle.Success)
-    );
-    
     // Aggregate all components
     const components = [
       adminRoleDropdown,
@@ -195,7 +162,6 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       toggleRow,
       vcLoggingChannelRow,
       toggleVcLoggingRow,
-      prefixRow,
     ];
 
     // Send or update the message based on whether interactionOrMessage is repliable
