@@ -58,18 +58,16 @@ async function showPrefixSettingsUI(interactionOrMessage, isEphemeral = false) {
             ephemeral: isEphemeral,
         };
 
-        if (interactionOrMessage.reply) {
-            // Interaction
-            if (interactionOrMessage.replied || interactionOrMessage.deferred) {
-                await interactionOrMessage.editReply(payload);
-            } else {
-                await interactionOrMessage.update(payload);
-            }
-        } else {
-            // Message
-            await interactionOrMessage.channel.send(payload);
-        }
+        const channel =
+            interactionOrMessage.channel ??
+            interactionOrMessage.guild?.channels?.cache.get(interactionOrMessage.channelId);
 
+        if (channel) {
+            await channel.send({
+                content: payload.content,
+                components: payload.components,
+            });
+        }
     } catch (err) {
         console.error("[ERROR] showPrefixSettingsUI:", err);
         await logErrorToChannel(
