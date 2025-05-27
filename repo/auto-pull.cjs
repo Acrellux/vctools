@@ -1,16 +1,58 @@
 // =============================
-// VC Tools auto-pull.cjs (Final Version with Console Output)
+// VC Tools auto-pull.cjs (with ANSI Update Log)
 // =============================
 
 const fs = require("fs");
+const path = require("path");
 const { exec, spawn } = require("child_process");
+const { Client, GatewayIntentBits } = require("discord.js");
+require("dotenv").config();
 
-const repoPath = "C:/Users/AcidR/Desktop/VC_Tools";
+const repoPath = path.resolve(__dirname);
 const botPath = `${repoPath}/index.cjs`;
 const lockFile = `${repoPath}/vc_tools.lock`;
 let botProcess = null;
 
 process.title = "VC_TOOLS_AUTO_PULL";
+
+// =============================
+// Send Styled Update Log
+// =============================
+async function sendUpdateLog(version) {
+  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+  try {
+    await client.login(process.env.DISCORD_TOKEN);
+    const channel = await client.channels.fetch("1356838107818885151");
+    if (!channel || !channel.send) return;
+
+    const ansi = {
+      darkGray: '\u001b[2;30m',
+      lightGray: '\u001b[2;37m',
+      blue: '\u001b[2;34m',
+      cyan: '\u001b[36m',
+      reset: '\u001b[0m',
+    };
+
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+    const unix = `<t:${Math.floor(Date.now() / 1000)}:F>`;
+
+    await channel.send(
+      "```ansi\n" +
+      `${ansi.darkGray}[${ansi.blue}${timestamp}${ansi.darkGray}] ` +
+      `${ansi.lightGray}The VC Tools repository has just been updated.\n` +
+      `${ansi.lightGray}Version ID${ansi.darkGray}: ${ansi.cyan}${version}\n` +
+      `${ansi.darkGray}VC Tools will now restart.${ansi.reset}\n` +
+      "```"
+    );
+
+    console.log(`[INFO] Update log for version ${version} sent.`);
+  } catch (err) {
+    console.error("[BOT LOGGER] Failed to send update log:", err.message);
+  } finally {
+    await client.destroy();
+  }
+}
 
 // =============================
 // Lock Protection
@@ -69,11 +111,11 @@ exec('tasklist | findstr node', (err, stdout) => {
 let crashCount = 0;
 let lastCrashTime = 0;
 const MAX_CRASHES = 5;
-const CRASH_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
+const CRASH_WINDOW_MS = 2 * 60 * 1000;
 const MAX_TIMEOUT_MS = 30000;
 
 // =============================
-// Start the Bot (using spawn for visible logs)
+// Start the Bot
 // =============================
 function startBot() {
   if (botProcess) return;
@@ -120,8 +162,14 @@ function pullRepo() {
   console.log("[GIT] Pulling...");
   exec(`git -C "${repoPath}" pull`, (err, stdout) => {
     if (err) return console.error("[GIT ERROR]", err.message);
+
     if (stdout.includes("Updating") || stdout.includes("Fast-forward")) {
+      const match = stdout.match(/Updating (\w+)\.\.(\w+)/);
+      const newVersion = match ? match[2] : "unknown";
+
       console.log("[GIT] Changes found. Restarting bot...");
+      sendUpdateLog(newVersion);
+
       stopBot();
       setTimeout(startBot, 1500);
     } else {
@@ -130,6 +178,5 @@ function pullRepo() {
   });
 }
 
-// Delay slightly to ensure old processes are killed
 setTimeout(startBot, 2000);
 setInterval(pullRepo, 2.5 * 60 * 1000);

@@ -594,7 +594,8 @@ client.once("ready", async () => {
         "```ansi\n" +
         `${ansi.darkGray}[${ansi.blue}${timestamp}${ansi.darkGray}] ` +
         `${ansi.lightGray}VC Tools is now ${ansi.blue}online${ansi.darkGray}.${ansi.reset}` +
-        "\n```"
+        "\n```" +
+        `\n${unix}\n> <@&1339506674909577226>`
       );
       console.log("[INFO] Startup message sent to boot channel.");
     }
