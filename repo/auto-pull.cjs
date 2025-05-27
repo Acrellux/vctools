@@ -1,4 +1,4 @@
-// =============================
+﻿// =============================
 // VC Tools auto-pull.cjs (with ANSI Update Log)
 // =============================
 
@@ -8,9 +8,8 @@ const { exec, spawn } = require("child_process");
 const { Client, GatewayIntentBits } = require("discord.js");
 require("dotenv").config();
 
-const repoPath = path.resolve(__dirname);
-const botPath = `${repoPath}/index.cjs`;
-const lockFile = `${repoPath}/vc_tools.lock`;
+const botPath = `../index.cjs`;
+const lockFile = `./vc_tools.lock`;
 let botProcess = null;
 
 process.title = "VC_TOOLS_AUTO_PULL";
