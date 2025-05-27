@@ -30,7 +30,6 @@ async function sendUpdateLog(version) {
       darkGray: '\u001b[2;30m',
       lightGray: '\u001b[2;37m',
       blue: '\u001b[2;34m',
-      cyan: '\u001b[36m',
       reset: '\u001b[0m',
     };
 
@@ -44,7 +43,7 @@ async function sendUpdateLog(version) {
       "```ansi\n" +
       `${ansi.darkGray}[${ansi.blue}${timestamp}${ansi.darkGray}] ` +
       `${ansi.lightGray}The VC Tools repository has just been updated.\n` +
-      `${ansi.lightGray}Version ID${ansi.darkGray}: ${ansi.cyan}${version}\n` +
+      `${ansi.lightGray}Version ID${ansi.darkGray}: ${ansi.blue}${version}\n` +
       `${ansi.darkGray}VC Tools will now restart.${ansi.reset}\n` +
       "```"
     );
