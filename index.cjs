@@ -592,7 +592,8 @@ client.once("ready", async () => {
       await channel.send(
         "```ansi\n" +
         `${ansi.darkGray}[${ansi.blue}${timestamp}${ansi.darkGray}] ` +
-        `${ansi.lightGray}VC Tools ${ansi.darkGray}is now ${ansi.blue}online${ansi.darkGray}.${ansi.reset}`
+        `${ansi.lightGray}VC Tools ${ansi.darkGray}is now ${ansi.blue}online${ansi.darkGray}.${ansi.reset}` +
+        "```"
       );
       console.log("[INFO] Startup message sent to boot channel.");
     }
