@@ -42,7 +42,7 @@ async function sendUpdateLog(version) {
     await channel.send(
       "```ansi\n" +
       `${ansi.darkGray}[${ansi.blue}${timestamp}${ansi.darkGray}] ` +
-      `${ansi.lightGray}The VC Tools repository has just been updated.\n` +
+      `${ansi.darkGray}The ${ansi.lightGray}VC Tools repository ${ansi.darkGray}has just been ${ansi.lightGray}updated${ansi.darkGray}.\n` +
       `${ansi.lightGray}Version ID${ansi.darkGray}: ${ansi.blue}${version}\n` +
       `${ansi.darkGray}VC Tools will now restart.${ansi.reset}\n` +
       "```"
