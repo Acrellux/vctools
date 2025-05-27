@@ -63,7 +63,7 @@ async function showPrefixSettingsUI(interactionOrMessage, isEphemeral = false) {
             if (interactionOrMessage.replied || interactionOrMessage.deferred) {
                 await interactionOrMessage.editReply(payload);
             } else {
-                await interactionOrMessage.reply(payload);
+                await interactionOrMessage.update(payload);
             }
         } else {
             // Message
