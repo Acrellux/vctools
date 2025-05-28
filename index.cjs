@@ -618,12 +618,22 @@ client.once("ready", async () => {
         g.members.me?.voice.channel
       ).size;
 
-      const activityText = `inside ${vcCount} voice call${vcCount !== 1 ? "s" : ""}`;
-
-      await client.user.setPresence({
+      // Build presence
+      const presence = {
         status: "idle",
-        activities: [{ name: activityText, type: 3 }], // type 3 = Listening
-      });
+        activities: [],
+      };
+
+      if (vcCount > 0) {
+        presence.activities = [
+          {
+            name: `inside ${vcCount} voice call${vcCount !== 1 ? "s" : ""}`,
+            type: 2,
+          },
+        ];
+      }
+
+      await client.user.setPresence(presence);
 
     } catch (error) {
       console.error("[ERROR] Failed during interval tasks:", error.message);
