@@ -614,31 +614,37 @@ client.once("ready", async () => {
       await cleanupOldReports(client);
 
       // 🎧 Update status text with VC count
-      const vcCount = client.guilds.cache.filter(g =>
-        g.members.me?.voice.channel
-      ).size;
+      let vcCount = 0;
+      let userCount = 0;
+
+      client.guilds.cache.forEach(guild => {
+        const vc = guild.members.me?.voice.channel;
+        if (vc) {
+          vcCount++;
+          userCount += vc.members.filter(m => !m.user.bot).size;
+        }
+      });
 
       // Build presence
-      const presence = {
-        status: "idle",
-        activities: [],
-      };
+      const activityText = `${userCount$} user${userCount !== 1 ? "s" : ""} inside ${vcCount} voice channel${vcCount !== 1 ? "s" : ""}`;
 
-      if (vcCount > 0) {
-        presence.activities = [
+      await client.user.setPresence({
+        status: "idle",
+        activities: [
           {
-            name: `inside ${vcCount} voice call${vcCount !== 1 ? "s" : ""}`,
-            type: 2,
+            name: activityText,
+            type: 2, // Listening
           },
-        ];
-      }
+        ],
+      });
 
       await client.user.setPresence(presence);
 
     } catch (error) {
       console.error("[ERROR] Failed during interval tasks:", error.message);
     }
-  }, 30 * 1000); // ⏱ every 30 seconds
+  }, 10 * 1000); // every 30 seconds
+
 });
 
 // Global error handling
