@@ -643,7 +643,7 @@ client.once("ready", async () => {
     } catch (error) {
       console.error("[ERROR] Failed during interval tasks:", error.message);
     }
-  }, 10 * 1000); // every 30 seconds
+  }, 30 * 1000); // every 30 seconds
 
 });
 
