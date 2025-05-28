@@ -565,6 +565,7 @@ client.on(Events.GuildCreate, async (guild) => {
     console.error(`[ERROR] Failed to handle guild join: ${error.message}`);
   }
 });
+
 client.once("ready", async () => {
   console.log(`[INFO] Successfully logged in as ${client.user.tag}`);
   client.user.setPresence({ status: "idle" });
@@ -626,7 +627,7 @@ client.once("ready", async () => {
       });
 
       // Build presence
-      const activityText = `${userCount$} user${userCount !== 1 ? "s" : ""} inside ${vcCount} voice channel${vcCount !== 1 ? "s" : ""}`;
+      const activityText = `${userCount} user${userCount !== 1 ? "s" : ""} inside ${vcCount} voice channel${vcCount !== 1 ? "s" : ""}`;
 
       await client.user.setPresence({
         status: "idle",
@@ -637,8 +638,6 @@ client.once("ready", async () => {
           },
         ],
       });
-
-      await client.user.setPresence(presence);
 
     } catch (error) {
       console.error("[ERROR] Failed during interval tasks:", error.message);
