@@ -565,8 +565,6 @@ client.on(Events.GuildCreate, async (guild) => {
     console.error(`[ERROR] Failed to handle guild join: ${error.message}`);
   }
 });
-
-// Ready event
 client.once("ready", async () => {
   console.log(`[INFO] Successfully logged in as ${client.user.tag}`);
   client.user.setPresence({ status: "idle" });
@@ -601,14 +599,36 @@ client.once("ready", async () => {
     console.warn("[WARN] Failed to send startup message:", err.message);
   }
 
-  // Cleanup old reports
+  // Cleanup old reports + reset presence if needed
   setInterval(async () => {
     try {
       await cleanupOldReports(client);
     } catch (error) {
-      console.error("[ERROR] Failed to cleanup old reports:", error.message);
+      console.error("[ERROR] Failed during interval tasks:", error.message);
     }
   }, 10 * 60 * 1000); // every 10 minutes
+
+  // Voice channel connection count
+  setInterval(async () => {
+    try {
+      await cleanupOldReports(client);
+
+      // 🎧 Update status text with VC count
+      const vcCount = client.guilds.cache.filter(g =>
+        g.members.me?.voice.channel
+      ).size;
+
+      const activityText = `inside ${vcCount} voice call${vcCount !== 1 ? "s" : ""}`;
+
+      await client.user.setPresence({
+        status: "idle",
+        activities: [{ name: activityText, type: 3 }], // type 3 = Listening
+      });
+
+    } catch (error) {
+      console.error("[ERROR] Failed during interval tasks:", error.message);
+    }
+  }, 30 * 1000); // ⏱ every 30 seconds
 });
 
 // Global error handling
