@@ -626,18 +626,19 @@ client.once("ready", async () => {
         }
       });
 
-      // Build presence
-      const activityText = `${userCount} user${userCount !== 1 ? "s" : ""} inside ${vcCount} voice channel${vcCount !== 1 ? "s" : ""}`;
-
-      await client.user.setPresence({
-        status: "idle",
-        activities: [
-          {
-            name: activityText,
-            type: 2, // Listening
-          },
-        ],
-      });
+      // Set presence accordingly
+      if (userCount > 0) {
+        const activityText = `${userCount} user${userCount !== 1 ? "s" : ""} inside ${vcCount} voice channel${vcCount !== 1 ? "s" : ""}`;
+        await client.user.setPresence({
+          status: "idle",
+          activities: [{ name: activityText, type: 2 }],
+        });
+      } else {
+        await client.user.setPresence({
+          status: "idle",
+          activities: [],
+        });
+      }
 
     } catch (error) {
       console.error("[ERROR] Failed during interval tasks:", error.message);
