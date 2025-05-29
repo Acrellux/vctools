@@ -246,7 +246,7 @@ const errorHelpMessages = {
 -# **For staff:** Check error logs for further details. If the issue persists, then use \`report issue\`.`,
   HELP_ERR_007: `Occurs when a user requests an unknown help subcommand.
 -# **For staff:** Check your server's error logs. If you believe that this subcommand is supposed to exist, then use \`report issue\`.`,
-  CMD_ERR_008: `Occurs when a user executes a command without sufficient permissions.
+  CMD_ERR_008: `Occurs when a user executes a command or interacts with a component without sufficient permissions.
 -# **For staff:** Verify user permissions and check error logs.`,
   REP_ERR_009: `Occurs when a user report cannot be forwarded to the developers.
 -# **For staff:** Check error logs and try to use \`report issue\` yourself. If this doesn't work, then report it on the GitHub repository or contact Acrellux over Discord.`,

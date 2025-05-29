@@ -14,7 +14,7 @@ async function showPrefixSettingsUI(interactionOrMessage, isEphemeral = false) {
         // Permission check
         const member = interactionOrMessage.member;
         if (!member.permissions.has(requiredManagerPermissions)) {
-            const reply = "> <❌> You need higher permissions to do that.";
+            const reply = "> <❌> You need higher permissions to do that. (CMD_ERR_008)";
             if (interactionOrMessage instanceof Message) {
                 return interactionOrMessage.channel.send(reply);
             } else {
@@ -90,7 +90,7 @@ async function handlePrefixSettingsFlow(interaction) {
     try {
         const [, , prefixType, userId] = interaction.customId.split(":");
         if (interaction.user.id !== userId) {
-            return interaction.reply({ content: "> <❌> You cannot interact with this.", ephemeral: true });
+            return interaction.reply({ content: "> <❌> You cannot interact with this component. (CMD_ERR_008)", ephemeral: true });
         }
 
         // Load and normalize current prefixes
