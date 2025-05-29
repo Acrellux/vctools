@@ -42,9 +42,9 @@ async function showErrorLogsSettingsUI(
     const member = interactionOrMessage.member;
 
     // Permission check
-    if (!member.permissions.has(requiredManagerPermissions)) {
+    if (!(await requiredManagerPermissions(interactionOrMessage))) {
       const noPermissionMessage =
-        "> <❌> You do not have the required permissions to use this command. (CMD_ERR_008)";
+        "> <❇️> You do not have the required permissions to do this. (CMD_ERR_008)";
       if (interactionOrMessage instanceof Message) {
         await interactionOrMessage.channel.send(noPermissionMessage);
       } else {

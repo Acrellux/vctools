@@ -237,8 +237,8 @@ async function handleSettingsFlow(interaction, mode, action) {
             "Unknown Role"
             : "Not set"
           }
-  > **Moderator Role:** ${updatedSettings.modRoleId
-            ? guild.roles.cache.get(updatedSettings.modRoleId)?.name ||
+  > **Moderator Role:** ${updatedSettings.moderatorRoleId
+            ? guild.roles.cache.get(updatedSettings.moderatorRoleId)?.name ||
             "Unknown Role"
             : "Not set"
           }
@@ -255,7 +255,7 @@ async function handleSettingsFlow(interaction, mode, action) {
           `bot:select-moderator-role:${userId}`,
           guild,
           userId,
-          updatedSettings.modRoleId
+          updatedSettings.moderatorRoleId
         );
         const toggleActivityNotificationsButton = new ButtonBuilder()
           .setCustomId(`bot:toggle-notify-activity-reports:${userId}`)
@@ -303,8 +303,8 @@ async function handleSettingsFlow(interaction, mode, action) {
         const role = guild.roles.cache.get(updatedSettings.adminRoleId);
         const contentMessage = `## **Bot Settings**
   > **Admin Role:** ${role ? role.name : "Not set"}
-  > **Moderator Role:** ${updatedSettings.modRoleId
-            ? guild.roles.cache.get(updatedSettings.modRoleId)?.name ||
+  > **Moderator Role:** ${updatedSettings.moderatorRoleId
+            ? guild.roles.cache.get(updatedSettings.moderatorRoleId)?.name ||
             "Unknown Role"
             : "Not set"
           }
@@ -320,7 +320,7 @@ async function handleSettingsFlow(interaction, mode, action) {
           `bot:select-moderator-role:${userId}`,
           guild,
           userId,
-          updatedSettings.modRoleId
+          updatedSettings.moderatorRoleId
         );
         const toggleActivityNotificationsButton = new ButtonBuilder()
           .setCustomId(`bot:toggle-notify-activity-reports:${userId}`)
@@ -358,11 +358,11 @@ async function handleSettingsFlow(interaction, mode, action) {
         const selectedRole = interaction.values[0];
         await updateSettingsForGuild(
           guild.id,
-          { modRoleId: selectedRole },
+          { moderatorRoleId: selectedRole },
           guild
         );
         const updatedSettings = await getSettingsForGuild(guild.id);
-        const role = guild.roles.cache.get(updatedSettings.modRoleId);
+        const role = guild.roles.cache.get(updatedSettings.moderatorRoleId);
         const contentMessage = `## **Bot Settings**
   > **Admin Role:** ${updatedSettings.adminRoleId
             ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
@@ -382,7 +382,7 @@ async function handleSettingsFlow(interaction, mode, action) {
           `bot:select-moderator-role:${userId}`,
           guild,
           userId,
-          updatedSettings.modRoleId
+          updatedSettings.moderatorRoleId
         );
         const toggleActivityNotificationsButton = new ButtonBuilder()
           .setCustomId(`bot:toggle-notify-activity-reports:${userId}`)
@@ -711,7 +711,7 @@ async function handleSettingsMessageCommand(message, args) {
             roleSettingLabel = "Admin";
             break;
           case "moderator":
-            roleUpdate.modRoleId = role.id;
+            roleUpdate.moderatorRoleId = role.id;
             roleSettingLabel = "Moderator";
             break;
           default:
@@ -883,7 +883,7 @@ async function handleSettingsSlashCommand(interaction) {
             roleLabel = "Admin";
             break;
           case "moderator":
-            update.modRoleId = role.id;
+            update.moderatorRoleId = role.id;
             roleLabel = "Moderator";
             break;
           default:

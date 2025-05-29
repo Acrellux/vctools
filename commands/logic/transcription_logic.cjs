@@ -31,8 +31,7 @@ const {
   createRoleDropdown,
   logErrorToChannel,
 } = require("./helpers.cjs");
-
-const requiredManagerPermissions = ["ManageGuild"];
+const { requiredManagerPermissions } = require("./helpers.cjs");
 
 /**
  * Displays the Transcription Settings UI.
@@ -45,27 +44,22 @@ async function showTranscriptionSettingsUI(
   try {
     const guild = interactionOrMessage.guild;
     if (!guild) return;
-    const member = interactionOrMessage.member;
-    if (!member.permissions.has(requiredManagerPermissions)) {
-      const noPermMsg =
-        "> <❌> You do not have the required permissions to use this command. (CMD_ERR_008)";
+
+    // Permission check
+    if (!(await requiredManagerPermissions(interactionOrMessage))) {
+      const noPermissionMessage =
+        "> <❇️> You do not have the required permissions to do this. (CMD_ERR_008)";
       if (interactionOrMessage instanceof Message) {
-        await interactionOrMessage.channel.send({
-          content: noPermMsg,
-        });
-      } else if (interactionOrMessage.isMessageComponent()) {
-        await interactionOrMessage.update({
-          content: noPermMsg,
-          components: [],
-        });
+        await interactionOrMessage.channel.send(noPermissionMessage);
       } else {
-        await interactionOrMessage.editReply({
-          content: noPermMsg,
-          components: [],
+        await interactionOrMessage.reply({
+          content: noPermissionMessage,
+          ephemeral: true,
         });
       }
       return;
     }
+    
     const settings = await getSettingsForGuild(guild.id);
     const userId =
       interactionOrMessage instanceof Message

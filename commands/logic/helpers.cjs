@@ -6,8 +6,26 @@ const {
   ButtonStyle,
   StringSelectMenuBuilder,
   ChannelType,
+  PermissionsBitField,
 } = require("discord.js");
 const { getSettingsForGuild } = require("../settings.cjs");
+
+/**
+ * Dynamically checks if the user is an admin based on adminRoleId or ownership.
+ * Use anywhere that used `requiredManagerPermissions`.
+ */
+async function requiredManagerPermissions(interactionOrMessage) {
+  const guild = interactionOrMessage.guild;
+  const member = interactionOrMessage.member;
+
+  if (!guild || !member) return false;
+
+  const settings = (await getSettingsForGuild(guild.id)) || {};
+  return (
+    guild.ownerId === member.id ||
+    member.roles.cache.has(settings.adminRoleId)
+  );
+}
 
 /**
  * Logs an error message to the configured error logs channel.
@@ -178,4 +196,5 @@ module.exports = {
   createErrorLogchannelIdropdown,
   createRoleDropdown,
   createErrorLogRoleDropdown,
+  requiredManagerPermissions,
 };

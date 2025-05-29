@@ -47,14 +47,19 @@ async function handleSafeUserMessageCommand(message, args) {
   //      >safeuser add @User
   //      >safeuser remove @User
   try {
-    if (!message.member.permissions.has(requiredManagerPermissions)) {
+    // Check if the user has the required permissions. SPECIFICALLY check for the moderator role, not the administator role.
+    const settings = (await getSettingsForGuild(message.guild.id)) || {};
+    const isMod = message.member.roles.cache.has(settings.moderatorRoleId);
+    const isAdmin = message.guild.ownerId === message.member.id || message.member.roles.cache.has(settings.adminRoleId);
+
+    if (!isMod && !isAdmin) {
       return message.channel.send(
-        "> <❌> You do not have the required permissions to manage safe users."
+        "> <❌> You do not have the required permissions to manage safe users. (CMD_ERR_008)"
       );
     }
+
     const subCmd = args[0]?.toLowerCase();
     const guildId = message.guild.id;
-    const settings = await getSettingsForGuild(guildId);
 
     switch (subCmd) {
       case "list": {

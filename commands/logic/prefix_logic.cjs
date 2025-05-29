@@ -1,7 +1,8 @@
 // commands/logic/prefix_logic.cjs
 const { Message, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { getSettingsForGuild, updateSettingsForGuild } = require("../settings.cjs");
-const { logErrorToChannel, requiredManagerPermissions } = require("./helpers.cjs");
+const { logErrorToChannel } = require("./helpers.cjs");
+const { requiredManagerPermissions } = require("./helpers.cjs");
 
 /**
  * Renders the Prefix Settings UI.
@@ -12,14 +13,18 @@ async function showPrefixSettingsUI(interactionOrMessage, isEphemeral = false) {
         if (!guild) return;
 
         // Permission check
-        const member = interactionOrMessage.member;
-        if (!member.permissions.has(requiredManagerPermissions)) {
-            const reply = "> <❌> You need higher permissions to do that. (CMD_ERR_008)";
+        if (!(await requiredManagerPermissions(interactionOrMessage))) {
+            const noPermissionMessage =
+                "> <❇️> You do not have the required permissions to do this. (CMD_ERR_008)";
             if (interactionOrMessage instanceof Message) {
-                return interactionOrMessage.channel.send(reply);
+                await interactionOrMessage.channel.send(noPermissionMessage);
             } else {
-                return interactionOrMessage.reply({ content: reply, ephemeral: true });
+                await interactionOrMessage.reply({
+                    content: noPermissionMessage,
+                    ephemeral: true,
+                });
             }
+            return;
         }
 
         // Load and normalize current prefixes (default all enabled)
@@ -116,7 +121,7 @@ async function handlePrefixSettingsFlow(interaction) {
         const symbol = { slash: "/", greater: ">", exclamation: "!" }[prefixType];
         await interaction.followUp({
             content: `> <⚙️> The **${symbol}** prefix is now **${prefixes[prefixType] ? "enabled" : "disabled"}**.`,
-            ephemeral: false,
+            ephemeral: true,
         });
 
     } catch (err) {

@@ -33,7 +33,7 @@ function buildVCActionLog({ timestamp, actor, actorRole, action, targetName, tar
 async function handleVCSlashCommand(interaction) {
   try {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
-      return interaction.reply({ content: "> <❌> You do not have permission to manage members.", ephemeral: true });
+      return interaction.reply({ content: "> <❇️> You do not have permission to manage members.", ephemeral: true });
     }
 
     const sub = interaction.options.getSubcommand();
@@ -44,7 +44,7 @@ async function handleVCSlashCommand(interaction) {
     // ──────── Drain ─────────
     if (sub === "drain") {
       if (!issuer.voice.channel) {
-        return interaction.reply({ content: "> <❌> You must be in a voice channel to drain it.", ephemeral: true });
+        return interaction.reply({ content: "> <❇️> You must be in a voice channel to drain it.", ephemeral: true });
       }
       for (const [, m] of issuer.voice.channel.members) {
         try { await m.voice.disconnect(`Drained by ${interaction.user.tag}`); }
@@ -133,7 +133,7 @@ async function handleVCSlashCommand(interaction) {
 async function handleVCMessageCommand(message, args = []) {
   try {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
-      return message.reply("> <❌> You do not have permission to manage members.");
+      return message.reply("> <❇️> You do not have permission to manage members.");
     }
     if (!args.length) {
       return message.reply("> <❌> Please provide a subcommand: `mute`, `unmute`, `kick`, or `drain`");

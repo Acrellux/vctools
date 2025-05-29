@@ -18,24 +18,22 @@ const { createClient } = require("@supabase/supabase-js");
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-const requiredManagerPermissions = ["ManageGuild"];
+const { requiredManagerPermissions } = require("./helpers.cjs");
 
 async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
   try {
     const guild = interactionOrMessage.guild;
     if (!guild) return;
 
-    const member = interactionOrMessage.member;
-    if (!member || !member.permissions.has(requiredManagerPermissions)) {
+    // Permission check
+    if (!(await requiredManagerPermissions(interactionOrMessage))) {
+      const noPermissionMessage =
+        "> <❇️> You do not have the required permissions to do this. (CMD_ERR_008)";
       if (interactionOrMessage instanceof Message) {
-        await interactionOrMessage.channel.send(
-          "> <❌> You do not have the required permissions to use this command. (CMD_ERR_008)"
-        );
+        await interactionOrMessage.channel.send(noPermissionMessage);
       } else {
         await interactionOrMessage.reply({
-          content:
-            "> <❌> You do not have the required permissions to use this command. (CMD_ERR_008)",
+          content: noPermissionMessage,
           ephemeral: true,
         });
       }
@@ -51,7 +49,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
     // Display the current Voice Call Ping role.
     const roleName = settings.voiceCallPingRoleId
       ? guild.roles.cache.get(settings.voiceCallPingRoleId)?.name ||
-        "Unknown Role"
+      "Unknown Role"
       : "Not set";
 
     const contentMessage = `## ◈ **VC Settings**
@@ -59,9 +57,8 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
 > **Notify on Bad Words:** ${settings.notifyBadWord ? "Enabled" : "Disabled"}
 > **Notify for Loud Users:** ${settings.notifyLoudUser ? "Enabled" : "Disabled"}
 > **Soundboard Logging:** ${settings.soundboardLogging ? "Enabled" : "Disabled"}
-> **Kick on Soundboard Spam:** ${
-      settings.kickOnSoundboardSpam ? "Enabled" : "Disabled"
-    }`;
+> **Kick on Soundboard Spam:** ${settings.kickOnSoundboardSpam ? "Enabled" : "Disabled"
+      }`;
 
     // Create dropdown for VC Ping role selection.
     const vcRoleDropdown = createRoleDropdown(

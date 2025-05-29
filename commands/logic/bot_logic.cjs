@@ -38,16 +38,15 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       return;
     }
 
-    // Check permissions
-    const member = interactionOrMessage.member;
-    if (!member || !member.permissions.has(requiredManagerPermissions)) {
-      const response =
-        "> <❌> You do not have the required permissions to use this command. (CMD_ERR_008)";
-      if (interactionOrMessage.author) {
-        await interactionOrMessage.channel.send(response);
+    // Permission check
+    if (!(await requiredManagerPermissions(interactionOrMessage))) {
+      const noPermissionMessage =
+        "> <❇️> You do not have the required permissions to do this. (CMD_ERR_008)";
+      if (interactionOrMessage instanceof Message) {
+        await interactionOrMessage.channel.send(noPermissionMessage);
       } else {
         await interactionOrMessage.reply({
-          content: response,
+          content: noPermissionMessage,
           ephemeral: true,
         });
       }
@@ -60,13 +59,13 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
 
     // For debugging: Check for both camelCase and snake_case
     const adminRoleId = settings.adminRoleId || settings.admin_role_id || null;
-    const modRoleId =
+    const moderatorRoleId =
       settings.moderatorRoleId || settings.moderator_role_id || null;
-    console.log(`[DEBUG] adminRoleId: ${adminRoleId}, modRoleId: ${modRoleId}`);
+    console.log(`[DEBUG] adminRoleId: ${adminRoleId}, moderatorRoleId: ${moderatorRoleId}`);
 
     // Retrieve roles from cache (if they exist)
     const adminRole = adminRoleId ? guild.roles.cache.get(adminRoleId) : null;
-    const modRole = modRoleId ? guild.roles.cache.get(modRoleId) : null;
+    const modRole = moderatorRoleId ? guild.roles.cache.get(moderatorRoleId) : null;
     console.log(
       `[DEBUG] Retrieved roles: Admin: ${adminRole ? adminRole.name : "Not set"
       }, Moderator: ${modRole ? modRole.name : "Not set"}`
@@ -103,7 +102,7 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       `bot:select-moderator-role:${userId}`,
       guild,
       userId,
-      modRoleId
+      moderatorRoleId
     );
 
     // Create the toggle button for Activity Reports.
