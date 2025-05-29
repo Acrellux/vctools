@@ -9,6 +9,8 @@ const {
   handleInitializeStaffRoles,
   handleStaffRolesFlow,
 } = require("../initialization/staffRoles.cjs");
+const { getSettingsForGuild } = require("../settings.cjs");
+const { PermissionsBitField } = require("discord.js");
 
 const requiredManagerPermissions = ["ManageGuild"];
 
