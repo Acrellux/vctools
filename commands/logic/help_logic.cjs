@@ -341,32 +341,27 @@ async function showHelpContent(
 
   if (pages.length <= 1) return;
 
-  const filter = (i) =>
-    i.customId.startsWith("help:") && checkUserId(i, interactionOrMessage);
   const collector = helpMsg.createMessageComponentCollector({
-    filter,
+    filter: (i) => {
+      if (!i.customId.startsWith("help:")) return false;
+      const parts = i.customId.split(":");
+      const expectedUserId = parts[4];
+      if (i.user.id !== expectedUserId) {
+        i.reply({
+          content: "> <❇️> You cannot interact with this help menu. (INT_ERR_004)",
+          ephemeral: true,
+        }).catch(() => { });
+        return false;
+      }
+      return true;
+    },
     time: 3 * 60 * 1000,
   });
 
   collector.on("collect", async (i) => {
     try {
-      let topic, action, pageStr, userId;
-
-      if (i.isSelectMenu()) {
-        const [customId] = i.values;
-        [, topic, action, pageStr, userId] = customId.split(":");
-      } else {
-        [, topic, action, pageStr, userId] = i.customId.split(":");
-      }
-
+      let [, topic, action, pageStr, userId] = i.customId.split(":");
       let currentPage = parseInt(pageStr);
-
-      if (i.user.id !== userId) {
-        return await i.reply({
-          content: "> <⚠️> You cannot interact with this help menu.",
-          ephemeral: true,
-        });
-      }
 
       let newPages;
       if (topic === "errors") {
@@ -401,7 +396,7 @@ async function showHelpContent(
       console.error("[ERROR] Failed to update help page:", err);
       if (!i.replied) {
         await i.reply({
-          content: "> <❌> Something went wrong updating the help message.",
+          content: "> <❌> Something went wrong updating the help message. (INT_ERR_006)",
           ephemeral: true,
         });
       }
