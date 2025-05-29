@@ -106,6 +106,21 @@ async function handleAllInteractions(interaction) {
       console.log(
         `[DEBUG] Handling ${mode} interaction: action=${action}, userId=${userId}`
       );
+
+      if (mode === "bot") {
+        const settings = (await getSettingsForGuild(interaction.guild.id)) || {};
+        const isAdmin =
+          interaction.guild.ownerId === interaction.user.id ||
+          interaction.member.roles.cache.has(settings.adminRoleId);
+
+        if (!isAdmin) {
+          return await interaction.reply({
+            content: "> <❇️> You do not have permission to interact with Bot Settings. (INT_ERR_004)",
+            ephemeral: true,
+          });
+        }
+      }
+
       await handlers[mode](interaction, mode, action);
       return;
     }
