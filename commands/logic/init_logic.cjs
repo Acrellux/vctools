@@ -59,12 +59,13 @@ async function handleInitializeMessageCommand(message, args) {
       );
       return;
     }
-    if (!message.member.permissions.has(requiredManagerPermissions)) {
+    if (!(await requiredManagerPermissions(message))) {
       await message.channel.send(
-        "> <❌> You do not have the required permissions. (CMD_ERR_008)"
+        "> <❇️> You must be an admin to initialize VC Tools. (CMD_ERR_008)"
       );
       return;
     }
+
 
     const method = args[0]?.toLowerCase();
     if (
@@ -129,10 +130,9 @@ async function handleInitializeSlashCommand(interaction) {
       });
       return;
     }
-    if (!interaction.memberPermissions.has(requiredManagerPermissions)) {
+    if (!(await requiredManagerPermissions(interaction))) {
       await interaction.reply({
-        content:
-          "> <❌> You do not have the required permissions. (CMD_ERR_008)",
+        content: "> <❇️> You must be an admin to initialize VC Tools. (CMD_ERR_008)",
         ephemeral: true,
       });
       return;
