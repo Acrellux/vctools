@@ -305,14 +305,46 @@ async function handleReportInteractions(interaction) {
 
 /**
  * viewReport:
- * Retrieves a single report and ensures ownership.
+ * Retrieves a single report, ensures ownership, and sends it as an embed.
  */
-async function viewReport(userId, reportId) {
+async function viewReport(userId, reportId, target = null) {
   try {
-    const { data: report, error } = await supabase.from("reports").select("*").eq("report_id", reportId).single();
+    const { data: report, error } = await supabase
+      .from("reports")
+      .select("*")
+      .eq("report_id", reportId)
+      .single();
+
     if (error || !report) return { error: "<❇️> Report not found." };
     if (report.user_id !== userId) return { error: "<❇️> You can only view your own reports." };
-    return { report };
+
+    const truncate = (text, max = 1024) =>
+      text && text.length > max ? text.slice(0, max - 3) + "..." : text || "N/A";
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${report.type === "activity" ? "Activity Report" : "Issue Report"} - ${report.report_id}`)
+      .addFields(
+        { name: "Status", value: report.status || "Unknown", inline: true },
+        { name: "Description", value: truncate(report.description) },
+        { name: "Additional Details", value: truncate(report.details), inline: true }
+      )
+      .setColor(report.type === "activity" ? "White" : "Red")
+      .setTimestamp(new Date(report.timestamp));
+
+    if (report.error_log && report.type === "issue") {
+      embed.addFields({ name: "Error Log", value: truncate(report.error_log) });
+    }
+
+    // Send the embed if a context is provided
+    if (target) {
+      if (typeof target.reply === "function") {
+        await target.reply({ embeds: [embed], ephemeral: true });
+      } else if (target.channel && typeof target.channel.send === "function") {
+        await target.channel.send({ embeds: [embed] });
+      }
+    }
+
+    return { embed };
   } catch (err) {
     console.error("[ERROR] viewReport exception:", err);
     return { error: "<❌> Unable to retrieve the report at this time." };

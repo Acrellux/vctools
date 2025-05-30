@@ -66,13 +66,11 @@ async function handleReportSlashCommand(interaction) {
           ephemeral: true,
         });
       }
-      const result = await viewReport(interaction.user.id, reportId);
+
+      const result = await viewReport(interaction.user.id, reportId, interaction);
       if (result.error) {
         return interaction.reply({ content: result.error, ephemeral: true });
       }
-      const report = result.report;
-      const response = `**Report ${report.report_id}**\nDescription: ${report.description}\nStatus: ${report.status}\nSubmitted: ${report.timestamp}`;
-      return interaction.reply({ content: response, ephemeral: true });
     } else if (subcommand === "close") {
       const reportId = interaction.options.getString("id");
       if (!reportId) {
@@ -161,11 +159,9 @@ async function handleReportMessageCommand(message, args = []) {
     } else if (subcommand === "view") {
       const reportId = args[1];
       if (!reportId) return message.reply("<❌> Please provide a report ID.");
-      const result = await viewReport(message.author.id, reportId);
+
+      const result = await viewReport(message.author.id, reportId, message);
       if (result.error) return message.reply(result.error);
-      const report = result.report;
-      const response = `**Report ${report.report_id}**\nDescription: ${report.description}\nStatus: ${report.status}\nSubmitted: ${report.timestamp}`;
-      return message.reply(response);
     } else if (subcommand === "close") {
       const reportId = args[1];
       if (!reportId) return message.reply("<❌> Please provide a report ID.");
