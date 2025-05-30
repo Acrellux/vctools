@@ -11,23 +11,43 @@ const ansi = {
   reset: "\u001b[0m",
 };
 
-function buildVCActionLog({ timestamp, actor, actorRole, action, targetName, targetId, channelName }) {
-  let roleColor = ansi.white;
-  if (actorRole === "Owner") roleColor = ansi.red;
-  else if (actorRole === "Admin") roleColor = ansi.cyan;
-  else if (["Moderator", "Manager"].includes(actorRole)) roleColor = ansi.yellow;
-
-  return `
-\`\`\`ansi
-${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ` +
-    `${roleColor}${actorRole} ${ansi.white}${actor}${ansi.darkGray} ${action} ` +
-    `${roleColor}${targetName}${ansi.darkGray} [${ansi.white}${targetId}${ansi.darkGray}] ` +
-    `from ${ansi.white}${channelName}${ansi.reset}
-\`\`\``;
+/**
+ * Builds an ANSI-colored log message for VC moderation actions
+ * @param {Object} params
+ * @param {string} params.timestamp - HH:MM formatted string
+ * @param {string} params.actor - User tag of the person taking action
+ * @param {string} params.actorRole - Top role name (e.g. "Admin", "Moderator")
+ * @param {string} params.roleColor - ANSI color code for the actor's role
+ * @param {string} params.action - Action verb ("muted", "kicked", etc.)
+ * @param {string} params.targetName - Display name of the target user
+ * @param {string} params.targetId - User ID of the target
+ * @param {string} params.channelName - Name of the voice channel
+ */
+function buildVCActionLog({
+  timestamp,
+  actor,
+  actorRole,
+  roleColor,
+  action,
+  targetName,
+  targetId,
+  channelName,
+}) {
+  return (
+    "```ansi\n" +
+    `${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ` +
+    `[${roleColor}${actorRole}${ansi.darkGray}] ` +
+    `[${ansi.white}${targetId}${ansi.darkGray}] ` +
+    `${roleColor}${actor}${ansi.darkGray} ${action} ` +
+    `${roleColor}${targetName}${ansi.darkGray} from ` +
+    `${ansi.white}${channelName}${ansi.darkGray}.${ansi.reset}\n` +
+    "```"
+  );
 }
 
 async function sendVCLog(guild, settings, issuer, member, actionVerb) {
   if (!settings.vcLoggingEnabled || !settings.vcLoggingChannelId) return;
+
   let ch = guild.channels.cache.get(settings.vcLoggingChannelId);
   if (!ch) {
     try {
@@ -36,28 +56,43 @@ async function sendVCLog(guild, settings, issuer, member, actionVerb) {
       return;
     }
   }
-  if (!ch.permissionsFor(guild.members.me).has("SendMessages")) return;
 
-  const timestamp = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-  const actorRole = issuer.id === guild.ownerId
-    ? "Owner"
-    : issuer.permissions.has(PermissionsBitField.Flags.Administrator)
-      ? "Admin"
-      : issuer.permissions.has(PermissionsBitField.Flags.ManageGuild)
-        ? "Moderator"
-        : "Member";
+  if (!ch.permissionsFor(guild.members.me)?.has("SendMessages")) return;
+
+  const timestamp = new Date().toLocaleTimeString("en-US", {
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  const actorRole = issuer.roles.highest?.name || "No Role";
+  let roleColor = ansi.white;
+
+  if (guild.ownerId === issuer.id) {
+    roleColor = ansi.red;
+  } else if (issuer.permissions.has("Administrator")) {
+    roleColor = ansi.cyan;
+  } else if (
+    issuer.permissions.has("ManageGuild") ||
+    issuer.permissions.has("KickMembers") ||
+    issuer.permissions.has("MuteMembers") ||
+    issuer.permissions.has("BanMembers") ||
+    issuer.permissions.has("ManageMessages")
+  ) {
+    roleColor = ansi.yellow;
+  }
 
   const logMsg = buildVCActionLog({
     timestamp,
     actor: issuer.user.tag,
     actorRole,
+    roleColor,
     action: actionVerb,
     targetName: member.displayName,
     targetId: member.id,
-    channelName: member.voice.channel?.name || "Unknown"
+    channelName: member.voice.channel?.name || "Unknown",
   });
 
-  await ch.send(logMsg);
+  await ch.send(logMsg).catch(console.error);
 }
 
 async function handleVCSlashCommand(interaction) {
@@ -111,7 +146,7 @@ async function handleVCSlashCommand(interaction) {
         await member.voice.disconnect(`Kicked by ${interaction.user.tag}`);
         verb = "kicked";
       } else {
-        return interaction.reply({ content: "> <❌> Unknown sub.", ephemeral: true });
+        return interaction.reply({ content: "> <❇️> Unknown subcommand. Usage: `kick`, `mute`, `unmute`", ephemeral: true });
       }
 
       await sendVCLog(guild, settings, issuer, member, verb);
@@ -173,7 +208,7 @@ async function handleVCMessageCommand(message, args = []) {
         await member.voice.disconnect(`Kicked by ${message.author.tag}`);
         verb = "kicked";
       } else {
-        return message.reply("> <❌> Unknown sub.");
+        return message.reply("> <❇️> Unknown subcommand. Usage: `kick`, `mute`, `unmute`");
       }
 
       await sendVCLog(guild, settings, issuer, member, verb);
