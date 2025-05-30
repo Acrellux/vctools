@@ -19,7 +19,10 @@ function buildVCActionLog({ timestamp, actor, actorRole, action, targetName, tar
 
   return `
 \`\`\`ansi
-${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] [${roleColor}${actorRole}${ansi.darkGray}] [${ansi.white}${targetId}${ansi.darkGray}] ${roleColor}${targetName}${ansi.darkGray} ${action} from ${ansi.white}${channelName}${ansi.darkGray} by ${ansi.white}${actor}${ansi.darkGray}.${ansi.reset}
+${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ` +
+    `${roleColor}${actorRole} ${ansi.white}${actor}${ansi.darkGray} ${action} ` +
+    `${roleColor}${targetName}${ansi.darkGray} [${ansi.white}${targetId}${ansi.darkGray}] ` +
+    `from ${ansi.white}${channelName}${ansi.reset}
 \`\`\``;
 }
 
