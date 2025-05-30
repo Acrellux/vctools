@@ -33,13 +33,15 @@ function buildVCActionLog({
   targetId,
   channelName,
 }) {
+  const preposition = action === "kicked" ? "from" : "in";
+
   return (
     "```ansi\n" +
     `${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ` +
     `[${roleColor}${actorRole}${ansi.darkGray}] ` +
     `[${ansi.white}${targetId}${ansi.darkGray}] ` +
     `${roleColor}${actor}${ansi.darkGray} ${action} ` +
-    `${ansi.white}${targetName}${ansi.darkGray} from ` +
+    `${ansi.white}${targetName}${ansi.darkGray} ${preposition} ` +
     `${ansi.white}${channelName}${ansi.darkGray}.${ansi.reset}\n` +
     "```"
   );
