@@ -39,7 +39,7 @@ function buildVCActionLog({
     `[${roleColor}${actorRole}${ansi.darkGray}] ` +
     `[${ansi.white}${targetId}${ansi.darkGray}] ` +
     `${roleColor}${actor}${ansi.darkGray} ${action} ` +
-    `${roleColor}${targetName}${ansi.darkGray} from ` +
+    `${ansi.white}${targetName}${ansi.darkGray} from ` +
     `${ansi.white}${channelName}${ansi.darkGray}.${ansi.reset}\n` +
     "```"
   );
