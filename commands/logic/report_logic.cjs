@@ -192,7 +192,7 @@ async function handleReportMessageCommand(message, args = []) {
       return message.reply(result.error || result.message);
     } else {
       return message.reply(
-        "<❌> Unknown report subcommand. Options: issue, activity, view, close, edit."
+        "<❌> Unknown report subcommand. Use: `issue`, `activity`, `view`, `close`, `edit`"
       );
     }
   } catch (error) {
