@@ -51,7 +51,7 @@ async function sendVCLog(guild, settings, issuer, member, actionVerb) {
     action: actionVerb,
     targetName: member.displayName,
     targetId: member.id,
-    channelName: member.voice.channel.name,
+    channelName: member.voice.channel?.name || "Unknown"
   });
 
   await ch.send(logMsg);
