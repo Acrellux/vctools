@@ -1,10 +1,4 @@
-const {
-  PermissionsBitField,
-  ChannelType,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-} = require("discord.js");
+const { PermissionsBitField, ChannelType } = require("discord.js");
 const { logErrorToChannel } = require("./helpers.cjs");
 const { getSettingsForGuild } = require("../settings.cjs");
 
@@ -23,17 +17,50 @@ function buildVCActionLog({ timestamp, actor, actorRole, action, targetName, tar
   else if (actorRole === "Admin") roleColor = ansi.cyan;
   else if (["Moderator", "Manager"].includes(actorRole)) roleColor = ansi.yellow;
 
-  return `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] [` +
-    `${roleColor}${actorRole}${ansi.darkGray}] [` +
-    `${ansi.white}${targetId}${ansi.darkGray}] ${roleColor}${targetName}` +
-    `${ansi.darkGray} ${action} from ${ansi.white}${channelName}` +
-    `${ansi.darkGray} by ${ansi.white}${actor}${ansi.darkGray}.${ansi.reset}\n\`\`\``;
+  return `
+\`\`\`ansi
+${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] [${roleColor}${actorRole}${ansi.darkGray}] [${ansi.white}${targetId}${ansi.darkGray}] ${roleColor}${targetName}${ansi.darkGray} ${action} from ${ansi.white}${channelName}${ansi.darkGray} by ${ansi.white}${actor}${ansi.darkGray}.${ansi.reset}
+\`\`\``;
+}
+
+async function sendVCLog(guild, settings, issuer, member, actionVerb) {
+  if (!settings.vcLoggingEnabled || !settings.vcLoggingChannelId) return;
+  let ch = guild.channels.cache.get(settings.vcLoggingChannelId);
+  if (!ch) {
+    try {
+      ch = await guild.channels.fetch(settings.vcLoggingChannelId);
+    } catch {
+      return;
+    }
+  }
+  if (!ch.permissionsFor(guild.members.me).has("SendMessages")) return;
+
+  const timestamp = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
+  const actorRole = issuer.id === guild.ownerId
+    ? "Owner"
+    : issuer.permissions.has(PermissionsBitField.Flags.Administrator)
+      ? "Admin"
+      : issuer.permissions.has(PermissionsBitField.Flags.ManageGuild)
+        ? "Moderator"
+        : "Member";
+
+  const logMsg = buildVCActionLog({
+    timestamp,
+    actor: issuer.user.tag,
+    actorRole,
+    action: actionVerb,
+    targetName: member.displayName,
+    targetId: member.id,
+    channelName: member.voice.channel.name,
+  });
+
+  await ch.send(logMsg);
 }
 
 async function handleVCSlashCommand(interaction) {
   try {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
-      return interaction.reply({ content: "> <❇️> You do not have permission to manage members.", ephemeral: true });
+      return interaction.reply({ content: "> <❇️> Missing Manage Members perm.", ephemeral: true });
     }
 
     const sub = interaction.options.getSubcommand();
@@ -41,31 +68,27 @@ async function handleVCSlashCommand(interaction) {
     const issuer = await guild.members.fetch(interaction.user.id);
     const settings = await getSettingsForGuild(guild.id);
 
-    // ──────── Drain ─────────
     if (sub === "drain") {
       if (!issuer.voice.channel) {
-        return interaction.reply({ content: "> <❇️> You must be in a voice channel to drain it.", ephemeral: true });
+        return interaction.reply({ content: "> <❇️> You must join a VC.", ephemeral: true });
       }
-      for (const [, m] of issuer.voice.channel.members) {
-        try { await m.voice.disconnect(`Drained by ${interaction.user.tag}`); }
-        catch { }
-      }
-      return interaction.reply({ content: `> <🕳️> Drained all users from ${issuer.voice.channel.name}.`, ephemeral: true });
+      issuer.voice.channel.members.forEach(m => m.voice.disconnect(`Drained by ${interaction.user.tag}`).catch(() => { }));
+      return interaction.reply({ content: `> <🕳️> Drained ${issuer.voice.channel.name}.`, ephemeral: true });
     }
 
-    // ──────── Parse targets ─────────
+    // parse targets
     const usersInput = interaction.options.getString("users") || "";
     const ids = [];
-    const mentionRx = /<@!?(\\d{17,19})>/g;
+    const mentionRx = /<@!?(\d{17,19})>/g;
     let m;
     while ((m = mentionRx.exec(usersInput))) ids.push(m[1]);
-    for (const part of usersInput.split(/[\s,]+/)) {
+    usersInput.split(/[,\s]+/).forEach(part => {
       if (/^\d{17,19}$/.test(part) && !ids.includes(part)) ids.push(part);
-    }
+    });
     const single = interaction.options.getUser("user");
     if (!ids.length && single) ids.push(single.id);
     if (!ids.length) {
-      return interaction.reply({ content: "> <❌> No valid users provided.", ephemeral: true });
+      return interaction.reply({ content: "> <❌> No valid users.", ephemeral: true });
     }
 
     const results = [];
@@ -74,94 +97,60 @@ async function handleVCSlashCommand(interaction) {
       if (!member) { results.push(`❌ ${id}`); continue; }
       if (!member.voice.channel) { results.push(`⚠️ ${member.displayName}`); continue; }
 
-      try {
-        let actionVerb;
-        if (sub === "mute") {
-          await member.voice.setMute(true, `Muted by ${interaction.user.tag}`);
-          actionVerb = "muted";
-        } else if (sub === "unmute") {
-          await member.voice.setMute(false, `Unmuted by ${interaction.user.tag}`);
-          actionVerb = "unmuted";
-        } else if (sub === "kick") {
-          await member.voice.disconnect(`Kicked by ${interaction.user.tag}`);
-          actionVerb = "kicked";
-        } else {
-          return interaction.reply({ content: "> <❌> Unknown subcommand.", ephemeral: true });
-        }
-
-        // ——— Log it —
-        if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
-          const ch = guild.channels.cache.get(settings.vcLoggingChannelId);
-          if (ch) {
-            const timestamp = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-            const actorRole = issuer.id === guild.ownerId
-              ? "Owner"
-              : issuer.permissions.has(PermissionsBitField.Flags.Administrator)
-                ? "Admin"
-                : issuer.permissions.has(PermissionsBitField.Flags.ManageGuild)
-                  ? "Moderator"
-                  : "Member";
-            const logMsg = buildVCActionLog({
-              timestamp,
-              actor: interaction.user.tag,
-              actorRole,
-              action: actionVerb,
-              targetName: member.displayName,
-              targetId: member.id,
-              channelName: member.voice.channel.name
-            });
-            await ch.send(logMsg).catch(console.error);
-          }
-        }
-
-        results.push(member.displayName);
-      } catch (err) {
-        console.error(`[VC] ${sub} failed for ${id}: ${err.message}`);
-        results.push(`❌ ${member.displayName}`);
+      let verb;
+      if (sub === "mute") {
+        await member.voice.setMute(true, `Muted by ${interaction.user.tag}`);
+        verb = "muted";
+      } else if (sub === "unmute") {
+        await member.voice.setMute(false, `Unmuted by ${interaction.user.tag}`);
+        verb = "unmuted";
+      } else if (sub === "kick") {
+        await member.voice.disconnect(`Kicked by ${interaction.user.tag}`);
+        verb = "kicked";
+      } else {
+        return interaction.reply({ content: "> <❌> Unknown sub.", ephemeral: true });
       }
+
+      await sendVCLog(guild, settings, issuer, member, verb);
+      results.push(member.displayName);
     }
 
-    const emoji = sub === "unmute" ? "🔊" : sub === "mute" ? "🔇" : "🚫";
-    return interaction.reply({ content: `> <${emoji}> ${sub.charAt(0).toUpperCase() + sub.slice(1)}d: ${results.join(", ")}`, ephemeral: true });
+    const label = sub.charAt(0).toUpperCase() + sub.slice(1) + "ed";
+    const emoji = sub === "mute" ? "🔇" : sub === "unmute" ? "🔊" : "🕳️";
+    return interaction.reply({ content: `> <${emoji}> ${label}: ${results.join(", ")}` });
   } catch (error) {
-    console.error(`[ERROR] handleVCSlashCommand: ${error.stack}`);
+    console.error(error);
     await logErrorToChannel(interaction.guild.id, error.stack, interaction.client, "VC_ERR_001");
-    return interaction.reply({ content: "> <❌> An error occurred while processing the VC command. (VC_ERR_001)", ephemeral: true });
+    if (!interaction.replied) {
+      interaction.reply({ content: "> <❌> Internal VC error.", ephemeral: true });
+    }
   }
 }
 
 async function handleVCMessageCommand(message, args = []) {
   try {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
-      return message.reply("> <❇️> You do not have permission to manage members.");
+      return message.reply("> <❇️> No manage members perm.");
     }
-    if (!args.length) {
-      return message.reply("> <❌> Please provide a subcommand: `mute`, `unmute`, `kick`, or `drain`");
-    }
-
-    const sub = args[0].toLowerCase();
+    const sub = (args[0] || "").toLowerCase();
     const guild = message.guild;
     const issuer = await guild.members.fetch(message.author.id);
     const settings = await getSettingsForGuild(guild.id);
 
-    // ──────── Drain ─────────
     if (sub === "drain") {
       const channel = issuer.voice.channel || message.mentions.channels.first();
       if (!channel || channel.type !== ChannelType.GuildVoice) {
-        return message.reply("> <❌> You must be in or mention a valid voice channel to drain.");
+        return message.reply("> <❌> You must mention or join a VC.");
       }
-      for (const [, m] of channel.members) {
-        try { await m.voice.disconnect(`Drained by ${message.author.tag}`); } catch { }
-      }
-      return message.reply(`> <🕳️> Drained all users from ${channel.name}.`);
+      channel.members.forEach(m => m.voice.disconnect(`Drained by ${message.author.tag}`).catch(() => { }));
+      return message.reply(`> <🕳️> Drained ${channel.name}.`);
     }
 
-    // ──────── Targets ─────────
     const ids = [];
     if (message.mentions.members.size) ids.push(...message.mentions.members.keys());
-    else if (args[1]) for (const id of args[1].split(/[\s,]+/)) if (/^\d{17,19}$/.test(id)) ids.push(id);
+    else if (args[1]) ids.push(...args[1].split(/[,\s]+/).filter(id => /^\d{17,19}$/.test(id)));
     if (!ids.length) {
-      return message.reply(`> <❌> Please mention or list at least one user to ${sub}.`);
+      return message.reply("> <❌> No valid users.");
     }
 
     const results = [];
@@ -170,63 +159,32 @@ async function handleVCMessageCommand(message, args = []) {
       if (!member) { results.push(`❌ ${id}`); continue; }
       if (!member.voice.channel) { results.push(`⚠️ ${member.displayName}`); continue; }
 
-      try {
-        let actionVerb;
-        if (sub === "mute") {
-          await member.voice.setMute(true, `Muted by ${message.author.tag}`);
-          actionVerb = "muted";
-        } else if (sub === "unmute") {
-          await member.voice.setMute(false, `Unmuted by ${message.author.tag}`);
-          actionVerb = "unmuted";
-        } else if (sub === "kick") {
-          await member.voice.disconnect(`Kicked by ${message.author.tag}`);
-          actionVerb = "kicked";
-        } else {
-          return message.reply("> <❌> Unknown subcommand.");
-        }
-
-        // ——— Log it —
-        if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
-          const ch = guild.channels.cache.get(settings.vcLoggingChannelId);
-          if (ch) {
-            const timestamp = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-            const actorRole = issuer.id === guild.ownerId
-              ? "Owner"
-              : issuer.permissions.has(PermissionsBitField.Flags.Administrator)
-                ? "Admin"
-                : issuer.permissions.has(PermissionsBitField.Flags.ManageGuild)
-                  ? "Moderator"
-                  : "Member";
-            const logMsg = buildVCActionLog({
-              timestamp,
-              actor: message.author.tag,
-              actorRole,
-              action: actionVerb,
-              targetName: member.displayName,
-              targetId: member.id,
-              channelName: member.voice.channel.name
-            });
-            await ch.send(logMsg).catch(console.error);
-          }
-        }
-
-        results.push(member.displayName);
-      } catch {
-        results.push(`❌ ${member.displayName}`);
+      let verb;
+      if (sub === "mute") {
+        await member.voice.setMute(true, `Muted by ${message.author.tag}`);
+        verb = "muted";
+      } else if (sub === "unmute") {
+        await member.voice.setMute(false, `Unmuted by ${message.author.tag}`);
+        verb = "unmuted";
+      } else if (sub === "kick") {
+        await member.voice.disconnect(`Kicked by ${message.author.tag}`);
+        verb = "kicked";
+      } else {
+        return message.reply("> <❌> Unknown sub.");
       }
+
+      await sendVCLog(guild, settings, issuer, member, verb);
+      results.push(member.displayName);
     }
 
     const actionPast = { mute: "Muted", unmute: "Unmuted", kick: "Kicked" }[sub] || sub;
     const emoji = { mute: "🔇", unmute: "🔊", kick: "🕳️" }[sub] || "";
     return message.reply(`> <${emoji}> ${actionPast}: ${results.join(", ")}`);
   } catch (error) {
-    console.error(`[ERROR] handleVCMessageCommand: ${error.stack}`);
+    console.error(error);
     await logErrorToChannel(message.guild.id, error.stack, message.client, "VC_ERR_001");
-    return message.reply("> <❌> An error occurred while processing the VC command. (VC_ERR_001)");
+    return message.reply("> <❌> Internal VC error.");
   }
 }
 
-module.exports = {
-  handleVCSlashCommand,
-  handleVCMessageCommand,
-};
+module.exports = { handleVCSlashCommand, handleVCMessageCommand };

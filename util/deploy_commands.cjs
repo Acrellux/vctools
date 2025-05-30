@@ -202,12 +202,6 @@ const commands = [
             .setDescription("Mentions or IDs (space/comma-separated).")
             .setRequired(false)
         )
-        .addUserOption(opt =>
-          opt
-            .setName("user")
-            .setDescription("Single-user fallback.")
-            .setRequired(false)
-        )
     )
     .addSubcommand(sub =>
       sub
@@ -219,12 +213,6 @@ const commands = [
             .setDescription("Mentions or IDs (space/comma-separated).")
             .setRequired(false)
         )
-        .addUserOption(opt =>
-          opt
-            .setName("user")
-            .setDescription("Single-user fallback.")
-            .setRequired(false)
-        )
     )
     .addSubcommand(sub =>
       sub
@@ -234,12 +222,6 @@ const commands = [
           opt
             .setName("users")
             .setDescription("Mentions or IDs (space/comma-separated).")
-            .setRequired(false)
-        )
-        .addUserOption(opt =>
-          opt
-            .setName("user")
-            .setDescription("Single-user fallback.")
             .setRequired(false)
         )
     )
