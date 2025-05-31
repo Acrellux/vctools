@@ -59,7 +59,7 @@ async function handleInitializeMessageCommand(message, args) {
       );
       return;
     }
-    if (!(await requiredManagerPermissions(message.member))) {
+    if (!(await requiredManagerPermissions(message))) {
       await message.channel.send(
         "> <❇️> You must be an admin to initialize VC Tools. (CMD_ERR_008)"
       );
@@ -130,10 +130,10 @@ async function handleInitializeSlashCommand(interaction) {
       });
       return;
     }
-    if (!(await requiredManagerPermissions(interaction.member))) {
+    if (!(await requiredManagerPermissions(interaction))) {
       await interaction.reply({
-      content: "> <❇️> You must be an admin to initialize VC Tools. (CMD_ERR_008)",
-      ephemeral: true,
+        content: "> <❇️> You must be an admin to initialize VC Tools. (CMD_ERR_008)",
+        ephemeral: true,
       });
       return;
     }
@@ -205,11 +205,11 @@ async function handleInitializeFlow(interaction, mode, action) {
     const userId = interaction.user.id;
 
     // Check permissions
-    if (!interaction.member.permissions.has(requiredManagerPermissions)) {
+    if (!(await requiredManagerPermissions(interaction))) {
       await interaction.reply({
-      content:
-        "> <❌> You do not have the required permissions. (CMD_ERR_008)",
-      ephemeral: true,
+        content:
+          "> <❌> You do not have the required permissions. (CMD_ERR_008)",
+        ephemeral: true,
       });
       return;
     }
