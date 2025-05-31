@@ -109,7 +109,7 @@ async function onMessageCreate(message) {
 
     // ────── check enabled prefixes ──────
     const settings = (await getSettingsForGuild(message.guild.id)) || {};
-    const prefixes = settings.prefixes || { slash: true, greater: true, exclamation: true };
+    const prefixes = settings.prefixes ?? { slash: true, greater: true, exclamation: true };
 
     let used = null;
     if (message.content.startsWith(">")) used = "greater";
@@ -119,7 +119,7 @@ async function onMessageCreate(message) {
     if (!used) return;
 
     // If that prefix type is disabled, respond with fallback options
-    if (!prefixes[used]) {
+    if (prefixes && prefixes[used] === false) {
       let reply = "> <❌> That command prefix is not enabled.\n";
 
       const fallback = [];
@@ -204,7 +204,7 @@ async function onInteractionCreate(interaction) {
     if (interaction.isChatInputCommand()) {
       // ────── ignore slash if disabled ──────
       const settings = (await getSettingsForGuild(interaction.guild.id)) || {};
-      if (!settings.prefixes?.slash) {
+      if (settings.prefixes && settings.prefixes.slash === false) {
         const enabledPrefixes = settings.prefixes || {};
         const alternatives = [];
 
