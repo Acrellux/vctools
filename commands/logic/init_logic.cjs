@@ -564,7 +564,7 @@ async function handleInitializeFlow(interaction, mode, action) {
         initMethod: context.initMethod || "ftt",
       });
       await interaction.update({
-        content: `## **<3.2A> Select an Admin Role**
+        content: `## **<3.2> Select an Admin Role**
   > Choose the role you use for administration purposes.`,
         components: [
           createRoleDropdown("init_admin_role", guild, userId, null),
