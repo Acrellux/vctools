@@ -32,6 +32,7 @@ const {
   handleTranscriptionSettingChange,
 } = require("./logic/transcription_logic.cjs");
 const { handleTranscriptionFlow } = require("./initialization/transcription.cjs");
+const { handleInitializeStaffRoles, handleStaffRolesFlow } = require("./initialization/staffRoles.cjs");
 const {
   showErrorLogsSettingsUI,
   handleErrorLogsFlow,
@@ -286,10 +287,13 @@ async function onInteractionCreate(interaction) {
         const [, action] = interaction.customId.split(":");
         const context = interactionContexts.get(interaction.user.id);
         if (context?.mode === "init") {
-          if (context.initMethod === "transcription") {
-            return await handleTranscriptionFlow(interaction, context.mode, action);
-          } else {
-            return await handleInitializeFlow(interaction, context.mode, action);
+          switch (context.initMethod) {
+            case "transcription":
+              return await handleTranscriptionFlow(interaction, context.mode, action);
+            case "staffroles":
+              return await handleStaffRolesFlow(interaction, context.mode, action);
+            default:
+              return await handleInitializeFlow(interaction, context.mode, action);
           }
         }
       }

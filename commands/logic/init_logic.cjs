@@ -45,7 +45,7 @@ const {
 
 const { requiredManagerPermissions } = require("./helpers.cjs");
 
-const { updateSettingsForGuild } = require("../settings.cjs");
+const { updateSettingsForGuild, getSettingsForGuild } = require("../settings.cjs");
 
 /* =============================
      INITIALIZATION COMMAND HANDLERS
@@ -65,7 +65,6 @@ async function handleInitializeMessageCommand(message, args) {
       );
       return;
     }
-
 
     const method = args[0]?.toLowerCase();
     if (
