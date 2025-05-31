@@ -43,7 +43,7 @@ const {
   createErrorLogRoleDropdown,
 } = require("./helpers.cjs");
 
-const requiredManagerPermissions = ["ManageGuild"];
+const { requiredManagerPermissions } = require("./helpers.cjs");
 
 const { updateSettingsForGuild } = require("../settings.cjs");
 
@@ -59,7 +59,7 @@ async function handleInitializeMessageCommand(message, args) {
       );
       return;
     }
-    if (!(await requiredManagerPermissions(message))) {
+    if (!(await requiredManagerPermissions(message.member))) {
       await message.channel.send(
         "> <❇️> You must be an admin to initialize VC Tools. (CMD_ERR_008)"
       );
@@ -130,10 +130,10 @@ async function handleInitializeSlashCommand(interaction) {
       });
       return;
     }
-    if (!(await requiredManagerPermissions(interaction))) {
+    if (!(await requiredManagerPermissions(interaction.member))) {
       await interaction.reply({
-        content: "> <❇️> You must be an admin to initialize VC Tools. (CMD_ERR_008)",
-        ephemeral: true,
+      content: "> <❇️> You must be an admin to initialize VC Tools. (CMD_ERR_008)",
+      ephemeral: true,
       });
       return;
     }
@@ -207,9 +207,9 @@ async function handleInitializeFlow(interaction, mode, action) {
     // Check permissions
     if (!interaction.member.permissions.has(requiredManagerPermissions)) {
       await interaction.reply({
-        content:
-          "> <❌> You do not have the required permissions. (CMD_ERR_008)",
-        ephemeral: true,
+      content:
+        "> <❌> You do not have the required permissions. (CMD_ERR_008)",
+      ephemeral: true,
       });
       return;
     }
