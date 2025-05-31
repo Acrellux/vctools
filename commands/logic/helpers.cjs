@@ -23,6 +23,7 @@ async function requiredManagerPermissions(interactionOrMessage) {
   const settings = (await getSettingsForGuild(guild.id)) || {};
   return (
     guild.ownerId === member.id ||
+    member.permissions.has("Administrator") ||
     member.roles.cache.has(settings.adminRoleId)
   );
 }
