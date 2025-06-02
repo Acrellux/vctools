@@ -507,6 +507,7 @@ async function postTranscription(guild, userId, transcription, channelId) {
 
     const bracket = "\u001b[2;30m"; // Dark gray
     const reset = "\u001b[0m";
+    const idColor = "\u001b[37m"; // White
     const timeColor = "\u001b[37m"; // White
     const channelColor = "\u001b[37m"; // White
     const messageColor = "\u001b[2;37m"; // Light gray
@@ -527,7 +528,7 @@ async function postTranscription(guild, userId, transcription, channelId) {
     }
 
     const formattedMessage = `
-${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${nameColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${member?.displayName || `User ${userId}`
+${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${idColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${member?.displayName || `User ${userId}`
       }${bracket}:${messageColor} ${transcription}${reset}`;
 
     try {
