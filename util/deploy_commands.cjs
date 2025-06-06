@@ -231,8 +231,8 @@ const commands = [
   // MOD COMMAND
   // ==============================
   new SlashCommandBuilder()
-    .setName("mod")
-    .setDescription("Moderation tools for managing users.")
+    .setName("tc")
+    .setDescription("Moderator text channel tools for managing users.")
     // mute
     .addSubcommand(sub =>
       sub
