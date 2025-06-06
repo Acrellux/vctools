@@ -257,7 +257,7 @@ async function handleModMessageCommand(msg, args) {
     /* delete */
     if (sub === "delete") {
       const id = Number(args[1]);
-      if (!id) return msg.channel.send("> <❌> Usage: `>mod delete <id>`");
+      if (!id) return msg.channel.send("> <❌> Usage: `>tc delete <id>`");
       const ok = await deleteModerationAction(id);
       return msg.channel.send(
         ok
@@ -281,7 +281,7 @@ async function handleModMessageCommand(msg, args) {
     if (sub === "unban") {
       const raw = args[1];
       if (!raw || !/^\d{17,19}$/.test(raw))
-        return msg.channel.send("> <❌> Usage: `>mod unban <id>`");
+        return msg.channel.send("> <❌> Usage: `>tc unban <id>`");
       targets = new Map([[raw, { id: raw }]]);
     }
 
@@ -412,12 +412,12 @@ async function handleModMessageCommand(msg, args) {
     }
 
     const result = confirms.join("\n\n") || {
-      mute: "> <❌> Usage: `>mod mute <user> [duration] [reason]`",
-      warn: "> <❌> Usage: `>mod warn <user> [reason]`",
-      kick: "> <❌> Usage: `>mod kick <user> [reason]`",
-      ban: "> <❌> Usage: `>mod ban <user> [reason]`",
-      unban: "> <❌> Usage: `>mod unban <user ID> [reason]`",
-      unmute: "> <❌> Usage: `>mod unmute <user> [reason]`",
+      mute: "> <❌> Usage: `>tc mute <user> [duration] [reason]`",
+      warn: "> <❌> Usage: `>tc warn <user> [reason]`",
+      kick: "> <❌> Usage: `>tc kick <user> [reason]`",
+      ban: "> <❌> Usage: `>tc ban <user> [reason]`",
+      unban: "> <❌> Usage: `>tc unban <user ID> [reason]`",
+      unmute: "> <❌> Usage: `>tc unmute <user> [reason]`",
     }[sub] || "> <❌> Something went wrong.";
 
     return msg.channel.send(result);
@@ -585,12 +585,12 @@ async function handleModSlashCommand(inter) {
     );
 
     const result = confirms.join("\n\n") || {
-      mute: "> <❌> Usage: `/mod mute user:<@user> duration:<e.g. 1h> reason:<text>`",
-      warn: "> <❌> Usage: `/mod warn user:<@user> reason:<text>`",
-      kick: "> <❌> Usage: `/mod kick user:<@user> reason:<text>`",
-      ban: "> <❌> Usage: `/mod ban user:<@user> reason:<text>`",
-      unban: "> <❌> Usage: `/mod unban user:<user ID> reason:<text>`",
-      unmute: "> <❌> Usage: `/mod unmute user:<@user> reason:<text>`",
+      mute: "> <❌> Usage: `/tc mute user:<@user> duration:<e.g. 1h> reason:<text>`",
+      warn: "> <❌> Usage: `/tc warn user:<@user> reason:<text>`",
+      kick: "> <❌> Usage: `/tc kick user:<@user> reason:<text>`",
+      ban: "> <❌> Usage: `/tc ban user:<@user> reason:<text>`",
+      unban: "> <❌> Usage: `/tc unban user:<user ID> reason:<text>`",
+      unmute: "> <❌> Usage: `/tc unmute user:<@user> reason:<text>`",
     }[sub] || "> <❌> Something went wrong.";
 
     return inter.reply({ content: result, ephemeral: false });

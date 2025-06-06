@@ -153,7 +153,7 @@ async function onMessageCreate(message) {
       case "vc":
         await handleVCMessageCommand(message, args);
         break;
-      case "mod":
+      case "tc":
         await handleModMessageCommand(message, args);
         break;
       case "safechannel":
@@ -242,7 +242,7 @@ async function onInteractionCreate(interaction) {
         case "vc":
           await handleVCSlashCommand(interaction);
           break;
-        case "mod":
+        case "tc":
           await handleModSlashCommand(interaction);
           break;
         case "safeuser":

@@ -22,13 +22,15 @@ const helpTopics = {
 - help commands
 - help errors
 - help error <code>
+- help tc
 - help notify
 - help settings
 - help safeuser
 - help safechannel
 - help rms
 - help filter
-- help report`,
+- help report
+- help vc`,
 
   initialize: `## **VC Tools ◈ Help ◈ Initialize**
 > \`initialize\` ◈ Start the setup process for VC Tools.
@@ -57,7 +59,7 @@ const helpTopics = {
 - \`filter\` - Manage the profanity filter settings.
 - \`report\` - Submit a report about an issue or voice call activity.
 - \`vc\` - Manage voice channel permissions (kick, mute, unmute).
-- \`mod\` - Moderator commands for managing users (mute, unmute, kick, ban).
+- \`tc\` - Moderator text channel commands for managing users in text channels (mute, unmute, kick, ban).
 - \`disallow\` - Remove your data from the VC Tools database.
 - \`drain\` - Disconnect users from a voice channel.
 > \`help\` - Show help topics on each of the commands above. Use \`help <command>\` to get specific help on a command.`,
@@ -191,20 +193,20 @@ Of course, there are also privacy settings to control who can see your activity 
 - \`vc mute <user>\` — Mutes a user in a voice channel.
 - \`vc unmute <user>\` — Removes the mute from a user in a voice channel.`,
 
-  mod: `## **VC Tools ◈ Help ◈ Mod Commands**
-> **Moderator Commands:**
-- \`mod mute <user> <duration> <reason>\` — Timeout (mute) a user for a duration (default 60m).
-- \`mod unmute <user> <reason>\` — Remove a user's timeout (mute).
-- \`mod kick <user> <reason>\` — Kick a user from the server.
-- \`mod ban <user> <reason>\` — Ban a user from the server.
-- \`mod warn <user> <reason>\` — Warn a user in the server.
-- \`mod history <user>\` — View a user's moderation history.
-- \`mod delete <action id>\` — Delete a specific action from a user's moderation history.
+  tc: `## **VC Tools ◈ Help ◈ Text Channel Commands**
+> **Text Channel Commands:**
+- \`tc mute <user> <duration> <reason>\` — Timeout (mute) a user for a duration (default 60m).
+- \`tc unmute <user> <reason>\` — Remove a user's timeout (mute).
+- \`tc kick <user> <reason>\` — Kick a user from the server.
+- \`tc ban <user> <reason>\` — Ban a user from the server.
+- \`tc warn <user> <reason>\` — Warn a user in the server.
+- \`tc history <user>\` — View a user's moderation history.
+- \`tc delete <action id>\` — Delete a specific action from a user's moderation history.
 > **Notes:**
 - Duration formats: \`10m\`, \`2h\`, \`1d\` (minutes, hours, days supported).
 - Reason is optional, but recommended.
 - All actions are automatically recorded in moderation logs.
-- Abuse of mod commands may be reviewed using VC Tools records.`,
+- Abuse of tc commands may be reviewed using VC Tools records.`,
 
   disallow: `## **VC Tools ◈ Help ◈ Disallow**
 The disallow command removes your data from the VC Tools database.
