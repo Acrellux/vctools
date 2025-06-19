@@ -567,10 +567,6 @@ client.on(Events.GuildCreate, async (guild) => {
 });
 
 client.once("ready", async () => {
-  const transcriber = require("./events/transcription.cjs");
-  transcriber.processingQueue.length = 0;
-  console.log("[INIT] Cleared transcription queue from memory.");
-
   console.log(`[INFO] Successfully logged in as ${client.user.tag}`);
   client.user.setPresence({ status: "idle" });
   console.log("Presence set to idle.");
