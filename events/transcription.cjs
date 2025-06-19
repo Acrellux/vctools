@@ -16,6 +16,7 @@ const {
 } = require("discord.js");
 const prism = require("prism-media");
 const ffmpeg = require("fluent-ffmpeg");
+ffmpeg.setFfmpegPath(path.resolve(__dirname, "../ffmpeg/ffmpeg.exe"));
 const { exec } = require("child_process");
 const { Readable, Transform } = require("stream");
 const {
