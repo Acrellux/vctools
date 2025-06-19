@@ -58,7 +58,7 @@ async function updateProfanityFilter(guildId) {
     if (filterLevel === "moderate") {
       console.log(`[PROFANITY] Guild ${guildId} is using the moderate filter. Removing allowed common words...`);
       try {
-        const jsonData = JSON.parse(fs.readFileSync("./moderation/profanityFilterModerate.json", "utf8"));
+        const jsonData = JSON.parse(fs.readFileSync("../moderation/profanityFilterModerate.json", "utf8"));
         const allowedCommon = jsonData.moderate || [];
         allowedCommon.forEach((word) => {
           leoProfanity.remove(word);
