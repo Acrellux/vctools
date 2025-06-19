@@ -628,7 +628,7 @@ client.once("ready", async () => {
 
       // Set presence accordingly
       if (userCount > 0) {
-        const activityText = `👥 ${userCount} • 🔊 ${vcCount}`;
+        const activityText = `🔊 ${vcCount} • 🎙️ ${userCount} `;
         await client.user.setPresence({
           status: "idle",
           activities: [{ name: activityText, type: 4 }],
