@@ -567,6 +567,10 @@ client.on(Events.GuildCreate, async (guild) => {
 });
 
 client.once("ready", async () => {
+  const transcriber = require("./events/transcription.cjs");
+  transcriber.processingQueue.length = 0;
+  console.log("[INIT] Cleared transcription queue from memory.");
+
   console.log(`[INFO] Successfully logged in as ${client.user.tag}`);
   client.user.setPresence({ status: "idle" });
   console.log("Presence set to idle.");
@@ -628,10 +632,10 @@ client.once("ready", async () => {
 
       // Set presence accordingly
       if (userCount > 0) {
-        const activityText = `${userCount} user${userCount !== 1 ? "s" : ""} inside ${vcCount} voice channel${vcCount !== 1 ? "s" : ""}`;
+        const activityText = `👥 ${userCount} • 🔊 ${vcCount}`;
         await client.user.setPresence({
           status: "idle",
-          activities: [{ name: activityText, type: 2 }],
+          activities: [{ name: activityText, type: 4 }],
         });
       } else {
         await client.user.setPresence({
