@@ -28,6 +28,7 @@ const {
   PermissionsBitField,
   AuditLogEvent,
 } = require("discord.js");
+const { clearVCState } = require("./utils/vcState.cjs");
 
 EventEmitter.defaultMaxListeners = 50;
 
@@ -698,10 +699,10 @@ async function disconnectAndReset(connection) {
   if (!isDisconnecting) {
     isDisconnecting = true;
     try {
-      console.log(
-        `[INFO] Disconnecting from ${connection.joinConfig.channelId}`
-      );
+      const guildId = connection.joinConfig.guildId;
+      clearVCState(guildId); // ✅ Wipe state
       connection.destroy();
+      console.log(`[INFO] Disconnected from VC in guild ${guildId}`);
     } catch (error) {
       console.error(`[ERROR] During disconnect: ${error.message}`);
     } finally {

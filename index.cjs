@@ -1,12 +1,10 @@
 ﻿const { Client, GatewayIntentBits, Events } = require("discord.js");
 // Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
 process.env.DISCORDJS_DISABLE_UDP = "true";
-const { joinVoiceChannel } = require("@discordjs/voice");
 const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 const commands = require("./commands/commands.cjs");
-const { getVoiceConnection } = require("@discordjs/voice");
 const { ChannelType } = require("discord.js");
 const {
   joinChannel,
@@ -15,6 +13,8 @@ const {
 const voiceChannelManager = require("./events/voiceChannelManager.cjs");
 const { interactionContexts } = require("./database/contextStore.cjs");
 const { handleReaction } = require("./commands/report/reportHandler.cjs");
+const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
+const { VC_STATE_PATH, saveVCState } = require("./utils/vcState.cjs");
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
@@ -145,69 +145,6 @@ async function getUserStatus(userId, guildId) {
 
 let DEFAULT_SOUNDS = {};
 client.once("ready", async () => {
-  // ———  A) Tear down any lingering connections ———
-  for (const guild of client.guilds.cache.values()) {
-    const conn = getVoiceConnection(guild.id);
-    if (conn) {
-      conn.destroy();
-      console.log(`[INFO] Destroyed stale VC connection in ${guild.name}`);
-    }
-  }
-
-  // ———  B) Re-join VCs with users in guilds that have transcription enabled ———
-  for (const guild of client.guilds.cache.values()) {
-    const settings = await getSettingsForGuild(guild.id);
-    if (!settings.transcriptionEnabled) continue;
-
-    let target = null, maxCount = 0;
-    for (const ch of guild.channels.cache.values()) {
-      if (ch.type !== ChannelType.GuildVoice) continue;
-      const count = ch.members.filter(m => !m.user.bot).size;
-      if (count > maxCount) {
-        maxCount = count;
-        target = ch;
-      }
-    }
-
-    if (target && maxCount > 0) {
-      // 2. Disconnect from any existing connection
-      const existingConnection = getVoiceConnection(guild.id);
-      if (existingConnection) {
-        console.log(`[INFO] Destroying stale connection in ${guild.name}`);
-        try {
-          existingConnection.destroy();
-        } catch (err) {
-          console.warn(`[WARN] Failed to destroy existing connection:`, err.message);
-        }
-      }
-
-      const channel = guild.channels.cache.get(target.id);
-      if (!channel) {
-        console.warn(`[WARN] Could not fetch channel ${target.id} in ${guild.name}`);
-        continue;
-      }
-
-      // 3. Join voice channel
-      try {
-        const connection = joinVoiceChannel({
-          channelId: channel.id,
-          guildId: guild.id,
-          adapterCreator: channel.guild.voiceAdapterCreator,
-          selfDeaf: false,
-        });
-
-        connection.on(VoiceConnectionStatus.Ready, () => {
-          console.log(`[INFO] Re-joined ${channel.name} in ${guild.name}`);
-        });
-
-        audioListeningFunctions(connection, guild);
-      } catch (err) {
-        console.error(`[JOIN ERROR] Failed to join ${channel.name} in ${guild.name}:`, err);
-      }
-    }
-  }
-
-  // ———  C) Fetch default soundboard sounds ———
   DEFAULT_SOUNDS = await fetchDefaultSoundboardSounds(client);
   console.log(
     `[INFO] Loaded ${Object.keys(DEFAULT_SOUNDS).length
@@ -648,6 +585,59 @@ client.once("ready", async () => {
   console.log(`[INFO] Successfully logged in as ${client.user.tag}`);
   client.user.setPresence({ status: "idle" });
   console.log("Presence set to idle.");
+
+  const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
+  const { audioListeningFunctions } = require("./events/voiceChannelManager.cjs");
+  const { VC_STATE_PATH, saveVCState } = require("./utils/vcState.cjs");
+
+  let lastKnownVCs = {};
+  if (fs.existsSync(VC_STATE_PATH)) {
+    try {
+      lastKnownVCs = JSON.parse(fs.readFileSync(VC_STATE_PATH, "utf8"));
+      console.log("[INFO] Loaded last VC state:", lastKnownVCs);
+    } catch (err) {
+      console.warn("[WARN] Failed to parse VC state file:", err.message);
+    }
+  }
+
+  for (const guild of client.guilds.cache.values()) {
+    const savedChannelId = lastKnownVCs[guild.id];
+    if (!savedChannelId) continue;
+
+    const settings = await getSettingsForGuild(guild.id);
+    if (!settings.transcriptionEnabled) continue;
+
+    const channel = guild.channels.cache.get(savedChannelId);
+    if (!channel || channel.type !== ChannelType.GuildVoice) continue;
+
+    const existingConnection = getVoiceConnection(guild.id);
+    if (existingConnection) {
+      try {
+        existingConnection.destroy();
+        console.log(`[INFO] Destroyed stale VC connection in ${guild.name}`);
+      } catch (e) {
+        console.warn(`[WARN] Failed to destroy VC connection: ${e.message}`);
+      }
+    }
+
+    try {
+      const connection = joinVoiceChannel({
+        channelId: channel.id,
+        guildId: guild.id,
+        adapterCreator: guild.voiceAdapterCreator,
+        selfDeaf: false,
+      });
+
+      connection.on(VoiceConnectionStatus.Ready, () => {
+        console.log(`[INFO] Rejoined VC ${channel.name} in ${guild.name}`);
+        saveVCState(guild.id, channel.id);
+      });
+
+      audioListeningFunctions(connection, guild);
+    } catch (err) {
+      console.error(`[JOIN ERROR] Failed to rejoin ${channel.name} in ${guild.name}:`, err);
+    }
+  }
 
   const now = new Date();
   const timestamp = now.toLocaleTimeString("en-US", {
