@@ -170,12 +170,24 @@ client.once("ready", async () => {
     }
 
     if (target && maxCount > 0) {
+      // 2. Disconnect from any existing connection
+      const existingConnection = getVoiceConnection(guild.id);
+      if (existingConnection) {
+        console.log(`[INFO] Destroying stale connection in ${guild.name}`);
+        try {
+          existingConnection.destroy();
+        } catch (err) {
+          console.warn(`[WARN] Failed to destroy existing connection:`, err.message);
+        }
+      }
+
       const channel = guild.channels.cache.get(target.id);
       if (!channel) {
         console.warn(`[WARN] Could not fetch channel ${target.id} in ${guild.name}`);
         continue;
       }
 
+      // 3. Join voice channel
       try {
         const connection = joinVoiceChannel({
           channelId: channel.id,
@@ -194,7 +206,7 @@ client.once("ready", async () => {
       }
     }
   }
-  
+
   // ———  C) Fetch default soundboard sounds ———
   DEFAULT_SOUNDS = await fetchDefaultSoundboardSounds(client);
   console.log(
