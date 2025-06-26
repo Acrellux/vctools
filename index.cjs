@@ -465,7 +465,15 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
               continue;
             }
 
-            // e) DM
+            // e) skip if user is already in the same VC
+            if (guildMember.voice.channelId === channel.id) {
+              console.log(
+                `[INFO] Skipping ${sub.user_id} — already in ${channel.name}`
+              );
+              continue;
+            }
+
+            // f) DM
             const channelMention = channel
               ? `<#${channel.id}>`
               : "a voice channel";
