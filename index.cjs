@@ -1,6 +1,7 @@
 ﻿const { Client, GatewayIntentBits, Events } = require("discord.js");
 // Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
 process.env.DISCORDJS_DISABLE_UDP = "true";
+const { joinVoiceChannel } = require("@discordjs/voice");
 const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
@@ -158,7 +159,6 @@ client.once("ready", async () => {
     const settings = await getSettingsForGuild(guild.id);
     if (!settings.transcriptionEnabled) continue;
 
-    // find the voice channel with the most non-bot members
     let target = null, maxCount = 0;
     for (const ch of guild.channels.cache.values()) {
       if (ch.type !== ChannelType.GuildVoice) continue;
@@ -170,18 +170,32 @@ client.once("ready", async () => {
     }
 
     if (target && maxCount > 0) {
+      const channel = guild.channels.cache.get(target.id);
+      if (!channel) {
+        console.warn(`[WARN] Could not fetch channel ${target.id} in ${guild.name}`);
+        continue;
+      }
+
       try {
-        const connection = await joinChannel(client, target.id, guild);
+        const connection = joinVoiceChannel({
+          channelId: channel.id,
+          guildId: guild.id,
+          adapterCreator: channel.guild.voiceAdapterCreator,
+          selfDeaf: false,
+        });
+
+        connection.on(VoiceConnectionStatus.Ready, () => {
+          console.log(`[INFO] Re-joined ${channel.name} in ${guild.name}`);
+        });
+
         audioListeningFunctions(connection, guild);
-        console.log(`[INFO] Re-joined ${target.name} in ${guild.name}`);
       } catch (err) {
-        console.error(
-          `[WARN] Could not re-join ${target.name} in ${guild.name}:`,
-          err.message
-        );
+        console.error(`[JOIN ERROR] Failed to join ${channel.name} in ${guild.name}:`, err);
       }
     }
   }
+  
+  // ———  C) Fetch default soundboard sounds ———
   DEFAULT_SOUNDS = await fetchDefaultSoundboardSounds(client);
   console.log(
     `[INFO] Loaded ${Object.keys(DEFAULT_SOUNDS).length
