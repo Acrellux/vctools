@@ -5,6 +5,12 @@ const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 const commands = require("./commands/commands.cjs");
+const { getVoiceConnection } = require("@discordjs/voice");
+const { ChannelType } = require("discord.js");
+const {
+  joinChannel,
+  audioListeningFunctions
+} = require("./events/voiceChannelManager.cjs");
 const voiceChannelManager = require("./events/voiceChannelManager.cjs");
 const { interactionContexts } = require("./database/contextStore.cjs");
 const { handleReaction } = require("./commands/report/reportHandler.cjs");
@@ -138,6 +144,44 @@ async function getUserStatus(userId, guildId) {
 
 let DEFAULT_SOUNDS = {};
 client.once("ready", async () => {
+  // ———  A) Tear down any lingering connections ———
+  for (const guild of client.guilds.cache.values()) {
+    const conn = getVoiceConnection(guild.id);
+    if (conn) {
+      conn.destroy();
+      console.log(`[INFO] Destroyed stale VC connection in ${guild.name}`);
+    }
+  }
+
+  // ———  B) Re-join VCs with users in guilds that have transcription enabled ———
+  for (const guild of client.guilds.cache.values()) {
+    const settings = await getSettingsForGuild(guild.id);
+    if (!settings.transcriptionEnabled) continue;
+
+    // find the voice channel with the most non-bot members
+    let target = null, maxCount = 0;
+    for (const ch of guild.channels.cache.values()) {
+      if (ch.type !== ChannelType.GuildVoice) continue;
+      const count = ch.members.filter(m => !m.user.bot).size;
+      if (count > maxCount) {
+        maxCount = count;
+        target = ch;
+      }
+    }
+
+    if (target && maxCount > 0) {
+      try {
+        const connection = await joinChannel(client, target.id, guild);
+        audioListeningFunctions(connection, guild);
+        console.log(`[INFO] Re-joined ${target.name} in ${guild.name}`);
+      } catch (err) {
+        console.error(
+          `[WARN] Could not re-join ${target.name} in ${guild.name}:`,
+          err.message
+        );
+      }
+    }
+  }
   DEFAULT_SOUNDS = await fetchDefaultSoundboardSounds(client);
   console.log(
     `[INFO] Loaded ${Object.keys(DEFAULT_SOUNDS).length

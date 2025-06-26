@@ -887,4 +887,8 @@ function audioListeningFunctions(connection, guild) {
 
 }
 
-module.exports = { execute };
+module.exports = {
+  execute,
+  joinChannel,
+  audioListeningFunctions,
+};

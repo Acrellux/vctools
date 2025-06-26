@@ -3,18 +3,17 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import json
 import whisper
 import subprocess
+import psutil
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 FFMPEG_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "ffmpeg", "ffmpeg.exe"))
+MODEL_DIR = os.path.join(BASE_DIR, "models")  # Optional: change this to wherever your .pt file is
 
 if not os.path.exists(FFMPEG_PATH):
     print(json.dumps({"error": f"FFmpeg not found at {FFMPEG_PATH}"}))
     exit(1)
 
 os.environ["PATH"] = os.path.dirname(FFMPEG_PATH) + os.pathsep + os.environ["PATH"]
-
-# ======= Configurable Load-Based Model Selection =======
-import psutil
 
 def get_gpu_load_simulated():
     """Stub: Simulate load by checking CPU load and estimating queue length."""
@@ -35,10 +34,17 @@ def transcribe_audio(wav_file):
         return
 
     try:
-        chosen_model = get_gpu_load_simulated()
-        model = whisper.load_model(chosen_model).to("cuda")
+        base_en_path = os.path.join(MODEL_DIR, "base-en.pt")
+        if os.path.exists(base_en_path):
+            model = whisper.load_model("base.en", download_root=MODEL_DIR).to("cuda")
+            model_name = "base.en (local)"
+        else:
+            chosen_model = get_gpu_load_simulated()
+            model = whisper.load_model(chosen_model).to("cuda")
+            model_name = chosen_model
+
         result = model.transcribe(wav_file)
-        print(json.dumps({"text": result["text"], "model": chosen_model}))
+        print(json.dumps({"text": result["text"], "model": model_name}))
     except Exception as e:
         print(json.dumps({"error": f"Whisper failed: {str(e)}"}))
 
