@@ -14,7 +14,7 @@ const voiceChannelManager = require("./events/voiceChannelManager.cjs");
 const { interactionContexts } = require("./database/contextStore.cjs");
 const { handleReaction } = require("./commands/report/reportHandler.cjs");
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
-const { VC_STATE_PATH, saveVCState } = require("./utils/vc_state.cjs");
+const { VC_STATE_PATH, saveVCState } = require("./util/vc_state.cjs");
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
@@ -588,7 +588,7 @@ client.once("ready", async () => {
 
   const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
   const { audioListeningFunctions } = require("./events/voiceChannelManager.cjs");
-  const { VC_STATE_PATH, saveVCState } = require("./utils/vc_state.cjs");
+  const { VC_STATE_PATH, saveVCState } = require("./util/vc_state.cjs");
 
   let lastKnownVCs = {};
   if (fs.existsSync(VC_STATE_PATH)) {
