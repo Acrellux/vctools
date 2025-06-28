@@ -28,7 +28,7 @@ const {
   PermissionsBitField,
   AuditLogEvent,
 } = require("discord.js");
-const { clearVCState } = require("./utils/vcState.cjs");
+const { clearVCState } = require("./utils/vc_state.cjs");
 
 EventEmitter.defaultMaxListeners = 50;
 
