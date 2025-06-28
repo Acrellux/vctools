@@ -531,7 +531,7 @@ async function handleNotifySlashCommand(interaction) {
   try {
     switch (subcommand) {
       case "add": {
-        const target = interaction.options.getUser("target");
+        const target = interaction.options.getUser("user");
         if (!target) {
           await interaction.reply({
             content: "<❎> You must provide a user to add.",
@@ -547,7 +547,7 @@ async function handleNotifySlashCommand(interaction) {
         break;
       }
       case "remove": {
-        const target = interaction.options.getUser("target");
+        const target = interaction.options.getUser("user");
         if (!target) {
           await interaction.reply({
             content: "<❎> You must provide a user to remove.",
@@ -613,7 +613,7 @@ async function handleNotifySlashCommand(interaction) {
         break;
       }
       case "block": {
-        const target = interaction.options.getUser("target");
+        const target = interaction.options.getUser("user");
         if (!target) {
           await interaction.reply({
             content: "<❎> You must provide a user to block.",
@@ -629,7 +629,7 @@ async function handleNotifySlashCommand(interaction) {
         break;
       }
       case "unblock": {
-        const target = interaction.options.getUser("target");
+        const target = interaction.options.getUser("user");
         if (!target) {
           await interaction.reply({
             content: "<❎> You must provide a user to unblock.",
