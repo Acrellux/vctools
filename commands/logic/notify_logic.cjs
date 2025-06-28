@@ -251,14 +251,14 @@ async function showNotifyHubUI(interaction) {
       await interaction.reply({
         content: contentMessage,
         components: [buttonsRow],
-        ephemeral: true,
+        ephemeral: false,
       });
     }
   } catch (error) {
     console.error(`[ERROR] showNotifyHubUI failed: ${error.message}`);
     await interaction.reply({
       content: "<❌> An error occurred displaying the notification hub.",
-      ephemeral: true,
+      ephemeral: false,
     });
   }
 }
@@ -276,7 +276,7 @@ async function handleNotifyFlow(interaction) {
     if (interaction.user.id !== subscriber_id) {
       await interaction.reply({
         content: "<❎> You are not authorized to perform this action.",
-        ephemeral: true,
+        ephemeral: false,
       });
       return;
     }
@@ -312,7 +312,7 @@ async function handleNotifyFlow(interaction) {
         await interaction.reply({
           content:
             "<✅> All your notification subscriptions have been cleared.",
-          ephemeral: true,
+          ephemeral: false,
         });
         break;
       }
@@ -380,6 +380,10 @@ async function handleNotifyMessageCommand(message, args) {
         const target = message.mentions.users.first();
         if (!target) {
           await message.channel.send("<❎> Please mention a user to add.");
+          return;
+        }
+        if (target.id === subscriber_id) {
+          await message.channel.send("<❎> You can't subscribe to yourself.");
           return;
         }
         await addNotification(subscriber_id, target.id, server_id);
@@ -539,11 +543,25 @@ async function handleNotifySlashCommand(interaction) {
           });
           return;
         }
-        await addNotification(subscriber_id, target.id, server_id);
-        await interaction.reply({
-          content: `<✅> Added notification for <@${target.id}>.`,
-          ephemeral: true,
-        });
+        if (target.id === subscriber_id) {
+          await interaction.reply({
+            content: "<❎> You can't subscribe to yourself.",
+            ephemeral: true,
+          });
+          return;
+        }
+        try {
+          await addNotification(subscriber_id, target.id, server_id);
+          await interaction.reply({
+            content: `<✅> Added notification for <@${target.id}>.`,
+            ephemeral: false,
+          });
+        } catch (err) {
+          await interaction.reply({
+            content: `<⚠️> ${err.message}`,
+            ephemeral: true,
+          });
+        }
         break;
       }
       case "remove": {
@@ -558,7 +576,7 @@ async function handleNotifySlashCommand(interaction) {
         await removeNotification(subscriber_id, target.id, server_id);
         await interaction.reply({
           content: `<✅> Removed notification for <@${target.id}>.`,
-          ephemeral: true,
+          ephemeral: false,
         });
         break;
       }
@@ -566,7 +584,7 @@ async function handleNotifySlashCommand(interaction) {
         await clearNotifications(subscriber_id, server_id);
         await interaction.reply({
           content: "<✅> Cleared all your notifications.",
-          ephemeral: true,
+          ephemeral: false,
         });
         break;
       }
@@ -575,7 +593,7 @@ async function handleNotifySlashCommand(interaction) {
         if (subscriptions.length === 0) {
           await interaction.reply({
             content: "<❇️> You have no notifications.",
-            ephemeral: true,
+            ephemeral: false,
           });
         } else {
           const embed = new EmbedBuilder()
@@ -585,7 +603,7 @@ async function handleNotifySlashCommand(interaction) {
             );
           await interaction.reply({
             embeds: [embed],
-            ephemeral: true,
+            ephemeral: false,
             allowedMentions: { parse: [] },
           });
         }
@@ -608,7 +626,7 @@ async function handleNotifySlashCommand(interaction) {
         await updateStatus(subscriber_id, server_id, newStatus);
         await interaction.reply({
           content: `<✅> Your status is now **${getStatusEmoji(newStatus)}**.`,
-          ephemeral: true,
+          ephemeral: false,
         });
         break;
       }
@@ -675,7 +693,7 @@ async function handleNotifySlashCommand(interaction) {
     if (error.message === "Target user has closed notifications.") {
       await interaction.reply({
         content: `<🔒> This user has their notifications closed.`,
-        ephemeral: true,
+        ephemeral: false,
       });
     } else {
       await interaction.reply({
