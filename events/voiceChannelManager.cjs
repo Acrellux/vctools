@@ -212,7 +212,10 @@ const initiateLoudnessWarning = async (
 async function detectUserActivityChanges(oldState, newState) {
   const guild = newState.guild;
   const member = newState.member;
-  if (!guild || !member) return;
+  if (!guild || !member || !member.user) {
+    console.warn("[VOICE] Skipping activity change: missing member or user object");
+    return;
+  }
 
   // Fetch settings for logging channel
   const settings = await getSettingsForGuild(guild.id);
@@ -279,12 +282,11 @@ async function detectUserActivityChanges(oldState, newState) {
       });
       const auditEntry = fetchedLogs.entries.first();
       if (
-        auditEntry &&
-        auditEntry.target.id === userId &&
+        auditEntry?.target?.id === userId &&
         Date.now() - auditEntry.createdTimestamp < 5000
       ) {
         forciblyDisconnected = true;
-        executor = auditEntry.executor.tag;
+        executor = auditEntry.executor?.tag ?? "Unknown";
       }
     } catch (error) {
       console.error("[AUDIT LOG ERROR]", error);
@@ -297,9 +299,7 @@ async function detectUserActivityChanges(oldState, newState) {
 
   // 2) Server mute/unmute
   if (oldState.serverMute !== newState.serverMute) {
-    const action = newState.serverMute
-      ? "was server muted"
-      : "was server unmuted";
+    const action = newState.serverMute ? "was server muted" : "was server unmuted";
     let executor = "Unknown";
     try {
       const fetchedLogs = await guild.fetchAuditLogs({
@@ -308,11 +308,11 @@ async function detectUserActivityChanges(oldState, newState) {
       });
       const auditEntry = fetchedLogs.entries.find(
         (entry) =>
-          entry.target.id === userId &&
-          entry.changes.some((change) => change.key === "mute")
+          entry.target?.id === userId &&
+          entry.changes?.some((change) => change.key === "mute")
       );
       if (auditEntry) {
-        executor = auditEntry.executor.tag;
+        executor = auditEntry.executor?.tag ?? "Unknown";
       }
     } catch (error) {
       console.error("[AUDIT LOG ERROR]", error);
@@ -324,9 +324,7 @@ async function detectUserActivityChanges(oldState, newState) {
 
   // 3) Server deafen/undeafen
   if (oldState.serverDeaf !== newState.serverDeaf) {
-    const action = newState.serverDeaf
-      ? "was server deafened"
-      : "was server undeafened";
+    const action = newState.serverDeaf ? "was server deafened" : "was server undeafened";
     let executor = "Unknown";
     try {
       const fetchedLogs = await guild.fetchAuditLogs({
@@ -335,11 +333,11 @@ async function detectUserActivityChanges(oldState, newState) {
       });
       const auditEntry = fetchedLogs.entries.find(
         (entry) =>
-          entry.target.id === userId &&
-          entry.changes.some((change) => change.key === "deaf")
+          entry.target?.id === userId &&
+          entry.changes?.some((change) => change.key === "deaf")
       );
       if (auditEntry) {
-        executor = auditEntry.executor.tag;
+        executor = auditEntry.executor?.tag ?? "Unknown";
       }
     } catch (error) {
       console.error("[AUDIT LOG ERROR]", error);
@@ -365,9 +363,7 @@ async function detectUserActivityChanges(oldState, newState) {
 
   // 6) Screen share start/stop
   if (oldState.streaming !== newState.streaming) {
-    const action = newState.streaming
-      ? "started screen sharing"
-      : "stopped screen sharing";
+    const action = newState.streaming ? "started screen sharing" : "stopped screen sharing";
     const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }

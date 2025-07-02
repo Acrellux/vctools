@@ -8,10 +8,46 @@ const {
 } = require("discord.js");
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
+const { isInvalidTarget } = require("./helpers.cjs");
+
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+function paginateList(items, maxPerPage = 10) {
+  const pages = [];
+  for (let i = 0; i < items.length; i += maxPerPage) {
+    pages.push(items.slice(i, i + maxPerPage));
+  }
+  return pages;
+}
+
+function buildNavButtons(page, totalPages, userId) {
+  const make = (action, label, disabled) =>
+    new ButtonBuilder()
+      .setCustomId(`notifyList:${action}:${page}:${userId}`)
+      .setLabel(label)
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(disabled);
+
+  return [new ActionRowBuilder().addComponents(
+    make("first", "⇤", page === 0),
+    make("prev", "◄", page === 0),
+    make("next", "►", page === totalPages - 1),
+    make("last", "⇥", page === totalPages - 1)
+  )];
+}
+
+function disableAllButtons(rows) {
+  return rows.map(row =>
+    new ActionRowBuilder().addComponents(
+      row.components.map(btn =>
+        ButtonBuilder.from(btn).setDisabled(true)
+      )
+    )
+  );
+}
 
 // Helper function for status emoji
 function getStatusEmoji(status) {
@@ -189,6 +225,61 @@ async function listBlocks(user_id, server_id) {
   return data;
 }
 
+// ─── New: paginated block list ───
+async function showBlockList(ctx) {
+  const isInteraction = !!ctx.options;
+  const userId = isInteraction ? ctx.user.id : ctx.author.id;
+  const guildId = ctx.guild.id;
+
+  const send = async payload =>
+    isInteraction
+      ? ctx.reply({ ...payload, fetchReply: true, ephemeral: true })
+      : ctx.channel.send({ ...payload, fetchReply: true });
+
+  const blocks = await listBlocks(userId, guildId);
+  const lines = blocks.map(b => `- <@${b.blocked_id}>`);
+  const pages = paginateList(lines);
+  let page = 0;
+
+  const embed = new EmbedBuilder()
+    .setTitle("Your Blocked Users")
+    .setDescription(pages[0]?.join("\n") || "*No blocked users*")
+    .setFooter({ text: `Page 1 of ${pages.length}` });
+
+  const msg = await send({
+    embeds: [embed],
+    components: buildNavButtons(0, pages.length, userId),
+  });
+
+  if (pages.length <= 1) return;
+
+  const coll = msg.createMessageComponentCollector({
+    filter: i => i.customId.startsWith("notifyList:") && i.user.id === userId,
+    time: 3 * 60 * 1000,
+  });
+
+  coll.on("collect", async i => {
+    const [, action] = i.customId.split(":");
+    if (action === "prev") page = Math.max(page - 1, 0);
+    if (action === "next") page = Math.min(page + 1, pages.length - 1);
+    if (action === "first") page = 0;
+    if (action === "last") page = pages.length - 1;
+
+    const upd = EmbedBuilder.from(embed)
+      .setDescription(pages[page].join("\n"))
+      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+
+    await i.update({
+      embeds: [upd],
+      components: buildNavButtons(page, pages.length, userId),
+    });
+  });
+
+  coll.on("end", () =>
+    msg.edit({ components: disableAllButtons(msg.components) })
+  );
+}
+
 // List users that a specific user has blocked in a server
 async function listUsersBlockedBy(userId, serverId) {
   const { data, error } = await supabase
@@ -325,20 +416,7 @@ async function handleNotifyFlow(interaction) {
         break;
       }
       case "blocks": {
-        const blocks = await listBlocks(subscriber_id, server_id);
-        let blockMsg = "**Blocked Users:**\n";
-        if (blocks.length === 0) {
-          blockMsg += "You have not blocked anyone.";
-        } else {
-          blocks.forEach((b) => {
-            blockMsg += `- <@${b.blocked_id}>\n`;
-          });
-        }
-        await interaction.reply({
-          content: blockMsg,
-          ephemeral: true,
-        });
-        break;
+        return showBlockList(message);
       }
       default: {
         await interaction.reply({
@@ -354,6 +432,68 @@ async function handleNotifyFlow(interaction) {
       ephemeral: true,
     });
   }
+}
+
+// ─── Replace your old showNotifyList with this ───
+async function showNotifyList(ctx) {
+  // detect Message vs Interaction
+  const isInteraction = !!ctx.options;
+  const userId = isInteraction ? ctx.user.id : ctx.author.id;
+  const guildId = ctx.guild.id;
+
+  // helper to send or reply and always get the sent message
+  const sendReply = async (payload) => {
+    if (isInteraction) {
+      return await ctx.reply({ ...payload, fetchReply: true });
+    } else {
+      return await ctx.channel.send({ ...payload, fetchReply: true });
+    }
+  };
+
+  const subs = await listNotifications(userId, guildId);
+  const lines = subs.map(s => `<@${s.target_id}>`);
+  const pages = paginateList(lines);
+  let page = 0;
+
+  const embed = new EmbedBuilder()
+    .setTitle("Your Notifications")
+    .setDescription(pages[0]?.join("\n") || "*No subscriptions*")
+    .setFooter({ text: `Page 1 of ${pages.length}` });
+
+  const initialComponents = buildNavButtons(0, pages.length, userId);
+
+  const msg = await sendReply({
+    embeds: [embed],
+    components: initialComponents
+  });
+
+  if (pages.length <= 1) return;
+
+  const collector = msg.createMessageComponentCollector({
+    filter: i => i.customId.startsWith("notifyList:") && i.user.id === userId,
+    time: 3 * 60 * 1000
+  });
+
+  collector.on("collect", async i => {
+    const [, action] = i.customId.split(":");
+    if (action === "prev") page = Math.max(page - 1, 0);
+    else if (action === "next") page = Math.min(page + 1, pages.length - 1);
+    else if (action === "first") page = 0;
+    else if (action === "last") page = pages.length - 1;
+
+    const updated = EmbedBuilder.from(embed)
+      .setDescription(pages[page].join("\n"))
+      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+
+    await i.update({
+      embeds: [updated],
+      components: buildNavButtons(page, pages.length, userId)
+    });
+  });
+
+  collector.on("end", () =>
+    msg.edit({ components: disableAllButtons(msg.components) })
+  );
 }
 
 /* =====================================================
@@ -386,6 +526,10 @@ async function handleNotifyMessageCommand(message, args) {
           await message.channel.send("<❎> You can't subscribe to yourself.");
           return;
         }
+        if (isInvalidTarget(target)) {
+          await message.channel.send("<❎> You can't subscribe to that user.");
+          return;
+        }
         await addNotification(subscriber_id, target.id, server_id);
         await message.channel.send(
           `<✅> Added notification for <@${target.id}>.`
@@ -395,13 +539,44 @@ async function handleNotifyMessageCommand(message, args) {
       case "remove": {
         const target = message.mentions.users.first();
         if (!target) {
-          await message.channel.send("<❎> Please mention a user to remove.");
+          await message.channel.send("> <❎> You must mention a user to remove.");
           return;
         }
-        await removeNotification(subscriber_id, target.id, server_id);
-        await message.channel.send(
-          `<✅> Removed notification for <@${target.id}>.`
-        );
+
+        if (isInvalidTarget(target)) {
+          await message.channel.send("> <❎> You can't subscribe to that user.");
+          return;
+        }
+
+        // Check if the notification exists
+        const { data: existing, error: fetchError } = await supabase
+          .from("notifications")
+          .select("id")
+          .eq("subscriber_id", message.author.id)
+          .eq("target_id", target.id)
+          .eq("server_id", message.guild.id)
+          .single();
+
+        if (fetchError && fetchError.code !== "PGRST116") {
+          console.error("[SUPABASE] Failed to check for notify record:", fetchError);
+          return await message.channel.send("> <❌> ERROR: Couldn't verify existing notification.");
+        }
+
+        if (!existing) {
+          return await message.channel.send(`> <❇️> You're not subscribed to <@${target.id}>.`);
+        }
+
+        const { error: removeError } = await supabase
+          .from("notifications")
+          .delete()
+          .eq("id", existing.id);
+
+        if (removeError) {
+          console.error("[SUPABASE] Failed to delete notify record:", removeError);
+          return await message.channel.send("> <❌> Failed to remove notification.");
+        }
+
+        await message.channel.send(`> <✅> Removed notification for <@${target.id}>.`);
         break;
       }
       case "clear": {
@@ -412,21 +587,7 @@ async function handleNotifyMessageCommand(message, args) {
         break;
       }
       case "list": {
-        const subscriptions = await listNotifications(subscriber_id, server_id);
-        if (subscriptions.length === 0) {
-          await message.channel.send("<❇️> You have no notifications.");
-        } else {
-          const embed = new EmbedBuilder()
-            .setTitle("Your Notifications")
-            .setDescription(
-              subscriptions.map((sub) => `- <@${sub.target_id}>`).join("\n")
-            );
-          await message.channel.send({
-            embeds: [embed],
-            allowedMentions: { parse: [] },
-          });
-        }
-        break;
+        return showNotifyList(message);
       }
       case "status": {
         if (!args[1]) {
@@ -458,6 +619,11 @@ async function handleNotifyMessageCommand(message, args) {
           await message.channel.send("<❎> Please mention a user to block.");
           return;
         }
+
+        if (isInvalidTarget(target)) {
+          await message.channel.send("<❎> You can't block that user.");
+          return;
+        }
         if (target.id === subscriber_id) {
           await message.channel.send("<❎> You can't block yourself.");
           return;
@@ -484,23 +650,16 @@ async function handleNotifyMessageCommand(message, args) {
           await message.channel.send("<❎> Please mention a user to unblock.");
           return;
         }
+        if (isInvalidTarget(target)) {
+          await message.channel.send("<❎> This user can't be blocked in the first place.");
+          return;
+        }
         await removeBlock(subscriber_id, target.id, server_id);
         await message.channel.send(`<🔓> Unblocked ${target.username}.`);
         break;
       }
       case "blocks": {
-        const blocks = await listBlocks(subscriber_id, server_id);
-        if (blocks.length === 0) {
-          await message.channel.send("<❇️> You haven't blocked any users.");
-        } else {
-          let blockMsg = "**Your Blocked Users:**\n";
-          for (const b of blocks) {
-            const user = await message.guild.members.fetch(b.blocked_id);
-            blockMsg += `- ${user.user.username}\n`;
-          }
-          await message.channel.send(blockMsg);
-        }
-        break;
+        return showBlockList(interaction);
       }
       default: {
         await message.channel.send(
@@ -550,6 +709,13 @@ async function handleNotifySlashCommand(interaction) {
           });
           return;
         }
+        if (isInvalidTarget(target)) {
+          await interaction.reply({
+            content: "<❎> You can't subscribe to that user.",
+            ephemeral: true,
+          });
+          return;
+        }
         try {
           await addNotification(subscriber_id, target.id, server_id);
           await interaction.reply({
@@ -573,7 +739,52 @@ async function handleNotifySlashCommand(interaction) {
           });
           return;
         }
-        await removeNotification(subscriber_id, target.id, server_id);
+
+        if (isInvalidTarget(target)) {
+          await interaction.reply({
+            content: "<❎> You can't subscribe to that user.",
+            ephemeral: true,
+          });
+          return;
+        }
+
+        // Check if the notification exists before trying to remove it
+        const { data: existing, error: fetchError } = await supabase
+          .from("notifications")
+          .select("id")
+          .eq("subscriber_id", subscriber_id)
+          .eq("target_id", target.id)
+          .eq("server_id", server_id)
+          .single();
+
+        if (fetchError && fetchError.code !== "PGRST116") {
+          console.error("[SUPABASE] Failed to check for notify record:", fetchError);
+          return await interaction.reply({
+            content: "<❌> ERROR: Couldn't verify existing notification.",
+            ephemeral: true,
+          });
+        }
+
+        if (!existing) {
+          return await interaction.reply({
+            content: `<❇️> You're not subscribed to notifications for <@${target.id}>.`,
+            ephemeral: true,
+          });
+        }
+
+        const { error: removeError } = await supabase
+          .from("notifications")
+          .delete()
+          .eq("id", existing.id);
+
+        if (removeError) {
+          console.error("[SUPABASE] Failed to delete notify record:", removeError);
+          return await interaction.reply({
+            content: "<❌> Failed to remove notification.",
+            ephemeral: true,
+          });
+        }
+
         await interaction.reply({
           content: `<✅> Removed notification for <@${target.id}>.`,
           ephemeral: false,
@@ -589,25 +800,7 @@ async function handleNotifySlashCommand(interaction) {
         break;
       }
       case "list": {
-        const subscriptions = await listNotifications(subscriber_id, server_id);
-        if (subscriptions.length === 0) {
-          await interaction.reply({
-            content: "<❇️> You have no notifications.",
-            ephemeral: false,
-          });
-        } else {
-          const embed = new EmbedBuilder()
-            .setTitle("Your Notifications")
-            .setDescription(
-              subscriptions.map((sub) => `- <@${sub.target_id}>`).join("\n")
-            );
-          await interaction.reply({
-            embeds: [embed],
-            ephemeral: false,
-            allowedMentions: { parse: [] },
-          });
-        }
-        break;
+        return showNotifyList(interaction);
       }
       case "status": {
         const newStatus = interaction.options.getString("status").toLowerCase();
@@ -639,6 +832,20 @@ async function handleNotifySlashCommand(interaction) {
           });
           return;
         }
+        if (target.id === subscriber_id) {
+          await interaction.reply({
+            content: "<❎> You can't block yourself.",
+            ephemeral: true,
+          });
+          return;
+        }
+        if (isInvalidTarget(target)) {
+          await interaction.reply({
+            content: "<❎> You can't block that user.",
+            ephemeral: true,
+          });
+          return;
+        }
         await addBlock(subscriber_id, target.id, server_id);
         await interaction.reply({
           content: `<🔒> Blocked ${target.username} from viewing your activity.`,
@@ -655,6 +862,13 @@ async function handleNotifySlashCommand(interaction) {
           });
           return;
         }
+        if (isInvalidTarget(target)) {
+          await interaction.reply({
+            content: "<❎> This user can't be blocked in the first place.",
+            ephemeral: true,
+          });
+          return;
+        }
         await removeBlock(subscriber_id, target.id, server_id);
         await interaction.reply({
           content: `<🔓> Unblocked <@${target.id}>.`,
@@ -663,23 +877,7 @@ async function handleNotifySlashCommand(interaction) {
         break;
       }
       case "blocks": {
-        const blocks = await listBlocks(subscriber_id, server_id);
-        if (blocks.length === 0) {
-          await interaction.reply({
-            content: "<❇️> You haven't blocked any users.",
-            ephemeral: true,
-          });
-        } else {
-          let blockMsg = "**Your Blocked Users:**\n";
-          blocks.forEach((b) => {
-            blockMsg += `- <@${b.blocked_id}>\n`;
-          });
-          await interaction.reply({
-            content: blockMsg,
-            ephemeral: true,
-          });
-        }
-        break;
+        return showBlockList(interaction);
       }
       default: {
         await interaction.reply({

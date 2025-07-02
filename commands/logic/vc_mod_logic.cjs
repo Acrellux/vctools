@@ -97,6 +97,73 @@ async function sendVCLog(guild, settings, issuer, member, actionVerb) {
   await ch.send(logMsg).catch(console.error);
 }
 
+async function handleVCMessageCommand(message, args = []) {
+  try {
+    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
+      return message.reply("> <❇️> No manage members perm.");
+    }
+    const sub = (args[0] || "").toLowerCase();
+    const guild = message.guild;
+    const issuer = await guild.members.fetch(message.author.id);
+    const settings = await getSettingsForGuild(guild.id);
+
+    if (sub === "drain") {
+      const channel = issuer.voice.channel || message.mentions.channels.first();
+      if (!channel || channel.type !== ChannelType.GuildVoice) {
+        return message.reply("> <❌> You must mention or join a VC.");
+      }
+      channel.members.forEach(m => m.voice.disconnect(`Drained by ${message.author.tag}`).catch(() => { }));
+      return message.reply(`> <🕳️> Drained ${channel.name}.`);
+    }
+
+    const ids = [];
+    if (message.mentions.members.size) ids.push(...message.mentions.members.keys());
+    else if (args[1]) ids.push(...args[1].split(/[,\s]+/).filter(id => /^\d{17,19}$/.test(id)));
+    if (!ids.length) {
+      return message.reply("> <❌> No valid users.");
+    }
+
+    const results = [];
+    for (const id of ids) {
+      const member = await guild.members.fetch(id).catch(() => null);
+      if (!member) { results.push(`❌ ${id}`); continue; }
+      if (!member.voice.channel) { results.push(`⚠️ ${member.displayName}`); continue; }
+
+      let verb;
+      if (sub === "mute") {
+        await member.voice.setMute(true, `Muted by ${message.author.tag}`);
+        verb = "muted";
+      } else if (sub === "unmute") {
+        await member.voice.setMute(false, `Unmuted by ${message.author.tag}`);
+        verb = "unmuted";
+      } else if (sub === "kick") {
+        await member.voice.disconnect(`Kicked by ${message.author.tag}`);
+        verb = "kicked";
+      } else {
+        return message.reply("> <❇️> Unknown subcommand. Usage: `kick`, `mute`, `unmute`");
+      }
+
+      await sendVCLog(guild, settings, issuer, member, verb);
+      results.push(member.displayName);
+    }
+
+    const actionPast = {
+      mute: "Muted",
+      unmute: "Unmuted",
+      kick: "Kicked"
+    }[sub] || (
+        sub.endsWith("e") ? sub.charAt(0).toUpperCase() + sub.slice(1) + "d" :
+          sub.charAt(0).toUpperCase() + sub.slice(1) + "ed"
+      );
+    const emoji = { mute: "🔇", unmute: "🔊", kick: "🕳️" }[sub] || "";
+    return message.reply(`> <${emoji}> ${actionPast}: ${results.join(", ")}`);
+  } catch (error) {
+    console.error(error);
+    await logErrorToChannel(message.guild.id, error.stack, message.client, "VC_ERR_001");
+    return message.reply("> <❌> Internal VC error.");
+  }
+}
+
 async function handleVCSlashCommand(interaction) {
   try {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
@@ -155,7 +222,9 @@ async function handleVCSlashCommand(interaction) {
       results.push(member.displayName);
     }
 
-    const label = sub.charAt(0).toUpperCase() + sub.slice(1) + "ed";
+    const base = sub.endsWith("e") ? sub.slice(0, -1) : sub;
+    const label = base.charAt(0).toUpperCase() + base.slice(1) + "ed";
+
     const emoji = sub === "mute" ? "🔇" : sub === "unmute" ? "🔊" : "🕳️";
     return interaction.reply({ content: `> <${emoji}> ${label}: ${results.join(", ")}` });
   } catch (error) {
@@ -164,66 +233,6 @@ async function handleVCSlashCommand(interaction) {
     if (!interaction.replied) {
       interaction.reply({ content: "> <❌> Internal VC error.", ephemeral: true });
     }
-  }
-}
-
-async function handleVCMessageCommand(message, args = []) {
-  try {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
-      return message.reply("> <❇️> No manage members perm.");
-    }
-    const sub = (args[0] || "").toLowerCase();
-    const guild = message.guild;
-    const issuer = await guild.members.fetch(message.author.id);
-    const settings = await getSettingsForGuild(guild.id);
-
-    if (sub === "drain") {
-      const channel = issuer.voice.channel || message.mentions.channels.first();
-      if (!channel || channel.type !== ChannelType.GuildVoice) {
-        return message.reply("> <❌> You must mention or join a VC.");
-      }
-      channel.members.forEach(m => m.voice.disconnect(`Drained by ${message.author.tag}`).catch(() => { }));
-      return message.reply(`> <🕳️> Drained ${channel.name}.`);
-    }
-
-    const ids = [];
-    if (message.mentions.members.size) ids.push(...message.mentions.members.keys());
-    else if (args[1]) ids.push(...args[1].split(/[,\s]+/).filter(id => /^\d{17,19}$/.test(id)));
-    if (!ids.length) {
-      return message.reply("> <❌> No valid users.");
-    }
-
-    const results = [];
-    for (const id of ids) {
-      const member = await guild.members.fetch(id).catch(() => null);
-      if (!member) { results.push(`❌ ${id}`); continue; }
-      if (!member.voice.channel) { results.push(`⚠️ ${member.displayName}`); continue; }
-
-      let verb;
-      if (sub === "mute") {
-        await member.voice.setMute(true, `Muted by ${message.author.tag}`);
-        verb = "muted";
-      } else if (sub === "unmute") {
-        await member.voice.setMute(false, `Unmuted by ${message.author.tag}`);
-        verb = "unmuted";
-      } else if (sub === "kick") {
-        await member.voice.disconnect(`Kicked by ${message.author.tag}`);
-        verb = "kicked";
-      } else {
-        return message.reply("> <❇️> Unknown subcommand. Usage: `kick`, `mute`, `unmute`");
-      }
-
-      await sendVCLog(guild, settings, issuer, member, verb);
-      results.push(member.displayName);
-    }
-
-    const actionPast = { mute: "Muted", unmute: "Unmuted", kick: "Kicked" }[sub] || sub;
-    const emoji = { mute: "🔇", unmute: "🔊", kick: "🕳️" }[sub] || "";
-    return message.reply(`> <${emoji}> ${actionPast}: ${results.join(", ")}`);
-  } catch (error) {
-    console.error(error);
-    await logErrorToChannel(message.guild.id, error.stack, message.client, "VC_ERR_001");
-    return message.reply("> <❌> Internal VC error.");
   }
 }
 

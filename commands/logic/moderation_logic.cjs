@@ -500,13 +500,26 @@ async function handleModSlashCommand(inter) {
         content: "> <❌> No valid users provided.",
       });
 
-    /* duration parsing */
+    /* ───── duration parsing ───── */
     let durMs, durSec;
     if (sub === "mute") {
-      durMs = ms(inter.options.getString("duration") || "") || 3_600_000;
+      const durStr = inter.options.getString("duration");  // may be null
+      if (!durStr) {
+        // no duration supplied → default 1 h
+        durMs = 3_600_000;
+      } else {
+        durMs = ms(durStr);
+        if (!durMs) {
+          return inter.reply({
+            content: "> <❌> Invalid duration. Examples: `30m`, `2h`, `1d`",
+            ephemeral: true,
+          });
+        }
+      }
       if (durMs > MAX_TIMEOUT_MS)
         return inter.reply({
           content: "> <❌> Duration too long (max 28 days).",
+          ephemeral: true,
         });
       durSec = durMs / 1000;
     }

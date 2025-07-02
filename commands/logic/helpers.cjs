@@ -191,6 +191,20 @@ function createErrorLogRoleDropdown(mode, guild, userId, currentRoleId) {
   );
 }
 
+/*
+  * Checks if the target user is valid for operations.
+  * @param {User} user - The user to check.
+  * @return {string|null} - Returns an error message if invalid, otherwise null.
+*/
+
+const VC_TOOLS_BOT_ID = "1278547607798415401";
+
+function isInvalidTarget(user) {
+  if (!user) return "User not found.";
+  if (user.id === VC_TOOLS_BOT_ID) return "You can't target VC Tools.";
+  return null;
+}
+
 module.exports = {
   logErrorToChannel,
   createchannelIdropdown,
@@ -198,4 +212,5 @@ module.exports = {
   createRoleDropdown,
   createErrorLogRoleDropdown,
   requiredManagerPermissions,
+  isInvalidTarget,
 };

@@ -359,6 +359,13 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
             );
           }
 
+          // Ensure all their entries are cleared again after kick to avoid repeated triggers
+          await supabase
+            .from("soundboard_spam_log")
+            .delete()
+            .eq("userid", user_id);
+
+          // Log the kick action
           console.log(
             `[INFO] Kicked user ${user_id} from VC for soundboard spam.`
           );
