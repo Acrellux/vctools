@@ -451,75 +451,47 @@ async function showNotifyList(ctx) {
   const subs = await listNotifications(userId, guildId);
   const lines = subs.map(s => `<@${s.target_id}>`);
   const pages = paginateList(lines);
-  let page = 0;
-
   const embed = new EmbedBuilder()
     .setTitle("Your Notifications")
     .setDescription(pages[0]?.join("\n") || "*No subscriptions*")
     .setFooter({ text: `Page 1 of ${pages.length}` });
 
-  const initialComponents = pages.length > 1
-    ? buildNavButtons(0, pages.length, userId)
-    : [];
-
-  const msg = await sendReply({
-    embeds: [embed],
-    components: initialComponents
-  });
+  const components = pages.length > 1 ? buildNavButtons(0, pages.length, userId, "notifyList") : [];
+  const msg = await sendReply({ embeds: [embed], components });
 
   if (pages.length <= 1) return;
 
-  const collector = msg.createMessageComponentCollector({
-    filter: i => {
-      if (!i.customId.startsWith("notifyList:")) return false;
-      if (i.user.id !== userId) {
-        i.reply({
-          content: "> <❇️> You cannot control someone else's list.",
-          ephemeral: true
-        }).catch(() => { });
-        return false;
-      }
-      return true;
-    },
-    time: 3 * 60 * 1000
+  const coll = msg.createMessageComponentCollector({
+    filter: i => i.customId.startsWith("notifyList:") && i.user.id === userId,
+    time: 3 * 60 * 1000,
   });
 
-  collector.on("collect", async i => {
-    try {
-      const [, action] = i.customId.split(":");
-      if (action === "prev") page = Math.max(page - 1, 0);
-      else if (action === "next") page = Math.min(page + 1, pages.length - 1);
-      else if (action === "first") page = 0;
-      else if (action === "last") page = pages.length - 1;
+  coll.on("collect", async i => {
+    const [, action, pageStr] = i.customId.split(":");
+    let page = parseInt(pageStr);
 
-      const updated = EmbedBuilder.from(embed)
-        .setDescription(pages[page].join("\n"))
-        .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+    if (action === "prev") page = Math.max(page - 1, 0);
+    else if (action === "next") page = Math.min(page + 1, pages.length - 1);
+    else if (action === "first") page = 0;
+    else if (action === "last") page = pages.length - 1;
 
-      await i.update({
-        embeds: [updated],
-        components: buildNavButtons(page, pages.length, userId)
-      });
-    } catch (err) {
-      console.error("[notifyList] update failed:", err);
-      if (!i.replied) {
-        await i.reply({
-          content: "> <❌> Could not update the page. Try again.",
-          ephemeral: true
-        }).catch(() => { });
-      }
-    }
+    const updated = EmbedBuilder.from(embed)
+      .setDescription(pages[page].join("\n"))
+      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+
+    await i.update({
+      embeds: [updated],
+      components: buildNavButtons(page, pages.length, userId, "notifyList"),
+    });
   });
 
-  collector.on("end", async () => {
+  coll.on("end", async () => {
     try {
       if (msg.editable) {
         await msg.edit({ components: disableAllButtons(msg.components) });
       }
     } catch (err) {
-      if (err.code !== 10008) {
-        console.error("[notifyList] failed to disable buttons:", err);
-      }
+      if (err.code !== 10008) console.error("Failed to disable notify buttons:", err);
     }
   });
 }

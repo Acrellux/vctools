@@ -109,19 +109,21 @@ async function showSafeUserList(ctx) {
 
   coll.on("collect", async i => {
     try {
-      const [, action] = i.customId.split(":");
-      if (action === "prev") page = Math.max(page - 1, 0);
-      else if (action === "next") page = Math.min(page + 1, pages.length - 1);
-      else if (action === "first") page = 0;
-      else if (action === "last") page = pages.length - 1;
+      const [, action, pageStr] = i.customId.split(":");
+      let currentPage = parseInt(pageStr); // ← get the current page from button ID
+
+      if (action === "prev") currentPage = Math.max(currentPage - 1, 0);
+      else if (action === "next") currentPage = Math.min(currentPage + 1, pages.length - 1);
+      else if (action === "first") currentPage = 0;
+      else if (action === "last") currentPage = pages.length - 1;
 
       const updated = EmbedBuilder.from(embed)
-        .setDescription(pages[page].join("\n"))
-        .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+        .setDescription(pages[currentPage].join("\n"))
+        .setFooter({ text: `Page ${currentPage + 1} of ${pages.length}` });
 
       await i.update({
         embeds: [updated],
-        components: buildNavButtons(page, pages.length, userId),
+        components: buildNavButtons(currentPage, pages.length, userId),
       });
     } catch (err) {
       console.error("[safeUserList] update failed:", err);

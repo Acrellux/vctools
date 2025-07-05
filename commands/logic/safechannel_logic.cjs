@@ -59,8 +59,7 @@ async function showSafeChannelList(ctx) {
 
   const lines = await Promise.all(
     safeChannels.map(async id => {
-      const ch = guild.channels.cache.get(id)
-        || await guild.channels.fetch(id).catch(() => null);
+      const ch = guild.channels.cache.get(id) || await guild.channels.fetch(id).catch(() => null);
       return ch
         ? `- <#${ch.id}>`
         : `- \`[deleted]\` (\`${id}\`)`;
@@ -68,16 +67,12 @@ async function showSafeChannelList(ctx) {
   );
 
   const pages = paginateList(lines);
-  let page = 0;
-
   const embed = new EmbedBuilder()
     .setTitle("Safe Channels")
     .setDescription(pages[0]?.join("\n") || "*No safe channels set.*")
     .setFooter({ text: `Page 1 of ${pages.length}` });
 
-  const initialComponents = pages.length > 1
-    ? buildNavButtons(0, pages.length, userId)
-    : [];
+  const components = pages.length > 1 ? buildNavButtons(0, pages.length, userId, "safeChannelList") : [];
 
   const sendReply = async (payload) => {
     if (isInteraction) {
@@ -88,53 +83,32 @@ async function showSafeChannelList(ctx) {
     }
   };
 
-  const msg = await sendReply({
-    embeds: [embed],
-    components: initialComponents,
-  });
+  const msg = await sendReply({ embeds: [embed], components });
 
   if (pages.length <= 1) return;
 
   const coll = msg.createMessageComponentCollector({
-    filter: i => {
-      if (!i.customId.startsWith("safeChannelList:")) return false;
-      if (i.user.id !== userId) {
-        i.reply({
-          content: "> <❇️> You cannot interact with this list.",
-          ephemeral: true,
-        }).catch(() => { });
-        return false;
-      }
-      return true;
-    },
+    filter: i => i.customId.startsWith("safeChannelList:") && i.user.id === userId,
     time: 3 * 60 * 1000,
   });
 
   coll.on("collect", async i => {
-    try {
-      const [, action] = i.customId.split(":");
-      if (action === "prev") page = Math.max(page - 1, 0);
-      else if (action === "next") page = Math.min(page + 1, pages.length - 1);
-      else if (action === "first") page = 0;
-      else if (action === "last") page = pages.length - 1;
+    const [, action, pageStr] = i.customId.split(":");
+    let page = parseInt(pageStr);
 
-      const updated = EmbedBuilder.from(embed)
-        .setDescription(pages[page].join("\n"))
-        .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+    if (action === "prev") page = Math.max(page - 1, 0);
+    else if (action === "next") page = Math.min(page + 1, pages.length - 1);
+    else if (action === "first") page = 0;
+    else if (action === "last") page = pages.length - 1;
 
-      await i.update({
-        embeds: [updated],
-        components: buildNavButtons(page, pages.length, userId),
-      });
-    } catch (err) {
-      console.error("[safeChannelList] update failed:", err);
-      if (!i.replied) {
-        await i.reply({
-          content: "> <❌> Could not update the list. Try again.",
-          ephemeral: true,
-        }).catch(() => { });
-      }
-    }
+    const updated = EmbedBuilder.from(embed)
+      .setDescription(pages[page].join("\n"))
+      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+
+    await i.update({
+      embeds: [updated],
+      components: buildNavButtons(page, pages.length, userId, "safeChannelList"),
+    });
   });
 
   coll.on("end", async () => {
@@ -143,9 +117,7 @@ async function showSafeChannelList(ctx) {
         await msg.edit({ components: disableAllButtons(msg.components) });
       }
     } catch (err) {
-      if (err.code !== 10008) {
-        console.error("[safeChannelList] Failed to disable buttons:", err);
-      }
+      if (err.code !== 10008) console.error("Failed to disable safe channel buttons:", err);
     }
   });
 }
