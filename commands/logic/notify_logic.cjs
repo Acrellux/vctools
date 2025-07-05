@@ -434,17 +434,15 @@ async function handleNotifyFlow(interaction) {
   }
 }
 
-// ─── Replace your old showNotifyList with this ───
 async function showNotifyList(ctx) {
-  // detect Message vs Interaction
   const isInteraction = !!ctx.options;
   const userId = isInteraction ? ctx.user.id : ctx.author.id;
   const guildId = ctx.guild.id;
 
-  // helper to send or reply and always get the sent message
   const sendReply = async (payload) => {
     if (isInteraction) {
-      return await ctx.reply({ ...payload, fetchReply: true });
+      const method = ctx.replied || ctx.deferred ? ctx.followUp : ctx.reply;
+      return await method.call(ctx, { ...payload, fetchReply: true });
     } else {
       return await ctx.channel.send({ ...payload, fetchReply: true });
     }
@@ -460,7 +458,9 @@ async function showNotifyList(ctx) {
     .setDescription(pages[0]?.join("\n") || "*No subscriptions*")
     .setFooter({ text: `Page 1 of ${pages.length}` });
 
-  const initialComponents = buildNavButtons(0, pages.length, userId);
+  const initialComponents = pages.length > 1
+    ? buildNavButtons(0, pages.length, userId)
+    : [];
 
   const msg = await sendReply({
     embeds: [embed],
@@ -470,30 +470,58 @@ async function showNotifyList(ctx) {
   if (pages.length <= 1) return;
 
   const collector = msg.createMessageComponentCollector({
-    filter: i => i.customId.startsWith("notifyList:") && i.user.id === userId,
+    filter: i => {
+      if (!i.customId.startsWith("notifyList:")) return false;
+      if (i.user.id !== userId) {
+        i.reply({
+          content: "> <❇️> You cannot control someone else's list.",
+          ephemeral: true
+        }).catch(() => { });
+        return false;
+      }
+      return true;
+    },
     time: 3 * 60 * 1000
   });
 
   collector.on("collect", async i => {
-    const [, action] = i.customId.split(":");
-    if (action === "prev") page = Math.max(page - 1, 0);
-    else if (action === "next") page = Math.min(page + 1, pages.length - 1);
-    else if (action === "first") page = 0;
-    else if (action === "last") page = pages.length - 1;
+    try {
+      const [, action] = i.customId.split(":");
+      if (action === "prev") page = Math.max(page - 1, 0);
+      else if (action === "next") page = Math.min(page + 1, pages.length - 1);
+      else if (action === "first") page = 0;
+      else if (action === "last") page = pages.length - 1;
 
-    const updated = EmbedBuilder.from(embed)
-      .setDescription(pages[page].join("\n"))
-      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+      const updated = EmbedBuilder.from(embed)
+        .setDescription(pages[page].join("\n"))
+        .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
 
-    await i.update({
-      embeds: [updated],
-      components: buildNavButtons(page, pages.length, userId)
-    });
+      await i.update({
+        embeds: [updated],
+        components: buildNavButtons(page, pages.length, userId)
+      });
+    } catch (err) {
+      console.error("[notifyList] update failed:", err);
+      if (!i.replied) {
+        await i.reply({
+          content: "> <❌> Could not update the page. Try again.",
+          ephemeral: true
+        }).catch(() => { });
+      }
+    }
   });
 
-  collector.on("end", () =>
-    msg.edit({ components: disableAllButtons(msg.components) })
-  );
+  collector.on("end", async () => {
+    try {
+      if (msg.editable) {
+        await msg.edit({ components: disableAllButtons(msg.components) });
+      }
+    } catch (err) {
+      if (err.code !== 10008) {
+        console.error("[notifyList] failed to disable buttons:", err);
+      }
+    }
+  });
 }
 
 /* =====================================================

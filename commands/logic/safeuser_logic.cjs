@@ -54,7 +54,6 @@ async function showSafeUserList(ctx) {
   const settings = (await getSettingsForGuild(guild.id)) || {};
   const safeUsers = settings.safeUsers || [];
 
-  // format with tag + mention
   const lines = await Promise.all(
     safeUsers.map(async id => {
       const member = guild.members.cache.get(id)
@@ -67,46 +66,85 @@ async function showSafeUserList(ctx) {
 
   const pages = paginateList(lines);
   let page = 0;
+
   const embed = new EmbedBuilder()
     .setTitle("Safe Users")
     .setDescription(pages[0]?.join("\n") || "*No safe users set.*")
     .setFooter({ text: `Page 1 of ${pages.length}` });
-  const initialComponents = pages.length > 1 ? buildNavButtons(0, pages.length, userId) : [];
 
-  let msg;
-  if (isInteraction) {
-    if (ctx.replied || ctx.deferred) {
-      msg = await ctx.editReply({ embeds: [embed], components: initialComponents, fetchReply: true });
+  const initialComponents = pages.length > 1
+    ? buildNavButtons(0, pages.length, userId)
+    : [];
+
+  const sendReply = async (payload) => {
+    if (isInteraction) {
+      const method = ctx.replied || ctx.deferred ? ctx.followUp : ctx.reply;
+      return await method.call(ctx, { ...payload, fetchReply: true });
     } else {
-      msg = await ctx.reply({ embeds: [embed], components: initialComponents, fetchReply: true, ephemeral: false });
+      return await ctx.channel.send({ ...payload, fetchReply: true });
     }
-  } else {
-    msg = await ctx.channel.send({ embeds: [embed], components: initialComponents });
-  }
+  };
+
+  const msg = await sendReply({
+    embeds: [embed],
+    components: initialComponents,
+  });
+
   if (pages.length <= 1) return;
 
   const coll = msg.createMessageComponentCollector({
-    filter: i => i.customId.startsWith("safeUserList:") && i.user.id === userId,
+    filter: i => {
+      if (!i.customId.startsWith("safeUserList:")) return false;
+      if (i.user.id !== userId) {
+        i.reply({
+          content: "> <❇️> You cannot interact with this list.",
+          ephemeral: true,
+        }).catch(() => { });
+        return false;
+      }
+      return true;
+    },
     time: 3 * 60 * 1000,
   });
+
   coll.on("collect", async i => {
-    const [, action] = i.customId.split(":");
-    if (action === "prev") page = Math.max(page - 1, 0);
-    if (action === "next") page = Math.min(page + 1, pages.length - 1);
-    if (action === "first") page = 0;
-    if (action === "last") page = pages.length - 1;
+    try {
+      const [, action] = i.customId.split(":");
+      if (action === "prev") page = Math.max(page - 1, 0);
+      else if (action === "next") page = Math.min(page + 1, pages.length - 1);
+      else if (action === "first") page = 0;
+      else if (action === "last") page = pages.length - 1;
 
-    const updated = EmbedBuilder.from(embed)
-      .setDescription(pages[page].join("\n"))
-      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+      const updated = EmbedBuilder.from(embed)
+        .setDescription(pages[page].join("\n"))
+        .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
 
-    await i.update({ embeds: [updated], components: buildNavButtons(page, pages.length, userId) });
+      await i.update({
+        embeds: [updated],
+        components: buildNavButtons(page, pages.length, userId),
+      });
+    } catch (err) {
+      console.error("[safeUserList] update failed:", err);
+      if (!i.replied) {
+        await i.reply({
+          content: "> <❌> Could not update the list. Try again.",
+          ephemeral: true,
+        }).catch(() => { });
+      }
+    }
   });
+
   coll.on("end", async () => {
     try {
-      await msg.edit({ components: disableAllButtons(msg.components) });
+      if (msg.editable) {
+        await msg.edit({
+          components: disableAllButtons(msg.components),
+        });
+      }
     } catch (err) {
-      if (err.code !== 10008) console.error("Failed to disable buttons:", err);
+      if (err.code !== 10008) {
+        console.error("[safeUserList] Failed to disable buttons:", err);
+      }
     }
   });
 }
