@@ -8,7 +8,7 @@ const {
   Interaction,
 } = require("discord.js");
 
-// Import your Supabase‐based settings helpers
+// Import your Supabase-based settings helpers
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
@@ -70,12 +70,12 @@ const {
 const {
   handleSafeUserMessageCommand,
   handlesafeUserslashCommand,
-  showSafeUserListMessage,
+  showSafeUserList,
 } = require("./logic/safeuser_logic.cjs");
 const {
   handleSafeChannelMessageCommand,
   handlesafeChannelslashCommand,
-  showSafeChannelListMessage,
+  showSafeChannelList,
 } = require("./logic/safechannel_logic.cjs");
 const {
   handleReportMessageCommand,
@@ -125,16 +125,13 @@ async function onMessageCreate(message) {
     // If that prefix type is disabled, respond with fallback options
     if (prefixes && prefixes[used] === false) {
       let reply = "> <❌> That command prefix is not enabled.\n";
-
       const fallback = [];
       if (prefixes.greater && used !== "greater") fallback.push("the `>` prefix");
       if (prefixes.exclamation && used !== "exclamation") fallback.push("the `!` prefix");
       if (prefixes.slash) fallback.push("`/slash` commands");
-
       reply += fallback.length
         ? `You can try using ${fallback.join(" or ")} instead.`
         : "No commands are currently enabled.";
-
       await message.channel.send(reply);
       return;
     }
@@ -206,31 +203,23 @@ async function onMessageCreate(message) {
 async function onInteractionCreate(interaction) {
   try {
     if (interaction.isChatInputCommand()) {
-      // ────── ignore slash if disabled ──────
       const settings = (await getSettingsForGuild(interaction.guild.id)) || {};
       if (settings.prefixes && settings.prefixes.slash === false) {
-        const enabledPrefixes = settings.prefixes || {};
+        const enabled = settings.prefixes;
         const alternatives = [];
-
-        if (enabledPrefixes.greater) alternatives.push("the `> prefix`");
-        if (enabledPrefixes.exclamation) alternatives.push("the `! prefix`");
-
-        const fallbackMessage = alternatives.length
+        if (enabled.greater) alternatives.push("the `> prefix`");
+        if (enabled.exclamation) alternatives.push("the `! prefix`");
+        const fallback = alternatives.length
           ? `You can still use ${alternatives.join(" or ")} instead.`
           : "No command prefixes are currently enabled.";
-
         if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({
-            content: [
-              "> <❌> Slash commands are disabled on this server.",
-              fallbackMessage,
-            ].join("\n"),
+            content: ["> <❌> Slash commands are disabled on this server.", fallback].join("\n"),
             ephemeral: false,
           });
         }
         return;
       }
-      // ─────────────────────────────────────
 
       switch (interaction.commandName) {
         case "settings":
@@ -275,24 +264,29 @@ async function onInteractionCreate(interaction) {
     } else if (interaction.isModalSubmit()) {
       await handleReportSubmission(interaction);
     } else if (interaction.isButton() || interaction.isStringSelectMenu()) {
-      if (interaction.customId.startsWith("help:")) {
-        return;
-      } else if (interaction.customId.startsWith("notify:")) {
-        return handleNotifyFlow(interaction);
-      } else if (interaction.isButton() && interaction.customId.startsWith("prefix:")) {
-        return handlePrefixSettingsFlow(interaction);
-      } else if (
+      if (interaction.customId.startsWith("help:")) return;
+      if (interaction.customId.startsWith("notify:")) return handleNotifyFlow(interaction);
+      if (interaction.isButton() && interaction.customId.startsWith("prefix:")) return handlePrefixSettingsFlow(interaction);
+      if (
         interaction.customId.startsWith("report:open:") ||
         interaction.customId.startsWith("activity:open:")
       ) {
         return handleReportInteractions(interaction);
-      } else if (interaction.customId.startsWith("safeUserList:")) {
-        return showSafeUserListMessage(interaction);
-      } else if (interaction.customId.startsWith("safeChannelList:")) {
-        return showSafeChannelListMessage(interaction);
-      } else if (interaction.customId.startsWith("notifyList:")) {
+      }
+
+      // — unified list buttons —
+      if (interaction.customId.startsWith("safeUserList:")) {
+        return showSafeUserList(interaction);
+      }
+      if (interaction.customId.startsWith("safeChannelList:")) {
+        return showSafeChannelList(interaction);
+      }
+      if (interaction.customId.startsWith("notifyList:")) {
         return showNotifyList(interaction);
-      } else if (interaction.customId.startsWith("init:")) {
+      }
+
+      // init flows
+      if (interaction.customId.startsWith("init:")) {
         const [, action] = interaction.customId.split(":");
         const context = interactionContexts.get(interaction.user.id);
         if (context?.mode === "init") {
@@ -307,6 +301,7 @@ async function onInteractionCreate(interaction) {
         }
       }
 
+      // fallback to any other interactions
       await handleAllInteractions(interaction);
     }
   } catch (error) {
@@ -319,8 +314,7 @@ async function onInteractionCreate(interaction) {
     );
     if (!interaction.replied) {
       await interaction.reply({
-        content:
-          "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
+        content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
         ephemeral: true,
       });
     }

@@ -63,10 +63,14 @@ function disableAllButtons(rows) {
   );
 }
 
-/** SHOW HANDLERS */
-async function showSafeUserListMessage(message) {
-  const settings = await getSettingsForGuild(message.guild.id) || {};
+/** SHOW HANDLER */
+async function showSafeUserList(ctx) {
+  const isInteraction = !!ctx.options || !!ctx.isButton;
+  const userId = isInteraction ? ctx.user.id : ctx.author.id;
+  const guild = ctx.guild;
+  const settings = (await getSettingsForGuild(guild.id)) || {};
   const safeUsers = settings.safeUsers || [];
+
   const lines = safeUsers.map(id => `- <@${id}>`);
   const pages = paginateList(lines);
   let page = 0;
@@ -76,18 +80,24 @@ async function showSafeUserListMessage(message) {
     .setDescription(pages[0]?.join("\n") || "*No safe users set.*")
     .setFooter({ text: `Page 1 of ${pages.length}` });
 
-  const msg = await message.channel.send({
-    embeds: [embed],
-    components: buildNavButtons(0, pages.length, message.author.id),
-  });
+  const components = buildNavButtons(0, pages.length, userId);
 
+  async function send() {
+    if (ctx.replied || ctx.deferred) {
+      return await ctx.editReply({ embeds: [embed], components, fetchReply: true });
+    } else if (isInteraction) {
+      return await ctx.reply({ embeds: [embed], components, fetchReply: true, ephemeral: true });
+    } else {
+      return await ctx.channel.send({ embeds: [embed], components });
+    }
+  }
+
+  const msg = await send();
   if (pages.length <= 1) return;
 
   const coll = msg.createMessageComponentCollector({
-    filter: i =>
-      i.customId.startsWith("safeUserList:") &&
-      i.user.id === message.author.id,
-    time: 3 * 60 * 1000,
+    filter: i => i.customId.startsWith("safeUserList:") && i.user.id === userId,
+    time: 3 * 60 * 1000
   });
 
   coll.on("collect", async i => {
@@ -103,62 +113,12 @@ async function showSafeUserListMessage(message) {
 
     await i.update({
       embeds: [updated],
-      components: buildNavButtons(page, pages.length, message.author.id),
+      components: buildNavButtons(page, pages.length, userId),
     });
   });
 
   coll.on("end", () =>
     msg.edit({ components: disableAllButtons(msg.components) })
-  );
-}
-
-async function showSafeUserListSlash(interaction) {
-  const settings = await getSettingsForGuild(interaction.guild.id) || {};
-  const safeUsers = settings.safeUsers || [];
-  const lines = safeUsers.map(id => `- <@${id}>`);
-  const pages = paginateList(lines);
-  let page = 0;
-
-  const embed = new EmbedBuilder()
-    .setTitle("Safe Users")
-    .setDescription(pages[0]?.join("\n") || "*No safe users set.*")
-    .setFooter({ text: `Page 1 of ${pages.length}` });
-
-  const initial = await interaction.reply({
-    embeds: [embed],
-    components: buildNavButtons(0, pages.length, interaction.user.id),
-    fetchReply: true,
-    ephemeral: true,
-  });
-
-  if (pages.length <= 1) return;
-
-  const coll = initial.createMessageComponentCollector({
-    filter: i =>
-      i.customId.startsWith("safeUserList:") &&
-      i.user.id === interaction.user.id,
-    time: 3 * 60 * 1000,
-  });
-
-  coll.on("collect", async i => {
-    const [, action] = i.customId.split(":");
-    if (action === "prev") page = Math.max(page - 1, 0);
-    else if (action === "next") page = Math.min(page + 1, pages.length - 1);
-    else if (action === "first") page = 0;
-    else if (action === "last") page = pages.length - 1;
-
-    const updated = EmbedBuilder.from(embed)
-      .setDescription(pages[page].join("\n") || "*No safe users set.*")
-      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
-
-    await i.update({
-      embeds: [updated],
-      components: buildNavButtons(page, pages.length, interaction.user.id),
-    });
-  });
-
-  coll.on("end", () =>
-    initial.edit({ components: disableAllButtons(initial.components) })
   );
 }
 
@@ -182,7 +142,7 @@ async function handleSafeUserMessageCommand(message, args) {
 
     switch (subCmd) {
       case "list":
-        return showSafeUserListMessage(message);
+        return showSafeUserList(message);
 
       case "add": {
         if (!args[1]) {
@@ -190,7 +150,7 @@ async function handleSafeUserMessageCommand(message, args) {
             "> <❌> Usage: `>safeuser add @UserOrID`"
           );
         }
-        let userId = args[1].replace(/[<@!>]/g, "");
+        const userId = args[1].replace(/[<@!>]/g, "");
         const safeUsers = settings.safeUsers || [];
         if (safeUsers.includes(userId)) {
           return message.channel.send(
@@ -210,9 +170,9 @@ async function handleSafeUserMessageCommand(message, args) {
             "> <❌> Usage: `>safeuser remove @UserOrID`"
           );
         }
-        let userId = args[1].replace(/[<@!>]/g, "");
+        const userId = args[1].replace(/[<@!>]/g, "");
         const safeUsers = settings.safeUsers || [];
-        const newArray = safeUsers.filter((id) => id !== userId);
+        const newArray = safeUsers.filter(id => id !== userId);
         if (newArray.length === safeUsers.length) {
           return message.channel.send("> <❌> That user was not marked safe.");
         }
@@ -250,7 +210,7 @@ async function handlesafeUserslashCommand(interaction) {
 
     switch (subCmd) {
       case "list":
-        return showSafeUserListSlash(interaction);
+        return showSafeUserList(interaction);
 
       case "add": {
         const user = interaction.options.getUser("user", true);
@@ -274,7 +234,7 @@ async function handlesafeUserslashCommand(interaction) {
         const user = interaction.options.getUser("user", true);
         const settings = await getSettingsForGuild(guildId);
         const safeUsers = settings.safeUsers || [];
-        const newArray = safeUsers.filter((id) => id !== user.id);
+        const newArray = safeUsers.filter(id => id !== user.id);
         if (newArray.length === safeUsers.length) {
           return interaction.reply({
             content: "> <❇️> That user was not marked safe.",
@@ -308,5 +268,5 @@ async function handlesafeUserslashCommand(interaction) {
 module.exports = {
   handleSafeUserMessageCommand,
   handlesafeUserslashCommand,
-  showSafeUserListMessage,
+  showSafeUserList,
 };

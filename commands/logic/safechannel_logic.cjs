@@ -1,22 +1,8 @@
 const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  Collection,
-  Events,
-  Message,
-  Interaction,
-  PermissionsBitField,
-  ChannelType,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  StringSelectMenuBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  SlashCommandBuilder,
 } = require("discord.js");
 
 const { interactionContexts } = require("../../database/contextStore.cjs");
@@ -63,9 +49,13 @@ function disableAllButtons(rows) {
   );
 }
 
-/** SHOW HANDLERS */
-async function showSafeChannelListMessage(message) {
-  const settings = await getSettingsForGuild(message.guild.id) || {};
+/** SHOW HANDLER */
+async function showSafeChannelList(ctx) {
+  const isInteraction = !!ctx.options || !!ctx.isButton;
+  const userId = isInteraction ? ctx.user.id : ctx.author.id;
+  const guild = ctx.guild;
+
+  const settings = (await getSettingsForGuild(guild.id)) || {};
   const safeChannels = settings.safeChannels || [];
   const lines = safeChannels.map(id => `- <#${id}>`);
   const pages = paginateList(lines);
@@ -76,17 +66,23 @@ async function showSafeChannelListMessage(message) {
     .setDescription(pages[0]?.join("\n") || "*No safe channels set.*")
     .setFooter({ text: `Page 1 of ${pages.length}` });
 
-  const msg = await message.channel.send({
-    embeds: [embed],
-    components: buildNavButtons(0, pages.length, message.author.id),
-  });
+  const components = buildNavButtons(0, pages.length, userId);
 
+  async function send() {
+    if (ctx.replied || ctx.deferred) {
+      return await ctx.editReply({ embeds: [embed], components, fetchReply: true });
+    } else if (isInteraction) {
+      return await ctx.reply({ embeds: [embed], components, fetchReply: true, ephemeral: true });
+    } else {
+      return await ctx.channel.send({ embeds: [embed], components });
+    }
+  }
+
+  const msg = await send();
   if (pages.length <= 1) return;
 
   const coll = msg.createMessageComponentCollector({
-    filter: i =>
-      i.customId.startsWith("safeChannelList:") &&
-      i.user.id === message.author.id,
+    filter: i => i.customId.startsWith("safeChannelList:") && i.user.id === userId,
     time: 3 * 60 * 1000,
   });
 
@@ -103,62 +99,12 @@ async function showSafeChannelListMessage(message) {
 
     await i.update({
       embeds: [updated],
-      components: buildNavButtons(page, pages.length, message.author.id),
+      components: buildNavButtons(page, pages.length, userId),
     });
   });
 
   coll.on("end", () =>
     msg.edit({ components: disableAllButtons(msg.components) })
-  );
-}
-
-async function showSafeChannelListSlash(interaction) {
-  const settings = await getSettingsForGuild(interaction.guild.id) || {};
-  const safeChannels = settings.safeChannels || [];
-  const lines = safeChannels.map(id => `- <#${id}>`);
-  const pages = paginateList(lines);
-  let page = 0;
-
-  const embed = new EmbedBuilder()
-    .setTitle("Safe Channels")
-    .setDescription(pages[0]?.join("\n") || "*No safe channels set.*")
-    .setFooter({ text: `Page 1 of ${pages.length}` });
-
-  const initial = await interaction.reply({
-    embeds: [embed],
-    components: buildNavButtons(0, pages.length, interaction.user.id),
-    fetchReply: true,
-    ephemeral: true,
-  });
-
-  if (pages.length <= 1) return;
-
-  const coll = initial.createMessageComponentCollector({
-    filter: i =>
-      i.customId.startsWith("safeChannelList:") &&
-      i.user.id === interaction.user.id,
-    time: 3 * 60 * 1000,
-  });
-
-  coll.on("collect", async i => {
-    const [, action] = i.customId.split(":");
-    if (action === "prev") page = Math.max(page - 1, 0);
-    else if (action === "next") page = Math.min(page + 1, pages.length - 1);
-    else if (action === "first") page = 0;
-    else if (action === "last") page = pages.length - 1;
-
-    const updated = EmbedBuilder.from(embed)
-      .setDescription(pages[page].join("\n") || "*No safe channels set.*")
-      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
-
-    await i.update({
-      embeds: [updated],
-      components: buildNavButtons(page, pages.length, interaction.user.id),
-    });
-  });
-
-  coll.on("end", () =>
-    initial.edit({ components: disableAllButtons(initial.components) })
   );
 }
 
@@ -173,10 +119,11 @@ async function handleSafeChannelMessageCommand(message, args) {
 
     const subCmd = args[0]?.toLowerCase();
     const guildId = message.guild.id;
+    const settings = (await getSettingsForGuild(guildId)) || {};
 
     switch (subCmd) {
       case "list":
-        return showSafeChannelListMessage(message);
+        return showSafeChannelList(message);
 
       case "add": {
         if (!args[1]) {
@@ -185,7 +132,6 @@ async function handleSafeChannelMessageCommand(message, args) {
           );
         }
         const channelId = args[1].replace(/[<#>]/g, "");
-        const settings = await getSettingsForGuild(guildId);
         const safeChannels = settings.safeChannels || [];
         if (safeChannels.includes(channelId)) {
           return message.channel.send(
@@ -193,11 +139,7 @@ async function handleSafeChannelMessageCommand(message, args) {
           );
         }
         safeChannels.push(channelId);
-        await updateSettingsForGuild(
-          guildId,
-          { safeChannels },
-          message.guild
-        );
+        await updateSettingsForGuild(guildId, { safeChannels }, message.guild);
         return message.channel.send(
           `> <✅> Marked <#${channelId}> as safe.`
         );
@@ -210,17 +152,14 @@ async function handleSafeChannelMessageCommand(message, args) {
           );
         }
         const channelId = args[1].replace(/[<#>]/g, "");
-        const settings = await getSettingsForGuild(guildId);
         const safeChannels = settings.safeChannels || [];
         const newArray = safeChannels.filter(id => id !== channelId);
         if (newArray.length === safeChannels.length) {
-          return message.channel.send("> <❌> That channel was not marked safe.");
+          return message.channel.send(
+            "> <❌> That channel was not marked safe."
+          );
         }
-        await updateSettingsForGuild(
-          guildId,
-          { safeChannels: newArray },
-          message.guild
-        );
+        await updateSettingsForGuild(guildId, { safeChannels: newArray }, message.guild);
         return message.channel.send(
           `> <✅> Removed <#${channelId}> from safe channels.`
         );
@@ -250,15 +189,15 @@ async function handlesafeChannelslashCommand(interaction) {
     }
 
     const subCmd = interaction.options.getSubcommand(true);
+    const guildId = interaction.guild.id;
+    const settings = (await getSettingsForGuild(guildId)) || {};
 
     switch (subCmd) {
       case "list":
-        return showSafeChannelListSlash(interaction);
+        return showSafeChannelList(interaction);
 
       case "add": {
         const channel = interaction.options.getChannel("channel", true);
-        const guildId = interaction.guild.id;
-        const settings = await getSettingsForGuild(guildId);
         const safeChannels = settings.safeChannels || [];
         if (safeChannels.includes(channel.id)) {
           return interaction.reply({
@@ -267,11 +206,7 @@ async function handlesafeChannelslashCommand(interaction) {
           });
         }
         safeChannels.push(channel.id);
-        await updateSettingsForGuild(
-          guildId,
-          { safeChannels },
-          interaction.guild
-        );
+        await updateSettingsForGuild(guildId, { safeChannels }, interaction.guild);
         return interaction.reply({
           content: `> <✅> Marked <#${channel.id}> as safe.`,
           ephemeral: false,
@@ -280,8 +215,6 @@ async function handlesafeChannelslashCommand(interaction) {
 
       case "remove": {
         const channel = interaction.options.getChannel("channel", true);
-        const guildId = interaction.guild.id;
-        const settings = await getSettingsForGuild(guildId);
         const safeChannels = settings.safeChannels || [];
         const newArray = safeChannels.filter(id => id !== channel.id);
         if (newArray.length === safeChannels.length) {
@@ -290,11 +223,7 @@ async function handlesafeChannelslashCommand(interaction) {
             ephemeral: true,
           });
         }
-        await updateSettingsForGuild(
-          guildId,
-          { safeChannels: newArray },
-          interaction.guild
-        );
+        await updateSettingsForGuild(guildId, { safeChannels: newArray }, interaction.guild);
         return interaction.reply({
           content: `> <✅> Removed <#${channel.id}> from safe channels.`,
           ephemeral: false,
@@ -321,5 +250,5 @@ async function handlesafeChannelslashCommand(interaction) {
 module.exports = {
   handleSafeChannelMessageCommand,
   handlesafeChannelslashCommand,
-  showSafeChannelListMessage,
+  showSafeChannelList,
 };
