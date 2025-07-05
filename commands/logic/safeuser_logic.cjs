@@ -20,7 +20,6 @@ const {
 } = require("discord.js");
 
 const { interactionContexts } = require("../../database/contextStore.cjs");
-
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
@@ -29,32 +28,152 @@ const { logErrorToChannel } = require("./helpers.cjs");
 
 const requiredManagerPermissions = ["ManageGuild"];
 
-/**
- * =========================================
- * SAFEUSER Command Handlers
- * =========================================
- * 1) safeuser list
- * 2) safeuser add <user>
- * 3) safeuser remove <user>
- *
- * We store them in the guild's settings:
- * settings.safeUsers = [<userId1>, <userId2>, ...]
- */
+/** PAGINATION HELPERS */
+function paginateList(items, maxPerPage = 10) {
+  const pages = [];
+  for (let i = 0; i < items.length; i += maxPerPage) {
+    pages.push(items.slice(i, i + maxPerPage));
+  }
+  return pages;
+}
 
-// (C) Message-based safeuser commands
+function buildNavButtons(page, totalPages, userId, prefix = "safeUserList") {
+  const make = (action, label, disabled) =>
+    new ButtonBuilder()
+      .setCustomId(`${prefix}:${action}:${page}:${userId}`)
+      .setLabel(label)
+      .setStyle(ButtonStyle.Primary)
+      .setDisabled(disabled);
+
+  return [new ActionRowBuilder().addComponents(
+    make("first", "⇤", page === 0),
+    make("prev", "◄", page === 0),
+    make("next", "►", page === totalPages - 1),
+    make("last", "⇥", page === totalPages - 1)
+  )];
+}
+
+function disableAllButtons(rows) {
+  return rows.map(row =>
+    new ActionRowBuilder().addComponents(
+      row.components.map(btn =>
+        ButtonBuilder.from(btn).setDisabled(true)
+      )
+    )
+  );
+}
+
+/** SHOW HANDLERS */
+async function showSafeUserListMessage(message) {
+  const settings = await getSettingsForGuild(message.guild.id) || {};
+  const safeUsers = settings.safeUsers || [];
+  const lines = safeUsers.map(id => `- <@${id}>`);
+  const pages = paginateList(lines);
+  let page = 0;
+
+  const embed = new EmbedBuilder()
+    .setTitle("Safe Users")
+    .setDescription(pages[0]?.join("\n") || "*No safe users set.*")
+    .setFooter({ text: `Page 1 of ${pages.length}` });
+
+  const msg = await message.channel.send({
+    embeds: [embed],
+    components: buildNavButtons(0, pages.length, message.author.id),
+  });
+
+  if (pages.length <= 1) return;
+
+  const coll = msg.createMessageComponentCollector({
+    filter: i =>
+      i.customId.startsWith("safeUserList:") &&
+      i.user.id === message.author.id,
+    time: 3 * 60 * 1000,
+  });
+
+  coll.on("collect", async i => {
+    const [, action] = i.customId.split(":");
+    if (action === "prev") page = Math.max(page - 1, 0);
+    else if (action === "next") page = Math.min(page + 1, pages.length - 1);
+    else if (action === "first") page = 0;
+    else if (action === "last") page = pages.length - 1;
+
+    const updated = EmbedBuilder.from(embed)
+      .setDescription(pages[page].join("\n") || "*No safe users set.*")
+      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+
+    await i.update({
+      embeds: [updated],
+      components: buildNavButtons(page, pages.length, message.author.id),
+    });
+  });
+
+  coll.on("end", () =>
+    msg.edit({ components: disableAllButtons(msg.components) })
+  );
+}
+
+async function showSafeUserListSlash(interaction) {
+  const settings = await getSettingsForGuild(interaction.guild.id) || {};
+  const safeUsers = settings.safeUsers || [];
+  const lines = safeUsers.map(id => `- <@${id}>`);
+  const pages = paginateList(lines);
+  let page = 0;
+
+  const embed = new EmbedBuilder()
+    .setTitle("Safe Users")
+    .setDescription(pages[0]?.join("\n") || "*No safe users set.*")
+    .setFooter({ text: `Page 1 of ${pages.length}` });
+
+  const initial = await interaction.reply({
+    embeds: [embed],
+    components: buildNavButtons(0, pages.length, interaction.user.id),
+    fetchReply: true,
+    ephemeral: true,
+  });
+
+  if (pages.length <= 1) return;
+
+  const coll = initial.createMessageComponentCollector({
+    filter: i =>
+      i.customId.startsWith("safeUserList:") &&
+      i.user.id === interaction.user.id,
+    time: 3 * 60 * 1000,
+  });
+
+  coll.on("collect", async i => {
+    const [, action] = i.customId.split(":");
+    if (action === "prev") page = Math.max(page - 1, 0);
+    else if (action === "next") page = Math.min(page + 1, pages.length - 1);
+    else if (action === "first") page = 0;
+    else if (action === "last") page = pages.length - 1;
+
+    const updated = EmbedBuilder.from(embed)
+      .setDescription(pages[page].join("\n") || "*No safe users set.*")
+      .setFooter({ text: `Page ${page + 1} of ${pages.length}` });
+
+    await i.update({
+      embeds: [updated],
+      components: buildNavButtons(page, pages.length, interaction.user.id),
+    });
+  });
+
+  coll.on("end", () =>
+    initial.edit({ components: disableAllButtons(initial.components) })
+  );
+}
+
+/** MESSAGE-BASED safeuser */
 async function handleSafeUserMessageCommand(message, args) {
-  // e.g. >safeuser list
-  //      >safeuser add @User
-  //      >safeuser remove @User
   try {
-    // Check if the user has the required permissions. SPECIFICALLY check for the moderator role, not the administator role.
     const settings = (await getSettingsForGuild(message.guild.id)) || {};
     const isMod = message.member.roles.cache.has(settings.moderatorRoleId);
-    const isAdmin = message.guild.ownerId === message.member.id || message.member.roles.cache.has(settings.adminRoleId);
+    const isAdmin =
+      message.guild.ownerId === message.member.id ||
+      message.member.roles.cache.has(settings.adminRoleId);
 
     if (!isMod && !isAdmin) {
       return message.channel.send(
-        "> <❌> You do not have the required permissions to manage safe users. (CMD_ERR_008)"
+        "> <❌> You do not have permission to manage safe users. (CMD_ERR_008)"
       );
     }
 
@@ -62,30 +181,15 @@ async function handleSafeUserMessageCommand(message, args) {
     const guildId = message.guild.id;
 
     switch (subCmd) {
-      case "list": {
-        const safeUsers = settings.safeUsers || [];
-        if (safeUsers.length === 0) {
-          return message.channel.send("> **No safe users set.**");
-        }
-        // Convert user IDs to tags or placeholders
-        const userList = [];
-        for (const id of safeUsers) {
-          const member = await message.guild.members
-            .fetch(id)
-            .catch(() => null);
-          userList.push(member ? `@${member.user.tag}` : `Unknown(${id})`);
-        }
-        message.channel.send(`> **Safe Users:** ${userList.join(", ")}`);
-        break;
-      }
+      case "list":
+        return showSafeUserListMessage(message);
+
       case "add": {
-        // Changed from "set" to "add"
         if (!args[1]) {
           return message.channel.send(
             "> <❌> Usage: `>safeuser add @UserOrID`"
           );
         }
-        // Parse user mention/ID
         let userId = args[1].replace(/[<@!>]/g, "");
         const safeUsers = settings.safeUsers || [];
         if (safeUsers.includes(userId)) {
@@ -95,9 +199,11 @@ async function handleSafeUserMessageCommand(message, args) {
         }
         safeUsers.push(userId);
         await updateSettingsForGuild(guildId, { safeUsers }, message.guild);
-        message.channel.send(`> <✅> Marked user <@${userId}> as safe. This user will no longer be transcribed or filtered.`);
-        break;
+        return message.channel.send(
+          `> <✅> Marked <@${userId}> as safe. They will no longer be filtered or transcribed.`
+        );
       }
+
       case "remove": {
         if (!args[1]) {
           return message.channel.send(
@@ -110,19 +216,16 @@ async function handleSafeUserMessageCommand(message, args) {
         if (newArray.length === safeUsers.length) {
           return message.channel.send("> <❌> That user was not marked safe.");
         }
-        await updateSettingsForGuild(
-          guildId,
-          { safeUsers: newArray },
-          message.guild
+        await updateSettingsForGuild(guildId, { safeUsers: newArray }, message.guild);
+        return message.channel.send(
+          `> <✅> Removed <@${userId}> from safe users.`
         );
-        message.channel.send(`> <✅> Removed <@${userId}> from safe users.`);
-        break;
       }
+
       default:
-        message.channel.send(
+        return message.channel.send(
           "> <❌> Unknown subcommand. Use `>safeuser list|add|remove`."
         );
-        break;
     }
   } catch (error) {
     console.error(`[ERROR] handleSafeUserMessageCommand: ${error.message}`);
@@ -132,7 +235,7 @@ async function handleSafeUserMessageCommand(message, args) {
   }
 }
 
-// (D) Slash-based safeuser commands
+/** SLASH-BASED safeuser */
 async function handlesafeUserslashCommand(interaction) {
   try {
     if (!interaction.memberPermissions.has(requiredManagerPermissions)) {
@@ -142,42 +245,16 @@ async function handlesafeUserslashCommand(interaction) {
       });
     }
 
-    const subCmd = interaction.options.getSubcommand(true); // list|add|remove
+    const subCmd = interaction.options.getSubcommand(true);
     const guildId = interaction.guild.id;
-    const settings = await getSettingsForGuild(guildId);
 
     switch (subCmd) {
-      case "list": {
-        const safeUsers = settings.safeUsers || [];
-        if (safeUsers.length === 0) {
-          return interaction.reply({
-            content: "> **No safe users set.**",
-            ephemeral: false,
-          });
-        }
-        const userList = await Promise.all(
-          safeUsers.map(async (id) => {
-            const member = await interaction.guild.members
-              .fetch(id)
-              .catch(() => null);
-            return member ? `@${member.user.tag}` : `Unknown(${id})`;
-          })
-        );
-        return interaction.reply({
-          content: `> **Safe Users:** ${userList.join(", ")}`,
-          ephemeral: false,
-        });
-      }
+      case "list":
+        return showSafeUserListSlash(interaction);
 
       case "add": {
-        // Changed from "set" to "add"
         const user = interaction.options.getUser("user", true);
-        if (!user) {
-          return interaction.reply({
-            content: "> <❌> Invalid user provided.",
-            ephemeral: true,
-          });
-        }
+        const settings = await getSettingsForGuild(guildId);
         const safeUsers = settings.safeUsers || [];
         if (safeUsers.includes(user.id)) {
           return interaction.reply({
@@ -188,19 +265,14 @@ async function handlesafeUserslashCommand(interaction) {
         safeUsers.push(user.id);
         await updateSettingsForGuild(guildId, { safeUsers }, interaction.guild);
         return interaction.reply({
-          content: `> <✅> Marked user <@${user.id}> as safe. This user will no longer be transcribed or filtered.`,
+          content: `> <✅> Marked <@${user.id}> as safe.`,
           ephemeral: false,
         });
       }
 
       case "remove": {
         const user = interaction.options.getUser("user", true);
-        if (!user) {
-          return interaction.reply({
-            content: "> <❌> Invalid user provided.",
-            ephemeral: true,
-          });
-        }
+        const settings = await getSettingsForGuild(guildId);
         const safeUsers = settings.safeUsers || [];
         const newArray = safeUsers.filter((id) => id !== user.id);
         if (newArray.length === safeUsers.length) {
@@ -209,11 +281,7 @@ async function handlesafeUserslashCommand(interaction) {
             ephemeral: true,
           });
         }
-        await updateSettingsForGuild(
-          guildId,
-          { safeUsers: newArray },
-          interaction.guild
-        );
+        await updateSettingsForGuild(guildId, { safeUsers: newArray }, interaction.guild);
         return interaction.reply({
           content: `> <✅> Removed <@${user.id}> from safe users.`,
           ephemeral: false,
