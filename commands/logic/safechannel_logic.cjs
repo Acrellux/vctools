@@ -58,7 +58,20 @@ async function showSafeChannelList(ctx) {
   const settings = (await getSettingsForGuild(guild.id)) || {};
   const safeChannels = settings.safeChannels || [];
 
-  const lines = safeChannels.map(id => `- <#${id}>`);
+  // build display lines, fetch each channel to get a valid mention or fallback text
+  const lines = await Promise.all(
+    safeChannels.map(async id => {
+      const channel = guild.channels.cache.get(id)
+        || await guild.channels.fetch(id).catch(() => null);
+      if (channel) {
+        // mention will render the channel's name in chat
+        return `- <#${channel.id}>`;
+      } else {
+        return `- \`[deleted channel]\` (\`${id}\`)`;
+      }
+    })
+  );
+
   const pages = paginateList(lines);
   let page = 0;
 
@@ -67,8 +80,9 @@ async function showSafeChannelList(ctx) {
     .setDescription(pages[0]?.join("\n") || "*No safe channels set.*")
     .setFooter({ text: `Page 1 of ${pages.length}` });
 
-  const initialComponents =
-    pages.length > 1 ? buildNavButtons(0, pages.length, userId) : [];
+  const initialComponents = pages.length > 1
+    ? buildNavButtons(0, pages.length, userId)
+    : [];
 
   let msg;
   if (isInteraction) {
@@ -76,20 +90,20 @@ async function showSafeChannelList(ctx) {
       msg = await ctx.editReply({
         embeds: [embed],
         components: initialComponents,
-        fetchReply: true
+        fetchReply: true,
       });
     } else {
       msg = await ctx.reply({
         embeds: [embed],
         components: initialComponents,
         fetchReply: true,
-        ephemeral: false
+        ephemeral: false,      // show publicly, not ephemeral
       });
     }
   } else {
     msg = await ctx.channel.send({
       embeds: [embed],
-      components: initialComponents
+      components: initialComponents,
     });
   }
 
@@ -99,7 +113,7 @@ async function showSafeChannelList(ctx) {
     filter: i =>
       i.customId.startsWith("safeChannelList:") &&
       i.user.id === userId,
-    time: 3 * 60 * 1000
+    time: 3 * 60 * 1000,
   });
 
   collector.on("collect", async i => {
@@ -115,7 +129,7 @@ async function showSafeChannelList(ctx) {
 
     await i.update({
       embeds: [updated],
-      components: buildNavButtons(page, pages.length, userId)
+      components: buildNavButtons(page, pages.length, userId),
     });
   });
 
@@ -147,7 +161,9 @@ async function handleSafeChannelMessageCommand(message, args) {
     const id = args[1].replace(/[<#>]/g, "");
     const arr = settings.safeChannels || [];
     if (arr.includes(id)) {
-      return message.channel.send("> <❇️> That channel is already marked safe.");
+      return message.channel.send(
+        "> <❇️> That channel is already marked safe."
+      );
     }
     arr.push(id);
     await updateSettingsForGuild(guildId, { safeChannels: arr }, message.guild);
@@ -156,13 +172,17 @@ async function handleSafeChannelMessageCommand(message, args) {
 
   if (sub === "remove") {
     if (!args[1]) {
-      return message.channel.send("> <❌> Usage: `>safechannel remove #Channel`");
+      return message.channel.send(
+        "> <❌> Usage: `>safechannel remove #Channel`"
+      );
     }
     const id = args[1].replace(/[<#>]/g, "");
     const arr = settings.safeChannels || [];
     const newArr = arr.filter(c => c !== id);
     if (newArr.length === arr.length) {
-      return message.channel.send("> <❌> That channel was not marked safe.");
+      return message.channel.send(
+        "> <❌> That channel was not marked safe."
+      );
     }
     await updateSettingsForGuild(guildId, { safeChannels: newArr }, message.guild);
     return message.channel.send(`> <✅> Removed <#${id}> from safe channels.`);
@@ -178,7 +198,7 @@ async function handlesafeChannelslashCommand(interaction) {
   if (!interaction.memberPermissions.has(requiredManagerPermissions)) {
     return interaction.reply({
       content: "> <❌> You lack permission to manage safe channels.",
-      ephemeral: true
+      ephemeral: true,
     });
   }
 
@@ -196,14 +216,14 @@ async function handlesafeChannelslashCommand(interaction) {
     if (arr.includes(channel.id)) {
       return interaction.reply({
         content: "> <❇️> That channel is already marked safe.",
-        ephemeral: true
+        ephemeral: true,
       });
     }
     arr.push(channel.id);
     await updateSettingsForGuild(guildId, { safeChannels: arr }, interaction.guild);
     return interaction.reply({
       content: `> <✅> Marked <#${channel.id}> as safe.`,
-      ephemeral: false
+      ephemeral: false,
     });
   }
 
@@ -214,19 +234,19 @@ async function handlesafeChannelslashCommand(interaction) {
     if (newArr.length === arr.length) {
       return interaction.reply({
         content: "> <❇️> That channel was not marked safe.",
-        ephemeral: true
+        ephemeral: true,
       });
     }
     await updateSettingsForGuild(guildId, { safeChannels: newArr }, interaction.guild);
     return interaction.reply({
       content: `> <✅> Removed <#${channel.id}> from safe channels.`,
-      ephemeral: false
+      ephemeral: false,
     });
   }
 
   return interaction.reply({
     content: "> <❌> Unknown subcommand. Use list|add|remove.",
-    ephemeral: true
+    ephemeral: true,
   });
 }
 
