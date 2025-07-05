@@ -102,7 +102,13 @@ async function showSafeUserList(ctx) {
 
     await i.update({ embeds: [updated], components: buildNavButtons(page, pages.length, userId) });
   });
-  coll.on("end", () => msg.edit({ components: disableAllButtons(msg.components) }));
+  coll.on("end", async () => {
+    try {
+      await msg.edit({ components: disableAllButtons(msg.components) });
+    } catch (err) {
+      if (err.code !== 10008) console.error("Failed to disable buttons:", err);
+    }
+  });
 }
 
 /** MESSAGE-BASED safeuser **/
