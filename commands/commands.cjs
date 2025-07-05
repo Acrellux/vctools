@@ -302,7 +302,9 @@ async function onInteractionCreate(interaction) {
       }
 
       // fallback to any other interactions
-      await handleAllInteractions(interaction);
+      if (!interaction.replied && !interaction.deferred) {
+        await handleAllInteractions(interaction);
+      }
     }
   } catch (error) {
     console.error(`[ERROR] onInteractionCreate failed: ${error.message}`);
