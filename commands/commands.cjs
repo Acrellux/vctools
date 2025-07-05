@@ -276,13 +276,13 @@ async function onInteractionCreate(interaction) {
 
       // — unified list buttons —
       if (interaction.customId.startsWith("safeUserList:")) {
-        return await showSafeUserList(interaction);
+        return showSafeUserList(interaction);
       }
       if (interaction.customId.startsWith("safeChannelList:")) {
-        return await showSafeChannelList(interaction);
+        return showSafeChannelList(interaction);
       }
       if (interaction.customId.startsWith("notifyList:")) {
-        return await showNotifyList(interaction);
+        return showNotifyList(interaction);
       }
 
       // init flows
