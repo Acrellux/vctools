@@ -271,18 +271,18 @@ async function onInteractionCreate(interaction) {
         interaction.customId.startsWith("report:open:") ||
         interaction.customId.startsWith("activity:open:")
       ) {
-        return handleReportInteractions(interaction);
+        return await handleReportInteractions(interaction);
       }
 
       // — unified list buttons —
       if (interaction.customId.startsWith("safeUserList:")) {
-        return showSafeUserList(interaction);
+        return await showSafeUserList(interaction);
       }
       if (interaction.customId.startsWith("safeChannelList:")) {
-        return showSafeChannelList(interaction);
+        return await showSafeChannelList(interaction);
       }
       if (interaction.customId.startsWith("notifyList:")) {
-        return showNotifyList(interaction);
+        return await showNotifyList(interaction);
       }
 
       // init flows
