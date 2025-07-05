@@ -70,10 +70,12 @@ const {
 const {
   handleSafeUserMessageCommand,
   handlesafeUserslashCommand,
+  showSafeUserListMessage,
 } = require("./logic/safeuser_logic.cjs");
 const {
   handleSafeChannelMessageCommand,
   handlesafeChannelslashCommand,
+  showSafeChannelListMessage,
 } = require("./logic/safechannel_logic.cjs");
 const {
   handleReportMessageCommand,
@@ -93,6 +95,7 @@ const {
   handleNotifySlashCommand,
   handleNotifyFlow,
   showNotifyHubUI,
+  showNotifyList,
 } = require("./logic/notify_logic.cjs");
 const { handleRebootCommand } = require("./logic/reboot_logic.cjs");
 const {
@@ -283,6 +286,12 @@ async function onInteractionCreate(interaction) {
         interaction.customId.startsWith("activity:open:")
       ) {
         return handleReportInteractions(interaction);
+      } else if (interaction.customId.startsWith("safeUserList:")) {
+        return showSafeUserListMessage(interaction);
+      } else if (interaction.customId.startsWith("safeChannelList:")) {
+        return showSafeChannelListMessage(interaction);
+      } else if (interaction.customId.startsWith("notifyList:")) {
+        return showNotifyList(interaction);
       } else if (interaction.customId.startsWith("init:")) {
         const [, action] = interaction.customId.split(":");
         const context = interactionContexts.get(interaction.user.id);

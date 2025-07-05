@@ -321,4 +321,5 @@ async function handlesafeChannelslashCommand(interaction) {
 module.exports = {
   handleSafeChannelMessageCommand,
   handlesafeChannelslashCommand,
+  showSafeChannelListMessage,
 };

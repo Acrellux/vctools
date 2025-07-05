@@ -308,4 +308,5 @@ async function handlesafeUserslashCommand(interaction) {
 module.exports = {
   handleSafeUserMessageCommand,
   handlesafeUserslashCommand,
+  showSafeUserListMessage,
 };

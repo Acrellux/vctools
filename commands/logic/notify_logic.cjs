@@ -917,4 +917,5 @@ module.exports = {
   handleNotifyFlow,
   handleNotifyMessageCommand,
   handleNotifySlashCommand,
+  showNotifyList,
 };
