@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 const commands = require("./commands/commands.cjs");
-const { ChannelType, Events, AuditLogEvent, PermissionFlagsBits } = require("discord.js");
+const { ChannelType, AuditLogEvent, PermissionFlagsBits } = require("discord.js");
 const {
   joinChannel,
   audioListeningFunctions
