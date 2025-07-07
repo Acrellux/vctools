@@ -515,76 +515,69 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   }
 });
 
-// Handle guild joins  
+// Handle guild create event
 client.on(Events.GuildCreate, async (guild) => {
   try {
     console.log(`[INFO] Joined a new guild: ${guild.name} (${guild.id})`);
-    const botMember = await guild.members.fetch(client.user.id);
-    if (botMember.roles.highest.position !== guild.roles.cache.size - 1) {
-      const systemChannel = guild.systemChannel;
-      if (
-        systemChannel &&
-        systemChannel.permissionsFor(botMember).has("SendMessages")
-      ) {
-        await systemChannel.send(
-          "Please **move my role up the hierarchy** in order for me to successfully operate in this server!"
-        );
-      } else {
-        console.log(
-          "[WARN] No system channel found or I cannot send messages there. Attempting to notify the inviter."
-        );
-        const auditLogs = await guild.fetchAuditLogs({
-          type: Events.BotAdd,
-          limit: 1,
-        });
-        const inviteLog = auditLogs.entries.first();
-        const inviter = inviteLog?.executor;
-        if (inviter) {
-          try {
-            await inviter.send(
-              "Please **move my role up the hierarchy** in order for me to successfully operate in your server!"
-            );
-            console.log("[INFO] DM sent to inviter.");
-          } catch (dmError) {
-            console.error(
-              "[WARN] Failed to DM inviter. They may have DMs disabled for this server."
-            );
-          }
-        } else {
-          console.log("[WARN] Could not determine who invited the bot.");
-        }
-      }
-    }
+    const botMember = await guild.members.fetchMe();
+
+    // Fetch inviter from audit log
     const auditLogs = await guild.fetchAuditLogs({
-      type: Events.BotAdd,
+      type: AuditLogEvent.BotAdd,
       limit: 1,
     });
-    const inviteLog = auditLogs.entries.first();
-    const inviter = inviteLog?.executor;
-    if (inviter) {
-      const welcomeMessage = `
-<@${inviter.id}>, **Thank you** for adding me to ${guild.name}!
--# - To begin setup, type **>initialize ftt**
--# - Type **>help** for more assistance.
-`;
-      const systemChannel = guild.systemChannel;
-      if (
-        systemChannel &&
-        systemChannel.permissionsFor(botMember).has("SendMessages")
-      ) {
-        await systemChannel.send(welcomeMessage);
-      } else {
+    const inviter = auditLogs.entries.first()?.executor;
+
+    const welcomeMsg = inviter
+      ? `<@${inviter.id}>, **thank you** for adding me to **${guild.name}**!\nType \`>initialize ftt\` to begin setup.`
+      : `Thanks for adding me to **${guild.name}**! Type \`>initialize ftt\` to begin setup.`;
+
+    const hierarchyMsg = "Please **move my role up the hierarchy** so I can operate properly.";
+
+    // Find a text channel the bot can send messages in
+    const usableChannel = guild.channels.cache.find(
+      (channel) =>
+        channel.isTextBased() &&
+        channel
+          .permissionsFor(botMember)
+          ?.has(PermissionFlagsBits.SendMessages)
+    );
+
+    // Determine if the bot's role is too low
+    const isLowInHierarchy =
+      botMember.roles.highest.position < guild.roles.highest.position;
+
+    // Priority 1: warn about role placement
+    if (isLowInHierarchy) {
+      if (usableChannel) {
+        await usableChannel.send(hierarchyMsg);
+        console.log(`[INFO] Sent hierarchy warning in #${usableChannel.name}`);
+      } else if (inviter) {
         try {
-          await inviter.send(welcomeMessage);
-        } catch (dmError) {
-          console.error(
-            "[WARN] Failed to send welcome message via DM. Inviter may have DMs disabled for this server."
-          );
+          await inviter.send(hierarchyMsg);
+          console.log("[INFO] DM'd inviter about role hierarchy.");
+        } catch {
+          console.warn("[WARN] Couldn't DM inviter about role hierarchy.");
         }
       }
     }
+
+    // Priority 2: send welcome/setup message
+    if (usableChannel) {
+      await usableChannel.send(welcomeMsg);
+      console.log(`[INFO] Sent welcome message in #${usableChannel.name}`);
+    } else if (inviter) {
+      try {
+        await inviter.send(welcomeMsg);
+        console.log("[INFO] DM'd inviter welcome message.");
+      } catch {
+        console.warn("[WARN] Couldn't DM inviter welcome message.");
+      }
+    } else {
+      console.warn("[WARN] No available channel or inviter to message.");
+    }
   } catch (error) {
-    console.error(`[ERROR] Failed to handle guild join: ${error.message}`);
+    console.error(`[ERROR] Guild join handling failed: ${error.stack}`);
   }
 });
 
