@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 const commands = require("./commands/commands.cjs");
-const { ChannelType } = require("discord.js");
+const { ChannelType, Events, AuditLogEvent, PermissionFlagsBits } = require("discord.js");
 const {
   joinChannel,
   audioListeningFunctions
@@ -519,14 +519,26 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 client.on(Events.GuildCreate, async (guild) => {
   try {
     console.log(`[INFO] Joined a new guild: ${guild.name} (${guild.id})`);
-    const botMember = await guild.members.fetchMe();
 
-    // Fetch inviter from audit log
-    const auditLogs = await guild.fetchAuditLogs({
-      type: AuditLogEvent.BotAdd,
-      limit: 1,
-    });
-    const inviter = auditLogs.entries.first()?.executor;
+    const botMember = await guild.members.fetchMe();
+    console.log("[DEBUG] Bot member fetched.");
+
+    // Ensure channel cache is fully populated
+    await guild.channels.fetch();
+    console.log("[DEBUG] Channels fetched.");
+
+    // Try to fetch the inviter
+    let inviter = null;
+    try {
+      const auditLogs = await guild.fetchAuditLogs({
+        type: AuditLogEvent.BotAdd,
+        limit: 1,
+      });
+      inviter = auditLogs.entries.first()?.executor;
+      console.log("[DEBUG] Inviter fetched:", inviter?.tag || "None");
+    } catch (e) {
+      console.warn("[WARN] Could not fetch audit logs:", e.message);
+    }
 
     const welcomeMsg = inviter
       ? `<@${inviter.id}>, **thank you** for adding me to **${guild.name}**!\nType \`>initialize ftt\` to begin setup.`
@@ -534,7 +546,7 @@ client.on(Events.GuildCreate, async (guild) => {
 
     const hierarchyMsg = "Please **move my role up the hierarchy** so I can operate properly.";
 
-    // Find a text channel the bot can send messages in
+    // Find first usable text channel
     const usableChannel = guild.channels.cache.find(
       (channel) =>
         channel.isTextBased() &&
@@ -542,12 +554,14 @@ client.on(Events.GuildCreate, async (guild) => {
           .permissionsFor(botMember)
           ?.has(PermissionFlagsBits.SendMessages)
     );
+    console.log("[DEBUG] Usable channel:", usableChannel?.name || "None");
 
-    // Determine if the bot's role is too low
+    // Check if bot is too low in role hierarchy
     const isLowInHierarchy =
       botMember.roles.highest.position < guild.roles.highest.position;
+    console.log("[DEBUG] Role hierarchy check:", isLowInHierarchy);
 
-    // Priority 1: warn about role placement
+    // Priority 1: hierarchy warning
     if (isLowInHierarchy) {
       if (usableChannel) {
         await usableChannel.send(hierarchyMsg);
@@ -562,7 +576,7 @@ client.on(Events.GuildCreate, async (guild) => {
       }
     }
 
-    // Priority 2: send welcome/setup message
+    // Priority 2: welcome/setup message
     if (usableChannel) {
       await usableChannel.send(welcomeMsg);
       console.log(`[INFO] Sent welcome message in #${usableChannel.name}`);
@@ -576,6 +590,7 @@ client.on(Events.GuildCreate, async (guild) => {
     } else {
       console.warn("[WARN] No available channel or inviter to message.");
     }
+
   } catch (error) {
     console.error(`[ERROR] Guild join handling failed: ${error.stack}`);
   }
