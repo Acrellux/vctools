@@ -646,7 +646,7 @@ async function handleInitializeFlow(interaction, mode, action) {
         content: `> <✅> **Voice Channel Moderator role set to: ${role.name}.**
             
 > <✅> **\`ftt\` Initialization Complete!**
-You've finished initializing everything. You can modify transcription, error logging, and staff roles later inside \`settings\`. There are also extra features that you can learn about in the \`user guide\`.`,
+You've finished initializing everything. You can modify transcription, error logging, and staff roles later inside \`settings\`. There are also extra features that you can learn more about in the **[User Guide](https://vctools.app/user-guide)**.`,
         components: [],
       });
       return;
