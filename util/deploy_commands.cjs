@@ -49,51 +49,6 @@ const commands = [
             )
         )
     )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName("set-channel")
-        .setDescription("Set channels for logging features.")
-        .addStringOption((option) =>
-          option
-            .setName("type")
-            .setDescription("Type of logging channel.")
-            .setRequired(true)
-            .addChoices(
-              { name: "Transcription Logs", value: "transcription" },
-              { name: "Error Logs", value: "errorlogs" }
-            )
-        )
-        .addChannelOption((option) =>
-          option
-            .setName("channel")
-            .setDescription("The channel to set.")
-            .setRequired(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName("set-role")
-        .setDescription("Set roles for permissions.")
-        .addStringOption((option) =>
-          option
-            .setName("type")
-            .setDescription("Role type to set.")
-            .setRequired(true)
-            .addChoices(
-              { name: "Transcription Access", value: "transcription" },
-              { name: "Error Logs Access", value: "errorlogs" },
-              { name: "VC Ping Role", value: "vc" },
-              { name: "Admin Role", value: "admin" },
-              { name: "Moderator Role", value: "moderator" }
-            )
-        )
-        .addRoleOption((option) =>
-          option
-            .setName("role")
-            .setDescription("The role to assign.")
-            .setRequired(true)
-        )
-    )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   // ==============================

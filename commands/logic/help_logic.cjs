@@ -108,14 +108,7 @@ Of course, there are also privacy settings to control who can see your activity 
 - \`settings errorlogs\` - Configure error logging settings.
 - \`settings bot\` - View and modify bot settings, including admin and moderator roles.
 - \`settings vc\` - View and modify voice channel settings, including VC event logging.
-- \`settings toggle transcription\` - Enable or disable transcription.
-- \`settings set-channel transcription <#channel>\` - Set the transcription logs channel.
-- \`settings set-role transcription <@role>\` - Set the role for transcription log access.
-- \`settings prefix\` - Configure command prefixes for the bot.
-> **Usage Example:**
-- \`settings toggle transcription\`
-- \`settings set-channel transcription #transcription-logs\`
-- \`settings set-role transcription @TranscriptionAccess\``,
+- \`settings prefix\` - Configure command prefixes for the bot.`,
 
   safeuser: `## **VC Tools ◈ Help ◈ Safeuser**
 > **Safeuser Commands:**
