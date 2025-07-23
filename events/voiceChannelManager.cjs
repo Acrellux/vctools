@@ -788,15 +788,28 @@ function audioListeningFunctions(connection, guild) {
     console.log(`[DEBUG] STOP triggered for ${userId}`);
     if (!currentlySpeaking.has(userId)) return;
     currentlySpeaking.delete(userId);
+
+    // ── HARD STOP audio pipeline so writer can close ──
+    if (userSubscriptions[userId]) {
+      try { userSubscriptions[userId].destroy(); } catch (_) { }
+      delete userSubscriptions[userId];
+    }
+    if (outputStreams[userId] && !outputStreams[userId].closed) {
+      try { outputStreams[userId].end(); } catch (_) { }
+    }
+    // ────────────────────────────────────────────────────
+
     const member = guild.members.cache.get(userId);
     const chanId = member?.voice?.channel?.id || null;
     const unique = userAudioIds[userId];
-    if (!unique) return;                               // never recorded
+    if (!unique) return;                             // never recorded
 
     /* schedule finalisation after GRACE_PERIOD_MS of silence */
     const wait = GRACE_PERIOD_MS - (Date.now() - (userLastSpokeTime[userId] || 0));
     perUserSilenceTimer[userId] = setTimeout(() => {
-      if (!currentlySpeaking.has(userId)) finalizeUserAudio(userId, guild, unique, chanId);
+      if (!currentlySpeaking.has(userId)) {
+        finalizeUserAudio(userId, guild, unique, chanId);
+      }
       clearTimeout(perUserSilenceTimer[userId]);
       delete perUserSilenceTimer[userId];
     }, wait > 0 ? wait : 0);
@@ -815,25 +828,33 @@ function audioListeningFunctions(connection, guild) {
     const pcm = `${base}.pcm`;
     const wav = `${base}.wav`;
 
+    // 1. Make sure the writer is fully closed
+    const writer = outputStreams[userId];
+    if (writer && !writer.closed) {
+      await new Promise((resolve) => {
+        writer.once("close", resolve);
+        writer.end();          // triggers 'finish' ➜ 'close'
+      }).catch(() => { /* ignore */ });
+    }
+
     try {
-      /* skip if no file or trivial length */
+      // 2. Skip tiny/incomplete files
       if (!fs.existsSync(pcm) || fs.statSync(pcm).size < 2048) {
-        await safeDeleteFile(pcm);
+        await transcription.safeDeleteFile(pcm);
         cleanup(userId);
         return;
       }
 
-      /* convert + transcribe */
+      // 3. Convert ➜ Transcribe ➜ Post
       await convertOpusToWav(pcm, wav);
       const text = await transcribeAudio(wav);
-      if (text) {
-        await postTranscription(guild, userId, text, channelId);
-      }
+      if (text) await postTranscription(guild, userId, text, channelId);
     } catch (err) {
-      console.error(`[FINALIZE] user=${userId} → ${err.message}`);
+      console.error(`[FINALIZE] user=${userId} ➜ ${err.message}`);
     } finally {
-      await safeDeleteFile(pcm);
-      await safeDeleteFile(wav);
+      // 4. Remove temp files
+      await transcription.safeDeleteFile(pcm);
+      await transcription.safeDeleteFile(wav);
       cleanup(userId);
     }
   }
