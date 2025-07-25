@@ -30,6 +30,16 @@ const {
 } = require("discord.js");
 const { clearVCState } = require("../util/vc_state.cjs");
 
+// Supabase initialization
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+// We'll track when each user joined
+const userJoinTimes = new Map();
+
 EventEmitter.defaultMaxListeners = 50;
 
 /************************************************************************************************
@@ -478,6 +488,22 @@ async function execute(oldState, newState, client) {
   // Case 2: User joined a channel
   if (!oldState.channelId && newState.channelId) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
+
+    const entryLog = {
+      guild_id: newState.guild.id,
+      user_id: newState.id,
+      duration: 0,
+    };
+
+    const { error: joinError } = await supabase
+      .from('voice_activity')
+      .insert([entryLog], { returning: 'minimal' });
+
+    if (joinError) {
+      console.error('[Heatmap] Supabase join insert failed:', joinError.message, joinError.details);
+    }
+
+    userJoinTimes.set(userId, Date.now())
     if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
       const activityChannel = guild.channels.cache.get(
         settings.vcLoggingChannelId
@@ -565,6 +591,24 @@ Inside this voice call, your voice will be transcribed into text. Please click t
   // Case 3: User left a channel
   if (oldState.channelId && !newState.channelId) {
     console.log(`[DEBUG] User ${userId} left channel: ${oldState.channelId}`);
+
+    const startMs = userJoinTimes.get(userId) || Date.now();
+    const durationSec = Math.floor((Date.now() - startMs) / 1000);
+    userJoinTimes.delete(userId);
+
+    const { data, error } = await supabase
+      .from('voice_activity')
+      .insert(
+        [{ guild_id: guild.id, user_id: userId, duration: durationSec }],
+        { returning: 'minimal' }  // or 'representation' if you want the full row back
+      );
+
+    if (error) {
+      console.error('[Heatmap] Supabase insert failed:', error.message, error.details);
+    } else {
+      console.log('[Heatmap] Insert succeeded:', data);
+    }
+
     if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
       const activityChannel = guild.channels.cache.get(
         settings.vcLoggingChannelId
