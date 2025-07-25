@@ -59,6 +59,7 @@ const processingQueue = [];
 const outputStreams = {};
 const userSubscriptions = {};
 const userAudioIds = {}; // userId -> unique
+const pipelines = new Map(); // userId -> { audioStream, decoder, pcmWriter }
 
 /************************************************************************************************
  * REUSABLE TRANSCRIPTION FUNCTIONS
@@ -763,6 +764,40 @@ function audioListeningFunctions(connection, guild) {
   const userLastSpokeTime = {};               // epoch ms of last packet
   const perUserSilenceTimer = {};             // timeout IDs keyed by user
 
+  function stopUserPipeline(userId) {
+    const p = pipelines.get(userId);
+    if (p) {
+      const { audioStream, decoder, pcmWriter } = p;
+
+      // disconnect the pipeline first
+      try { audioStream?.unpipe?.(decoder); } catch (_) { }
+      try { decoder?.unpipe?.(pcmWriter); } catch (_) { }
+
+      // kill upstream so nothing else writes
+      try { audioStream?.destroy?.(); } catch (_) { }
+      try { decoder?.destroy?.(); } catch (_) { }
+
+      // end the writer exactly once
+      if (pcmWriter && !pcmWriter.closed) {
+        try { pcmWriter.end(); } catch (_) { }
+      }
+
+      pipelines.delete(userId);
+    }
+
+    // clean your old registries too
+    if (userSubscriptions[userId]) {
+      try { userSubscriptions[userId].destroy?.(); } catch (_) { }
+      delete userSubscriptions[userId];
+    }
+
+    if (outputStreams[userId] && !outputStreams[userId].closed) {
+      // usually already closed above, but guard anyway
+      try { outputStreams[userId].end(); } catch (_) { }
+    }
+    delete outputStreams[userId];
+  }
+
   /* ───────────────────────── START / STOP HANDLERS ───────────────────────── */
 
   receiver.speaking.setMaxListeners(100);
@@ -808,6 +843,7 @@ function audioListeningFunctions(connection, guild) {
     } catch (err) {
       console.warn(`[PIPE ERROR] ${err.message}`);
     }
+    pipelines.set(userId, { audioStream, decoder, pcmWriter });
     outputStreams[userId] = pcmWriter;
 
     // Silence-based fallback if stop never fires
@@ -822,6 +858,7 @@ function audioListeningFunctions(connection, guild) {
 
         if (currentlySpeaking.has(userId)) {
           currentlySpeaking.delete(userId);
+          stopUserPipeline(userId);
           finalizeUserAudio(userId, guild, unique, chanId);
         }
       }
@@ -833,15 +870,7 @@ function audioListeningFunctions(connection, guild) {
     if (!currentlySpeaking.has(userId)) return;
     currentlySpeaking.delete(userId);
 
-    // ── HARD STOP audio pipeline so writer can close ──
-    if (userSubscriptions[userId]) {
-      try { userSubscriptions[userId].destroy(); } catch (_) { }
-      delete userSubscriptions[userId];
-    }
-    if (outputStreams[userId] && !outputStreams[userId].closed) {
-      try { outputStreams[userId].end(); } catch (_) { }
-    }
-    // ────────────────────────────────────────────────────
+    stopUserPipeline(userId);
 
     const member = guild.members.cache.get(userId);
     const chanId = member?.voice?.channel?.id || null;
