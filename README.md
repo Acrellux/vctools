@@ -29,3 +29,5 @@ VC Tools is a helpful bot that can assist both members and moderators in voice c
 https://vctools.app/user-guide
 ## Privacy Policy
 https://vctools.app/privacy
+## Donate
+https://ko-fi.com/acrellux
