@@ -50,8 +50,6 @@ const helpTopics = {
 - \`settings\` - Open the settings menu.
 - \`transcription\` - Enable/disable transcription.
 - \`errorlogs\` - Enable/disable error logging.
-- \`channel\` - Set the transcription logs channel.
-- \`role\` - Set the role for transcription log access.
 - \`initialize\` - Show initialization topics.
 - \`safeuser\` - Manage users that should not be transcribed.
 - \`safechannel\` - Manage voice channels that should not be transcribed.

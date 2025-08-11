@@ -180,7 +180,7 @@ const commands = [
             .setRequired(false)
         )
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMembers),
+    .setDefaultMemberPermissions(PermissionFlagsBits.MuteMembers),
 
   // ==============================
   // MOD COMMAND

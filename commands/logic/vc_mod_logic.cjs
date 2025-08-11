@@ -99,8 +99,8 @@ async function sendVCLog(guild, settings, issuer, member, actionVerb) {
 
 async function handleVCMessageCommand(message, args = []) {
   try {
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
-      return message.reply("> <❇️> No manage members perm.");
+    if (!message.member.permissions.has(PermissionsBitField.Flags.MuteMembers)) {
+      return message.reply("> <❇️> Lacking permissions. (CMD_ERR_008)");
     }
     const sub = (args[0] || "").toLowerCase();
     const guild = message.guild;
@@ -166,8 +166,8 @@ async function handleVCMessageCommand(message, args = []) {
 
 async function handleVCSlashCommand(interaction) {
   try {
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMembers)) {
-      return interaction.reply({ content: "> <❇️> Missing Manage Members perm.", ephemeral: true });
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.MuteMembers)) {
+      return interaction.reply({ content: "> <❇️> Missing permissions. (CMD_ERR_008)", ephemeral: true });
     }
 
     const sub = interaction.options.getSubcommand();
@@ -176,9 +176,6 @@ async function handleVCSlashCommand(interaction) {
     const settings = await getSettingsForGuild(guild.id);
 
     if (sub === "drain") {
-      if (!issuer.voice.channel) {
-        return interaction.reply({ content: "> <❇️> You must join a VC.", ephemeral: true });
-      }
       issuer.voice.channel.members.forEach(m => m.voice.disconnect(`Drained by ${interaction.user.tag}`).catch(() => { }));
       return interaction.reply({ content: `> <🕳️> Drained ${issuer.voice.channel.name}.`, ephemeral: true });
     }
