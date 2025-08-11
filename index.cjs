@@ -523,7 +523,7 @@ client.on(Events.GuildCreate, async (guild) => {
     const botMember = await guild.members.fetchMe();
     await guild.channels.fetch();
 
-    // Get inviter if possible
+    // Try to fetch the inviter (who added the bot)
     let inviter = null;
     let inviterMember = null;
     try {
@@ -533,9 +533,7 @@ client.on(Events.GuildCreate, async (guild) => {
       });
       inviter = auditLogs.entries.first()?.executor ?? null;
       if (inviter) {
-        try {
-          inviterMember = await guild.members.fetch(inviter.id);
-        } catch { }
+        try { inviterMember = await guild.members.fetch(inviter.id); } catch { }
       }
     } catch (e) {
       console.warn("[WARN] Could not fetch audit logs:", e.message);
@@ -547,16 +545,27 @@ client.on(Events.GuildCreate, async (guild) => {
 
     const hierarchyMsg = "Please **move my role up the hierarchy** so I can operate properly.";
 
-    // ─── Helpers ───
+    // ─── Helpers (scoped here for drop-in) ───
     const { ChannelType, PermissionFlagsBits, PermissionsBitField, SnowflakeUtil } = require("discord.js");
 
     function canBotSend(channel, memberToViewCheck = null) {
       if (!channel || typeof channel.permissionsFor !== "function") return false;
-      const mePerms = channel.permissionsFor(botMember);
+
+      const mePerms =
+        channel.permissionsFor(channel.guild.members.me) ||
+        channel.permissionsFor(botMember);
       if (!mePerms) return false;
-      const canView = mePerms.has(PermissionFlagsBits.ViewChannel);
-      const canSend = channel.isTextBased?.() && mePerms.has(PermissionFlagsBits.SendMessages);
+
+      const canView =
+        mePerms.has(PermissionFlagsBits.ViewChannel) ||
+        mePerms.has(PermissionsBitField.Flags.ViewChannel);
+      const canSend =
+        channel.isTextBased?.() &&
+        (mePerms.has(PermissionFlagsBits.SendMessages) ||
+          mePerms.has(PermissionsBitField.Flags.SendMessages));
+
       if (!canView || !canSend) return false;
+
       if (memberToViewCheck) {
         const memPerms = channel.permissionsFor(memberToViewCheck);
         if (!memPerms || !memPerms.has(PermissionFlagsBits.ViewChannel)) return false;
@@ -574,30 +583,34 @@ client.on(Events.GuildCreate, async (guild) => {
       }
     }
 
+    // Find **most recent** channel where inviter spoke (best effort, rate-limit friendly)
     async function findMostRecentUserMessageChannel(guild, member, opts = {}) {
       const { channelScanLimit = 15, perChannelMessages = 25 } = opts;
+
       const candidates = guild.channels.cache.filter((c) => {
         const isText = c.type === ChannelType.GuildText;
         const isVoiceText = (c.type === ChannelType.GuildVoice) && c.isTextBased?.();
         if (!(isText || isVoiceText)) return false;
         return canBotSend(c, member);
       });
+
       const sorted = [...candidates.values()].sort((a, b) => {
         const ta = a.lastMessageId ? SnowflakeUtil.timestampFrom(a.lastMessageId) : 0;
         const tb = b.lastMessageId ? SnowflakeUtil.timestampFrom(b.lastMessageId) : 0;
-        return tb - ta;
+        return tb - ta; // newest first
       });
+
       for (let i = 0; i < Math.min(sorted.length, channelScanLimit); i++) {
         const ch = sorted[i];
         try {
           const msgs = await ch.messages.fetch({ limit: perChannelMessages });
           if (msgs.find((m) => m.author?.id === member.id)) return ch;
-        } catch { }
+        } catch { /* continue */ }
       }
       return null;
     }
 
-    async function findFirstVisibleTextChannelWithHistory(guild, member) {
+    async function findFirstVisibleTextChannelWithHistory(guild, memberCheck = null) {
       const channels = guild.channels.cache
         .filter((c) => c.isTextBased?.() && c.type === ChannelType.GuildText)
         .sort((a, b) => {
@@ -606,48 +619,41 @@ client.on(Events.GuildCreate, async (guild) => {
           const bP = b.parent ?? { rawPosition: -1 };
           return aP.rawPosition - bP.rawPosition;
         });
+
       for (const [, ch] of channels) {
-        if (!canBotSend(ch, member)) continue;
+        if (!canBotSend(ch, memberCheck || null)) continue;
         if (await channelHasPublicMessages(ch)) return ch;
       }
       return null;
     }
 
-    // ─── Pick one final target ───
-    let target = null; // can be a DM channel or a guild text channel
-    let isDM = false;
+    // ─── Choose ONE target for both messages (no DMs) ───
+    let target = null;
 
-    // 1) DM inviter if possible
-    if (inviter) {
-      try {
-        target = await inviter.createDM();
-        isDM = true;
-      } catch {
-        target = null;
-      }
+    // 1) Last place inviter spoke (if known)
+    if (inviterMember) {
+      target = await findMostRecentUserMessageChannel(guild, inviterMember, {
+        channelScanLimit: 15,
+        perChannelMessages: 25,
+      });
     }
 
-    // 2) If no DM, try recent channel inviter spoke in
-    if (!target && inviterMember) {
-      target = await findMostRecentUserMessageChannel(guild, inviterMember);
-    }
-
-    // 3) If still no target, first visible text channel with public messages
+    // 2) First visible text channel with public messages
     if (!target) {
       target = await findFirstVisibleTextChannelWithHistory(guild, inviterMember || null);
     }
 
-    // 4) If still no target, system channel
+    // 3) System channel
     if (!target && guild.systemChannel && canBotSend(guild.systemChannel, inviterMember || null)) {
       target = guild.systemChannel;
     }
 
-    // ─── Send both messages to the same target ───
     if (!target) {
-      console.warn("[WARN] No target available to send messages.");
+      console.warn("[WARN] No server location available to send messages.");
       return;
     }
 
+    // Send both messages to the SAME place
     const isLowInHierarchy = botMember.roles.highest.position < guild.roles.highest.position;
 
     if (isLowInHierarchy) {
