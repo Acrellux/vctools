@@ -157,19 +157,31 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
  */
 function createRoleDropdown(mode, guild, userId, currentRoleId) {
   const roleOptions = guild.roles.cache
-    .filter((r) => r.name !== "@everyone")
-    .map((r) => ({
+    .filter(r => r.name !== "@everyone" && !r.managed)
+    .map(r => ({
       label: `@${String(r.name).slice(0, 100)}`,
       value: String(r.id),
       default: String(r.id) === String(currentRoleId),
-    }));
+    }))
+    .slice(0, 25); // Discord limit
+
+  // Ensure there’s at least one option to prevent NaN in min/max
+  const safeOptions = roleOptions.length > 0
+    ? roleOptions
+    : [{
+      label: "No eligible roles found",
+      value: "placeholder-no-roles",
+      default: true
+    }];
+
+  const maxValues = Math.min(25, Math.max(1, safeOptions.length));
 
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`${mode}:select_log_viewers:${String(userId)}`)
     .setPlaceholder("Select a role...")
-    .setOptions(roleOptions)
     .setMinValues(1)
-    .setMaxValues(1);
+    .setMaxValues(maxValues)
+    .addOptions(safeOptions);
 
   return new ActionRowBuilder().addComponents(selectMenu);
 }
