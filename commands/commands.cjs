@@ -285,19 +285,49 @@ async function onInteractionCreate(interaction) {
         return showNotifyList(interaction);
       }
 
-      // init flows
+      // init flows (routes any init mode; protects by owner; seeds context if missing)
       if (interaction.customId.startsWith("init:")) {
-        const [, action] = interaction.customId.split(":");
-        const context = interactionContexts.get(interaction.user.id);
-        if (context?.mode === "init") {
+        const parts = interaction.customId.split(":"); // e.g. ["init","setup_transcription_yes","1234567890"]
+        const action = parts[1];
+        const ownerId = parts[2] ?? null;
+
+        // 🔒 Only the user who started the init flow can interact
+        if (ownerId && ownerId !== interaction.user.id) {
+          if (!interaction.deferred && !interaction.replied) {
+            await interaction.reply({
+              content: "> <❌> You cannot interact with this component. (INT_ERR_004)",
+              ephemeral: true,
+            });
+          }
+          return;
+        }
+
+        // 🧭 Get or seed context; don't require mode === "init"
+        let context = interactionContexts.get(interaction.user.id);
+        if (!context) {
+          context = { guildId: interaction.guild.id, mode: "init", initMethod: "ftt" };
+          interactionContexts.set(interaction.user.id, context);
+        }
+
+        try {
           switch (context.initMethod) {
             case "transcription":
               return await handleTranscriptionFlow(interaction, context.mode, action);
             case "staffroles":
               return await handleStaffRolesFlow(interaction, context.mode, action);
             default:
+              // default generic init (e.g., “ftt” path)
               return await handleInitializeFlow(interaction, context.mode, action);
           }
+        } catch (err) {
+          console.error("[ERROR] init flow router:", err);
+          if (!interaction.deferred && !interaction.replied) {
+            await interaction.reply({
+              content: "> <❌> Something went wrong handling that step. (INIT_ROUTER_ERR)",
+              ephemeral: true,
+            });
+          }
+          return;
         }
       }
 
