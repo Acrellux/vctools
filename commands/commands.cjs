@@ -286,6 +286,7 @@ async function onInteractionCreate(interaction) {
       }
 
       // init flows (routes any init mode; protects by owner; seeds context if missing)
+      // watchdog auto-acks slow handlers to avoid the "This interaction failed" toast
       if (interaction.customId.startsWith("init:")) {
         const parts = interaction.customId.split(":"); // e.g. ["init","setup_transcription_yes","1234567890"]
         const action = parts[1];
@@ -309,15 +310,26 @@ async function onInteractionCreate(interaction) {
           interactionContexts.set(interaction.user.id, context);
         }
 
+        // ⏱️ Watchdog: if no ack within ~2s, defer update to prevent toast
+        const watchdog = setTimeout(async () => {
+          try {
+            if (!interaction.deferred && !interaction.replied) {
+              await interaction.deferUpdate().catch(() => { });
+            }
+          } catch (_) { }
+        }, 2000);
+
         try {
           switch (context.initMethod) {
             case "transcription":
-              return await handleTranscriptionFlow(interaction, context.mode, action);
+              await handleTranscriptionFlow(interaction, context.mode, action);
+              break;
             case "staffroles":
-              return await handleStaffRolesFlow(interaction, context.mode, action);
+              await handleStaffRolesFlow(interaction, context.mode, action);
+              break;
             default:
-              // default generic init (e.g., “ftt” path)
-              return await handleInitializeFlow(interaction, context.mode, action);
+              await handleInitializeFlow(interaction, context.mode, action);
+              break;
           }
         } catch (err) {
           console.error("[ERROR] init flow router:", err);
@@ -327,8 +339,10 @@ async function onInteractionCreate(interaction) {
               ephemeral: true,
             });
           }
-          return;
+        } finally {
+          clearTimeout(watchdog);
         }
+        return;
       }
 
       // fallback to any other interactions
