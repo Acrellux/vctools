@@ -212,11 +212,11 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
       reset: "\u001b[0m",
     };
 
-    const timestamp = `[${now.toLocaleTimeString("en-US", {
+    const timestamp = `${now.toLocaleTimeString("en-US", {
       hour12: false,
       minute: "2-digit",
       second: "2-digit",
-    })}]`;
+    })}`;
 
     const topRole = member?.roles.highest?.name || "No Role";
     let roleColor = ansi.white;
