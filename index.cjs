@@ -534,10 +534,20 @@ client.on(Events.GuildCreate, async (guild) => {
         type: AuditLogEvent.BotAdd,
         limit: 1,
       });
-      inviter = auditLogs.entries.first()?.executor;
+      inviter = auditLogs.entries.first()?.executor ?? null;
       console.log("[DEBUG] Inviter fetched:", inviter?.tag || "None");
     } catch (e) {
       console.warn("[WARN] Could not fetch audit logs:", e.message);
+    }
+
+    // We may need a GuildMember for visibility checks / voice text, etc.
+    let inviterMember = null;
+    if (inviter) {
+      try {
+        inviterMember = await guild.members.fetch(inviter.id);
+      } catch {
+        // inviter might not share the guild or fetch failed; proceed without it
+      }
     }
 
     const welcomeMsg = inviter
@@ -546,49 +556,205 @@ client.on(Events.GuildCreate, async (guild) => {
 
     const hierarchyMsg = "Please **move my role up the hierarchy** so I can operate properly.";
 
-    // Find first usable text channel
-    const usableChannel = guild.channels.cache.find(
-      (channel) =>
-        channel.isTextBased() &&
-        channel
-          .permissionsFor(botMember)
-          ?.has(PermissionFlagsBits.SendMessages)
-    );
-    console.log("[DEBUG] Usable channel:", usableChannel?.name || "None");
+    // ───────────────────────────────────────────────────────────────────────────
+    // Helpers scoped here so you can drop-in replace just this block
+    // ───────────────────────────────────────────────────────────────────────────
+    const { ChannelType, PermissionFlagsBits, PermissionsBitField, SnowflakeUtil } = require("discord.js");
 
-    // Check if bot is too low in role hierarchy
-    const isLowInHierarchy =
-      botMember.roles.highest.position < guild.roles.highest.position;
-    console.log("[DEBUG] Role hierarchy check:", isLowInHierarchy);
+    function canBotSend(channel, memberToViewCheck = null) {
+      if (!channel || typeof channel.permissionsFor !== "function") return false;
 
-    // Priority 1: hierarchy warning
-    if (isLowInHierarchy) {
-      if (usableChannel) {
-        await usableChannel.send(hierarchyMsg);
-        console.log(`[INFO] Sent hierarchy warning in #${usableChannel.name}`);
-      } else if (inviter) {
-        try {
-          await inviter.send(hierarchyMsg);
-          console.log("[INFO] DM'd inviter about role hierarchy.");
-        } catch {
-          console.warn("[WARN] Couldn't DM inviter about role hierarchy.");
-        }
+      const mePerms =
+        channel.permissionsFor(channel.guild.members.me) ||
+        channel.permissionsFor(botMember);
+      if (!mePerms) return false;
+
+      const canView = mePerms.has(PermissionFlagsBits.ViewChannel) || mePerms.has(PermissionsBitField.Flags.ViewChannel);
+      const canSend = channel.isTextBased?.()
+        ? (mePerms.has(PermissionFlagsBits.SendMessages) || mePerms.has(PermissionsBitField.Flags.SendMessages))
+        : false;
+
+      if (!canView || !canSend) return false;
+
+      if (memberToViewCheck) {
+        const memPerms = channel.permissionsFor(memberToViewCheck);
+        if (!memPerms || !memPerms.has(PermissionFlagsBits.ViewChannel)) return false;
+      }
+      return true;
+    }
+
+    async function channelHasPublicMessages(channel) {
+      try {
+        if (!channel.isTextBased?.()) return false;
+        const msgs = await channel.messages.fetch({ limit: 1 });
+        return msgs?.size > 0;
+      } catch {
+        return false;
       }
     }
 
-    // Priority 2: welcome/setup message
-    if (usableChannel) {
-      await usableChannel.send(welcomeMsg);
-      console.log(`[INFO] Sent welcome message in #${usableChannel.name}`);
-    } else if (inviter) {
-      try {
-        await inviter.send(welcomeMsg);
-        console.log("[INFO] DM'd inviter welcome message.");
-      } catch {
-        console.warn("[WARN] Couldn't DM inviter welcome message.");
+    async function findMostRecentUserMessageChannel(guild, memberOrId, opts = {}) {
+      const { channelScanLimit = 15, perChannelMessages = 25 } = opts;
+      const memberId = typeof memberOrId === "string" ? memberOrId : memberOrId?.id;
+
+      // Candidate: #text + voice channels that support text, bot can send, and (if member is known) member can view
+      const candidates = guild.channels.cache.filter((c) => {
+        const isText = c.type === ChannelType.GuildText;
+        const isVoiceText = (c.type === ChannelType.GuildVoice) && c.isTextBased?.();
+        if (!(isText || isVoiceText)) return false;
+        return canBotSend(c, inviterMember || null);
+      });
+
+      const sorted = [...candidates.values()].sort((a, b) => {
+        const ta = a.lastMessageId ? SnowflakeUtil.timestampFrom(a.lastMessageId) : 0;
+        const tb = b.lastMessageId ? SnowflakeUtil.timestampFrom(b.lastMessageId) : 0;
+        return tb - ta;
+      });
+
+      for (let i = 0; i < Math.min(sorted.length, channelScanLimit); i++) {
+        const ch = sorted[i];
+        try {
+          const msgs = await ch.messages.fetch({ limit: perChannelMessages });
+          const hit = msgs.find((m) => m.author?.id === memberId);
+          if (hit) return ch;
+        } catch {
+          // continue
+        }
       }
-    } else {
-      console.warn("[WARN] No available channel or inviter to message.");
+      return null;
+    }
+
+    async function findFirstVisibleTextChannelWithHistory(guild, memberCheck = null) {
+      const channels = guild.channels.cache
+        .filter((c) => c.isTextBased?.() && c.type === ChannelType.GuildText)
+        .sort((a, b) => {
+          if (a.parentId === b.parentId) return a.rawPosition - b.rawPosition;
+          const aP = a.parent ?? { rawPosition: -1 };
+          const bP = b.parent ?? { rawPosition: -1 };
+          return aP.rawPosition - bP.rawPosition;
+        });
+
+      for (const [, ch] of channels) {
+        if (!canBotSend(ch, memberCheck || null)) continue;
+        if (await channelHasPublicMessages(ch)) return ch;
+      }
+      return null;
+    }
+
+    async function sendInBestChannelFallback(messageContent, opts = {}) {
+      const { preferChannelFirst = false, alsoDMUser = null } = opts;
+
+      // Candidate channels (ordered by preference when preferring channels)
+      // 1) Most recent channel inviter spoke in
+      // 2) First visible text channel with public messages
+      // 3) System channel
+      const tryChannelSend = async () => {
+        // Last place inviter spoke (only if we know inviter)
+        if (inviter) {
+          try {
+            const recent = await findMostRecentUserMessageChannel(guild, inviter.id, {
+              channelScanLimit: 15,
+              perChannelMessages: 25,
+            });
+            if (recent) {
+              await recent.send(messageContent);
+              console.log(`[INFO] Sent message in recent #${recent.name}`);
+              return true;
+            }
+          } catch (e) {
+            console.warn("[WARN] Recent-channel send failed:", e.message);
+          }
+        }
+
+        // First visible with public messages
+        try {
+          const ch = await findFirstVisibleTextChannelWithHistory(guild, inviterMember || null);
+          if (ch) {
+            await ch.send(messageContent);
+            console.log(`[INFO] Sent message in #${ch.name}`);
+            return true;
+          }
+        } catch (e) {
+          console.warn("[WARN] First-visible-with-history send failed:", e.message);
+        }
+
+        // System channel
+        const sys = guild.systemChannel;
+        if (sys && canBotSend(sys, inviterMember || null)) {
+          try {
+            await sys.send(messageContent);
+            console.log("[INFO] Sent message in system channel.");
+            return true;
+          } catch (e) {
+            console.warn("[WARN] System channel send failed:", e.message);
+          }
+        }
+
+        return false;
+      };
+
+      // Prefer a channel first (for hierarchy notice)
+      if (preferChannelFirst) {
+        const channelOk = await tryChannelSend();
+        if (channelOk) return true;
+
+        // Fallback to DM if requested
+        if (alsoDMUser) {
+          try {
+            await alsoDMUser.send(messageContent);
+            console.log("[INFO] DM sent as fallback.");
+            return true;
+          } catch {
+            console.warn("[WARN] DM fallback failed.");
+          }
+        }
+        return false;
+      }
+
+      // Prefer DM first (for welcome)
+      if (alsoDMUser) {
+        try {
+          await alsoDMUser.send(messageContent);
+          console.log("[INFO] DM sent to inviter.");
+          return true;
+        } catch {
+          console.warn("[WARN] DM to inviter failed.");
+        }
+      }
+
+      // Then try channels
+      return await tryChannelSend();
+    }
+    // ───────────────────────────────────────────────────────────────────────────
+
+    // Role hierarchy check (same logic): if we’re lower than someone else’s top role, warn them
+    const isLowInHierarchy = botMember.roles.highest.position < guild.roles.highest.position;
+    console.log("[DEBUG] Role hierarchy check:", isLowInHierarchy);
+
+    // Priority 1: hierarchy warning (prefer channel first, then DM inviter, then fallbacks)
+    if (isLowInHierarchy) {
+      const ok = await sendInBestChannelFallback(hierarchyMsg, {
+        preferChannelFirst: true,
+        alsoDMUser: inviter || null,
+      });
+      if (ok) {
+        console.log("[INFO] Sent hierarchy warning.");
+      } else {
+        console.warn("[WARN] Could not deliver hierarchy warning via any route.");
+      }
+    }
+
+    // Priority 2: welcome/setup message (prefer DM inviter, then fallbacks)
+    {
+      const ok = await sendInBestChannelFallback(welcomeMsg, {
+        preferChannelFirst: false,
+        alsoDMUser: inviter || null,
+      });
+      if (ok) {
+        console.log("[INFO] Delivered welcome/setup message.");
+      } else {
+        console.warn("[WARN] No available channel or inviter to message for welcome/setup.");
+      }
     }
 
   } catch (error) {

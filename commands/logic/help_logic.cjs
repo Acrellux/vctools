@@ -48,8 +48,6 @@ const helpTopics = {
 
   commands: `## **VC Tools ◈ Help ◈ Commands**
 - \`settings\` - Open the settings menu.
-- \`transcription\` - Enable/disable transcription.
-- \`errorlogs\` - Enable/disable error logging.
 - \`initialize\` - Show initialization topics.
 - \`safeuser\` - Manage users that should not be transcribed.
 - \`safechannel\` - Manage voice channels that should not be transcribed.
