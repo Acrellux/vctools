@@ -108,6 +108,8 @@ function createchannelIdropdown(mode, guild, userId, currentchannelId) {
       .setCustomId(`${mode}:select_logging_channel:${userId}`)
       .setPlaceholder("Choose a logging channel...")
       .setOptions(channelOptions)
+      .setMinValues(1)
+      .setMaxValues(1)
   );
 }
 
@@ -140,6 +142,8 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
       .setCustomId(`${mode}:select_error_logs_channel:${userId}`)
       .setPlaceholder("Choose an error logs channel...")
       .setOptions(channelOptions)
+      .setMinValues(1)
+      .setMaxValues(1)
   );
 }
 
