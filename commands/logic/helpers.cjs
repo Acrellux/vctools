@@ -157,7 +157,7 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
  */
 function createRoleDropdown(mode, guild, userId, currentRoleId) {
   const roleOptions = guild.roles.cache
-    .filter((r) => r.name !== "@everyone") // Exclude @everyone if needed
+    .filter((r) => r.name !== "@everyone")
     .map((r) => ({
       label: `@${String(r.name).slice(0, 100)}`,
       value: String(r.id),
@@ -167,7 +167,9 @@ function createRoleDropdown(mode, guild, userId, currentRoleId) {
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`${mode}:select_log_viewers:${userId}`)
     .setPlaceholder("Select a role...")
-    .setOptions(roleOptions);
+    .setOptions(roleOptions)
+    .setMinValues(1)
+    .setMaxValues(1);
 
   return new ActionRowBuilder().addComponents(selectMenu);
 }
@@ -182,9 +184,9 @@ function createRoleDropdown(mode, guild, userId, currentRoleId) {
  */
 function createErrorLogRoleDropdown(mode, guild, userId, currentRoleId) {
   const roleOptions = guild.roles.cache.map((role) => ({
-    label: role.name === "@everyone" ? "@everyone" : `@${role.name}`,
-    value: role.id,
-    default: role.id === currentRoleId,
+    label: role.name === "@everyone" ? "@everyone" : `@${String(role.name).slice(0, 100)}`,
+    value: String(role.id),
+    default: String(role.id) === String(currentRoleId),
   }));
 
   return new ActionRowBuilder().addComponents(
@@ -192,6 +194,8 @@ function createErrorLogRoleDropdown(mode, guild, userId, currentRoleId) {
       .setCustomId(`${mode}:select_error_logs_role:${userId}`)
       .setPlaceholder("Select a role...")
       .setOptions(roleOptions)
+      .setMinValues(1)
+      .setMaxValues(1)
   );
 }
 
