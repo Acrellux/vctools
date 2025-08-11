@@ -244,7 +244,7 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
       `${roleColor}${user.username}${ansi.darkGray} triggered a soundboard: ` +
       `${ansi.white}${emoji} ${soundName}${ansi.reset}`;
 
-    const soundboardMessage = `\`\`\`ansi\n${ansi.darkGray}${timestamp} ${logMsg}\n\`\`\``;
+    const soundboardMessage = `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${logMsg}\n\`\`\``;
 
     await transcriptionChannel.send(soundboardMessage);
 
