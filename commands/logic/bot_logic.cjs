@@ -141,15 +141,17 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
     const vcLoggingChannelOptions = guild.channels.cache
       .filter((ch) => ch.type === ChannelType.GuildText)
       .map((ch) => ({
-        label: `#${ch.name}`,
-        value: ch.id,
-        default: ch.id === vcLoggingChannelId,
+        label: `#${String(ch.name).slice(0, 100)}`,
+        value: String(ch.id),
+        default: String(ch.id) === String(vcLoggingChannelId),
       }));
 
     const vcLoggingChannelDropdown = new StringSelectMenuBuilder()
       .setCustomId(`bot:select-vc-logging-channel:${userId}`)
       .setPlaceholder("Select a channel for VC Logging")
-      .setOptions(vcLoggingChannelOptions);
+      .setOptions(vcLoggingChannelOptions)
+      .setMinValues(1)
+      .setMaxValues(1);
     const vcLoggingChannelRow = new ActionRowBuilder().addComponents(
       vcLoggingChannelDropdown
     );

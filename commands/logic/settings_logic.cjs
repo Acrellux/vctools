@@ -77,14 +77,16 @@ async function handleSettingsFlow(interaction, mode, action) {
       const vcLoggingChannelOptions = guild.channels.cache
         .filter((ch) => ch.type === ChannelType.GuildText)
         .map((ch) => ({
-          label: `#${ch.name}`,
-          value: ch.id,
+          label: `#${String(ch.name).slice(0, 100)}`,
+          value: String(ch.id),
           default: ch.id === settingsObj.vcLoggingChannelId,
         }));
       const vcLoggingchannelIdropdown = new StringSelectMenuBuilder()
         .setCustomId(`bot:select-vc-logging-channel:${userId}`)
         .setPlaceholder("Select a channel for VC Logging")
-        .setOptions(vcLoggingChannelOptions);
+        .setOptions(vcLoggingChannelOptions)
+        .setMinValues(1)
+        .setMaxValues(1);
       const vcLoggingChannelRow = new ActionRowBuilder().addComponents(
         vcLoggingchannelIdropdown
       );

@@ -139,7 +139,7 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
 
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`${mode}:select_error_logs_channel:${userId}`)
+      .setCustomId(`${mode}:select_error_logs_channel:${String(userId)}`)
       .setPlaceholder("Choose an error logs channel...")
       .setOptions(channelOptions)
       .setMinValues(1)
@@ -159,9 +159,9 @@ function createRoleDropdown(mode, guild, userId, currentRoleId) {
   const roleOptions = guild.roles.cache
     .filter((r) => r.name !== "@everyone") // Exclude @everyone if needed
     .map((r) => ({
-      label: `@${r.name}`,
-      value: r.id,
-      default: r.id === currentRoleId, // ✅ Pre-selects if matching
+      label: `@${String(r.name).slice(0, 100)}`,
+      value: String(r.id),
+      default: String(r.id) === String(currentRoleId),
     }));
 
   const selectMenu = new StringSelectMenuBuilder()
