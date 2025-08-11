@@ -91,9 +91,9 @@ function createchannelIdropdown(mode, guild, userId, currentchannelId) {
   const channelOptions = guild.channels.cache
     .filter((channel) => channel.type === ChannelType.GuildText)
     .map((channel) => ({
-      label: `#${channel.name}`,
-      value: channel.id,
-      default: channel.id === currentchannelId,
+      label: `#${String(channel.name).slice(0, 100)}`,
+      value: String(channel.id),
+      default: String(channel.id) === String(currentchannelId),
     }));
 
   if (mode === "init") {
@@ -107,7 +107,7 @@ function createchannelIdropdown(mode, guild, userId, currentchannelId) {
     new StringSelectMenuBuilder()
       .setCustomId(`${mode}:select_logging_channel:${userId}`)
       .setPlaceholder("Choose a logging channel...")
-      .addOptions(channelOptions)
+      .setOptions(channelOptions)
   );
 }
 
@@ -139,7 +139,7 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
     new StringSelectMenuBuilder()
       .setCustomId(`${mode}:select_error_logs_channel:${userId}`)
       .setPlaceholder("Choose an error logs channel...")
-      .addOptions(channelOptions)
+      .setOptions(channelOptions)
   );
 }
 
