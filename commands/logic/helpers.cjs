@@ -123,9 +123,9 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
   const channelOptions = guild.channels.cache
     .filter((channel) => channel.type === ChannelType.GuildText)
     .map((channel) => ({
-      label: `#${channel.name}`,
-      value: channel.id,
-      default: channel.id === currentchannelId,
+      label: `#${String(channel.name).slice(0, 100)}`,
+      value: String(channel.id),
+      default: String(channel.id) === String(currentchannelId),
     }));
 
   if (mode === "init") {
@@ -163,7 +163,7 @@ function createRoleDropdown(mode, guild, userId, currentRoleId) {
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`${mode}:select_log_viewers:${userId}`)
     .setPlaceholder("Select a role...")
-    .setOptions(roleOptions); // ✅ Use `.setOptions()` instead of `.addOptions()`
+    .setOptions(roleOptions);
 
   return new ActionRowBuilder().addComponents(selectMenu);
 }
@@ -187,7 +187,7 @@ function createErrorLogRoleDropdown(mode, guild, userId, currentRoleId) {
     new StringSelectMenuBuilder()
       .setCustomId(`${mode}:select_error_logs_role:${userId}`)
       .setPlaceholder("Select a role...")
-      .addOptions(roleOptions)
+      .setOptions(roleOptions)
   );
 }
 

@@ -84,7 +84,7 @@ async function handleSettingsFlow(interaction, mode, action) {
       const vcLoggingchannelIdropdown = new StringSelectMenuBuilder()
         .setCustomId(`bot:select-vc-logging-channel:${userId}`)
         .setPlaceholder("Select a channel for VC Logging")
-        .addOptions(vcLoggingChannelOptions);
+        .setOptions(vcLoggingChannelOptions);
       const vcLoggingChannelRow = new ActionRowBuilder().addComponents(
         vcLoggingchannelIdropdown
       );
