@@ -1,20 +1,53 @@
 // logic/filter_logic.cjs
 
-const {
-  Message,
-  Interaction,
-} = require("discord.js");
+const { Message, Interaction } = require("discord.js");
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
 } = require("../settings.cjs");
+const { requiredManagerPermissions } = require("./helpers.cjs");
 
+// ── Permission helpers ─────────────────────────────────────────────
+const DENY_COMPONENT = "> <❌> You cannot interact with this component. (CMD_ERR_008)";
+const DENY_MESSAGE   = "> <❌> You don’t have permission to use this.";
+
+async function ensureManagerAuth(ctx) {
+  try {
+    const ok = await requiredManagerPermissions(ctx);
+    if (ok) return true;
+
+    // Interactions (slash/buttons/selects) → ephemeral denial
+    if (ctx?.isRepliable?.()) {
+      if (ctx.replied || ctx.deferred) {
+        await ctx.followUp({ content: DENY_COMPONENT, ephemeral: true }).catch(() => {});
+      } else {
+        await ctx.reply({ content: DENY_COMPONENT, ephemeral: true }).catch(() => {});
+      }
+      return false;
+    }
+
+    // Fallback (message command) → public, short denial
+    if (ctx?.channel?.send) {
+      await ctx.channel.send(DENY_MESSAGE).catch(() => {});
+    }
+  } catch {
+    // If something goes sideways, fail closed (don’t show UI)
+  }
+  return false;
+}
+
+// ── UI ─────────────────────────────────────────────────────────────
 /**
  * Show >settings filter or /settings filter UI.
  */
 async function showFilterSettingsUI(interactionOrMessage, isEphemeral = false) {
   const guild = interactionOrMessage.guild;
   if (!guild) return;
+
+  // Gate: only managers/mods/admins may view this UI
+  const allowed = await ensureManagerAuth(interactionOrMessage);
+  if (!allowed) return;
+
   const settings = await getSettingsForGuild(guild.id);
   const filterLevel = settings.filterLevel || "moderate";
 
@@ -56,12 +89,17 @@ Use the buttons or slash subcommands to manage your filter:
   });
 }
 
+// ── Message Command ────────────────────────────────────────────────
 /**
  * Handle top‐level “>filter” message command.
  */
 async function handleFilterMessageCommand(message, args) {
   const guild = message.guild;
   if (!guild) return;
+
+  // Gate
+  const allowed = await ensureManagerAuth(message);
+  if (!allowed) return;
 
   // If no subcommand, show the UI
   const sub = args[0]?.toLowerCase();
@@ -90,7 +128,7 @@ async function handleFilterMessageCommand(message, args) {
     if (!word) {
       return message.channel.send("> <❌> Usage: `>filter remove <word>`");
     }
-    const newList = currentCustom.filter(w => w !== word);
+    const newList = currentCustom.filter((w) => w !== word);
     if (newList.length === currentCustom.length) {
       return message.channel.send("> <❇️> That word wasn’t in the filter.");
     }
@@ -115,12 +153,17 @@ async function handleFilterMessageCommand(message, args) {
   }
 }
 
+// ── Slash Command ─────────────────────────────────────────────────
 /**
  * Handle “/filter” slash command.
  */
 async function handleFilterSlashCommand(interaction) {
   const guild = interaction.guild;
   if (!guild) return;
+
+  // Gate
+  const allowed = await ensureManagerAuth(interaction);
+  if (!allowed) return;
 
   const sub = interaction.options.getSubcommand();
   const settings = await getSettingsForGuild(guild.id);
@@ -138,7 +181,7 @@ async function handleFilterSlashCommand(interaction) {
 
   if (sub === "remove") {
     const word = interaction.options.getString("word").toLowerCase();
-    const newList = currentCustom.filter(w => w !== word);
+    const newList = currentCustom.filter((w) => w !== word);
     if (newList.length === currentCustom.length) {
       return interaction.reply({ content: "<❇️> Word not found.", ephemeral: true });
     }
@@ -147,9 +190,7 @@ async function handleFilterSlashCommand(interaction) {
   }
 
   if (sub === "list") {
-    const listText = currentCustom.length
-      ? currentCustom.join(", ")
-      : "_None yet._";
+    const listText = currentCustom.length ? currentCustom.join(", ") : "_None yet._";
     return interaction.reply({ content: `**Filtered Words:**\n${listText}`, ephemeral: false });
   }
 
