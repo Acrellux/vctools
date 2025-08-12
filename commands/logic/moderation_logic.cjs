@@ -60,9 +60,16 @@ async function deleteModerationAction(id) {
 }
 
 /* ─────── UTILS ─────── */
-const cantModerate = (mod, tgt) =>
-  tgt.id === tgt.guild.ownerId ||
-  mod.roles.highest.comparePositionTo(tgt.roles.highest) <= 0;
+const cantModerate = (mod, tgt) => {
+  const guild = tgt.guild;
+  const botMember = guild.members.me;
+
+  return (
+    tgt.id === guild.ownerId ||
+    mod.roles.highest.comparePositionTo(tgt.roles.highest) <= 0 ||
+    botMember.roles.highest.comparePositionTo(tgt.roles.highest) <= 0
+  );
+};
 
 async function safeDM(user, lines) {
   try {
