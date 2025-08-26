@@ -277,16 +277,58 @@ async function onInteractionCreate(interaction) {
       if (interaction.customId.startsWith("help:")) return;
       if (interaction.customId.startsWith("notify:")) return handleNotifyFlow(interaction);
       if (interaction.isButton() && interaction.customId.startsWith("prefix:")) return handlePrefixSettingsFlow(interaction);
-      if (
-        interaction.customId.startsWith("report:open:") ||
-        interaction.customId.startsWith("activity:open:")
-      ) {
-        return await handleReportInteractions(interaction);
+
+      // ✅ Handle the user consent button (consent:grant:<userId>)
+      if (interaction.isButton() && interaction.customId.startsWith("consent:grant:")) {
+        try {
+          const [, , targetUserId] = interaction.customId.split(":");
+
+          // Only the targeted user can grant their consent
+          if (interaction.user.id !== targetUserId) {
+            return interaction.reply({
+              ephemeral: true,
+              content: "> <❇️> You cannot interact with this button. (INT_ERR_004)",
+            });
+          }
+
+          // Ack quickly to avoid the red toast if anything else runs long
+          if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply({ ephemeral: true }).catch(() => { });
+          }
+
+          // Persist consent + auto-unmute (grantUserConsent already unmutes if in VC)
+          await grantUserConsent(targetUserId, interaction.guild);
+
+          // Clear any pending context for this user
+          const { interactionContexts } = require("../database/contextStore.cjs");
+          interactionContexts.delete(targetUserId);
+
+          return interaction.reply({
+            content: "✅ Consent recorded.",
+          });
+        } catch (err) {
+          console.error("[ERROR] consent:grant handler:", err);
+          await logErrorToChannel(
+            interaction.guild?.id,
+            err?.stack || String(err),
+            interaction.client,
+            "consent:grant"
+          );
+          if (!interaction.replied) {
+            return interaction.reply({
+              ephemeral: true,
+              content: "> <❌> Failed to record your consent. Please try again.",
+            });
+          }
+          return;
+        }
       }
+
+      // 🛠️ Admin/settings UI for consent (select menus etc.)
       if (interaction.customId.startsWith("consent:")) {
         return handleConsentSettingChange(interaction);
       }
-      
+
       // — unified list buttons —
       if (interaction.customId.startsWith("safeUserList:")) {
         return showSafeUserList(interaction);
