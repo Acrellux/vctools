@@ -28,7 +28,8 @@ const {
   PermissionsBitField,
   AuditLogEvent,
 } = require("discord.js");
-const { clearVCState } = require("../util/vc_state.cjs");
+
+const { saveVCState, clearVCState } = require("../util/vc_state.cjs");
 
 // Supabase initialization
 const { createClient } = require('@supabase/supabase-js');
@@ -533,6 +534,8 @@ async function execute(oldState, newState, client) {
         console.error("[ERROR] Failed to join voice channel.");
         return;
       }
+      
+      saveVCState(guild.id, newState.channelId);
       console.log("[INFO] Voice connection established.");
     } else {
       console.log("[INFO] Reusing existing voice connection.");
@@ -851,6 +854,7 @@ async function moveToChannel(targetChannel, connection, guild, client) {
     await disconnectAndReset(connection);
     const newConnection = await joinChannel(client, targetChannel.id, guild);
     if (newConnection) {
+      saveVCState(guild.id, targetChannel.id)
       audioListeningFunctions(newConnection, guild);
     }
   }
@@ -881,6 +885,7 @@ async function joinChannel(client, channelId, guild) {
 
     connection.on(VoiceConnectionStatus.Ready, () => {
       console.log(`[INFO] Connected to ${channel.name}`);
+      saveVCState(guild.id, channel.id);
     });
 
     return connection;
