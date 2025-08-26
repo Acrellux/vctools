@@ -494,6 +494,7 @@ async function execute(oldState, newState, client) {
   // Case 2: User joined a channel
   if (!oldState.channelId && newState.channelId) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
+    userJoinTimes.set(userId, Date.now());
 
     let connection = getVoiceConnection(guild.id);
     if (!connection) {
@@ -519,7 +520,7 @@ async function execute(oldState, newState, client) {
     if (hasConsent) {
       console.log(`[INFO] User ${userId} has already consented. Allowing audio capture.`);
       try {
-        if (newState.serverDeaf) {
+        if (newState.serverMute) {
           await newState.setMute(false, "User has consented to transcription.");
           console.log(`[INFO] User ${userId} unmuted.`);
         }
@@ -623,7 +624,7 @@ async function manageVoiceChannels(guild, client) {
     reset: "\u001b[0m",
   };
 
-  const voiceChannels = guild.channels.cache.filter((c) => c.type === 2);
+  const voiceChannels = guild.channels.cache.filter((c) => c.type === ChannelType.GuildVoice);
   let targetChannel = null;
   let maxMembers = 0;
   voiceChannels.forEach((channel) => {
