@@ -83,7 +83,7 @@ async function removeUserConsent(userId, guildId, client) {
 
           if (notifyUser) {
             await notifyUser.send(
-              `[🚫] One of the people in your notification list, <@${row.target_id}>, has requested to be removed from our database. This means that you will no longer be notified when they join a voice call inside the **${guildName}** server.`
+              `<🚫> One of the people in your notification list, <@${row.target_id}>, has requested to be removed from our database. This means that you will no longer be notified when they join a voice call inside the **${guildName}** server.`
             );
           }
         } catch (dmError) {
