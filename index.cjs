@@ -163,29 +163,6 @@ const ensureTranscriptionChannel = async (guild) => {
   return await guild.channels.fetch(settings.channelId).catch(() => null);
 };
 
-// CONSENT: tiny helper to gate actions until consent is given
-async function requireConsentIfNeeded(guild, member) {
-  try {
-    const settings = await getSettingsForGuild(guild.id);
-    if (!settings?.transcriptionEnabled) return true; // not required if transcription off
-    const consented = await hasUserConsented(member.id);
-    if (consented) return true;
-
-    await sendConsentPrompt({
-      guild,
-      user: member.user,
-      client,
-      content:
-        "> <📝> You need to consent to transcription to continue. Use the consent controls here or in the dashboard.",
-      // components: [] // optional: add dashboard button row later
-    });
-    return false;
-  } catch (e) {
-    console.warn("[WARN] requireConsentIfNeeded failed:", e?.message || e);
-    return false;
-  }
-}
-
 // Process VOICE_CHANNEL_EFFECT_SEND event
 client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
   try {
