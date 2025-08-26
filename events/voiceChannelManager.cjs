@@ -29,6 +29,7 @@ const {
   AuditLogEvent,
 } = require("discord.js");
 
+// VC State importing
 const { saveVCState, clearVCState } = require("../util/vc_state.cjs");
 
 // Supabase initialization
@@ -534,7 +535,7 @@ async function execute(oldState, newState, client) {
         console.error("[ERROR] Failed to join voice channel.");
         return;
       }
-      
+
       saveVCState(guild.id, newState.channelId);
       console.log("[INFO] Voice connection established.");
     } else {
