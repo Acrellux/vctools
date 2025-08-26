@@ -305,7 +305,7 @@ async function sendConsentPrompt({
 
   // If posting in a channel, optionally mention the user so they see it.
   const maybeMention =
-    dest.type === "channel" && mentionUserInChannel ? `<@${user.id}> ` : "";
+    dest.type === "channel" && mentionUserInChannel ? `<@${user.id}>\n ` : "";
 
   try {
     if (dest.type === "dm") {
