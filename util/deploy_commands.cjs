@@ -34,6 +34,11 @@ const commands = [
     )
     .addSubcommand((subcommand) =>
       subcommand
+        .setName("consent")
+        .setDescription("Manage consent delivery (DM / default / specific channel).")
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
         .setName("toggle")
         .setDescription("Toggle specific bot features.")
         .addStringOption((option) =>

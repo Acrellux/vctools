@@ -68,6 +68,8 @@ async function getSettingsForGuild(guildId) {
       vcLoggingChannelId: null,
       vcModeratorRoleId: null,
       prefixes: { slash: true, exclamation: true, greater: true },
+      consentDeliveryMode: "server_default",
+      consentChannelId: null,
     };
 
     const { error: insertError } = await supabase
@@ -139,6 +141,8 @@ async function updateSettingsForGuild(guildId, updates, guild) {
     vcLoggingChannelId: null,
     vcModeratorRoleId: null,
     prefixes: { slash: true, exclamation: true, greater: true },
+    consentDeliveryMode: "server_default",
+    consentChannelId: null,
   };
 
   // Merge updates with existing settings

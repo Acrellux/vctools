@@ -18,7 +18,11 @@ const { VC_STATE_PATH, saveVCState } = require("./util/vc_state.cjs");
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
+  hasUserConsented, // ← CONSENT
 } = require("./commands/settings.cjs");
+
+// CONSENT: add prompt sender
+const { sendConsentPrompt } = require("./commands/logic/consent_logic.cjs");
 
 // Import notify logic functions, including the new one for target queries.
 const {
@@ -78,7 +82,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 }
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Load additional event handlers dynamically  
+// Load additional event handlers dynamically
 const loadEventHandlers = async () => {
   const eventsPath = path.join(__dirname, "events");
   const eventFiles = fs
@@ -108,7 +112,7 @@ loadEventHandlers();
 // Import report cleanup process
 const { cleanupOldReports } = require("./commands/report/cleanupReports.cjs");
 
-// Fetch default soundboard sounds  
+// Fetch default soundboard sounds
 async function fetchDefaultSoundboardSounds(client) {
   try {
     const defaultSounds = await client.rest.get("/soundboard-default-sounds", {
@@ -152,14 +156,37 @@ client.once("ready", async () => {
   );
 });
 
-// Ensure transcription channel function  
+// Ensure transcription channel function
 const ensureTranscriptionChannel = async (guild) => {
   const settings = await getSettingsForGuild(guild.id);
   if (!settings.transcriptionEnabled || !settings.channelId) return null;
   return await guild.channels.fetch(settings.channelId).catch(() => null);
 };
 
-// Process VOICE_CHANNEL_EFFECT_SEND event  
+// CONSENT: tiny helper to gate actions until consent is given
+async function requireConsentIfNeeded(guild, member) {
+  try {
+    const settings = await getSettingsForGuild(guild.id);
+    if (!settings?.transcriptionEnabled) return true; // not required if transcription off
+    const consented = await hasUserConsented(member.id);
+    if (consented) return true;
+
+    await sendConsentPrompt({
+      guild,
+      user: member.user,
+      client,
+      content:
+        "> <📝> You need to consent to transcription to continue. Use the consent controls here or in the dashboard.",
+      // components: [] // optional: add dashboard button row later
+    });
+    return false;
+  } catch (e) {
+    console.warn("[WARN] requireConsentIfNeeded failed:", e?.message || e);
+    return false;
+  }
+}
+
+// Process VOICE_CHANNEL_EFFECT_SEND event
 client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
   try {
     const { user_id, guild_id, sound_id } = data;
@@ -393,6 +420,21 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
 client.on("voiceStateUpdate", async (oldState, newState) => {
   // Existing voice channel manager logic
   voiceChannelManager.execute(oldState, newState, client);
+
+  // CONSENT: prompt users on first join if transcription is enabled and they haven't consented
+  try {
+    if (!oldState.channelId && newState.channelId && newState.member?.user) {
+      const guild = newState.guild;
+      const settings = await getSettingsForGuild(guild.id);
+      if (settings?.transcriptionEnabled) {
+        const ok = await requireConsentIfNeeded(guild, newState.member);
+        // If not consented, you can optionally auto-mute or stop further transcription setup here.
+        // (Leaving it as a prompt-only behavior for now.)
+      }
+    }
+  } catch (e) {
+    console.warn("[WARN] consent-on-join failed:", e?.message || e);
+  }
 
   // NEW: When a user joins a voice channel, notify subscribers
   if (!oldState.channelId && newState.channelId) {
@@ -884,7 +926,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// Handle message reactions  
+// Handle message reactions
 client.on("messageReactionAdd", async (reaction, user) => {
   try {
     await handleReaction(reaction, user);

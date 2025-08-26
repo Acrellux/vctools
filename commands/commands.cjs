@@ -103,6 +103,10 @@ const {
   handleFilterSlashCommand,
   showFilterSettingsUI,
 } = require("./logic/filter_logic.cjs");
+const {
+  showConsentSettingsUI,
+  handleConsentSettingChange,
+} = require("./logic/consent_logic.cjs");
 
 /* =============================
    MESSAGE-BASED COMMAND ROUTING
@@ -179,6 +183,9 @@ async function onMessageCreate(message) {
         break;
       case "drain":
         await handleDrainMessageCommand(message, args);
+        break;
+      case "consent":
+        await showConsentSettingsUI(message, false);
         break;
       default:
         break;
@@ -258,6 +265,9 @@ async function onInteractionCreate(interaction) {
         case "drain":
           await handleDrainSlashCommand(interaction);
           break;
+        case "consent":
+          await showConsentSettingsUI(interaction, true);
+          break;
         default:
           console.log(`[DEBUG] Unhandled slash command: ${interaction.commandName}`);
       }
@@ -273,7 +283,10 @@ async function onInteractionCreate(interaction) {
       ) {
         return await handleReportInteractions(interaction);
       }
-
+      if (interaction.customId.startsWith("consent:")) {
+        return handleConsentSettingChange(interaction);
+      }
+      
       // — unified list buttons —
       if (interaction.customId.startsWith("safeUserList:")) {
         return showSafeUserList(interaction);

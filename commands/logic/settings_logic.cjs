@@ -49,6 +49,10 @@ const {
   showPrefixSettingsUI,
   handlePrefixSettingsFlow,
 } = require("./prefix_logic.cjs");
+const {
+  showConsentSettingsUI,
+  handleConsentSettingChange,
+} = require("./consent_logic.cjs");
 const { showErrorLogsSettingsUI } = require("./errorlogs_logic.cjs");
 
 async function handleSettingsFlow(interaction, mode, action) {
@@ -56,6 +60,12 @@ async function handleSettingsFlow(interaction, mode, action) {
     const guild = interaction.guild;
     const userId = interaction.user.id;
     if (!guild) return;
+
+    // Consent settings flow (dropdowns/buttons with customIds starting "consent:")
+    if (mode === "consent") {
+      await handleConsentSettingChange(interaction);
+      return;
+    }
 
     // Delegate VC settings actions to handleVCSettingsFlow if mode is "vc" or "vcsettings"
     if (mode === "vc" || mode === "vcsettings") {
@@ -212,8 +222,7 @@ async function handleSettingsFlow(interaction, mode, action) {
 
       await interaction.deferUpdate();
       await interaction.followUp({
-        content: `> <✅> Admin Role set to **${role ? role.name : "Unknown"
-          }**.`,
+        content: `> <✅> Admin Role set to **${role ? role.name : "Unknown"}**.`,
         ephemeral: true,
       });
 
@@ -509,6 +518,9 @@ async function handleSettingsMessageCommand(message, args) {
       case "prefix":
         await showPrefixSettingsUI(message, false);
         break;
+      case "consent":
+        await showConsentSettingsUI(message, false);
+        break;
       case "toggle":
         if (!args[1]) {
           return message.channel.send(
@@ -638,7 +650,7 @@ async function handleSettingsMessageCommand(message, args) {
         break;
       default:
         await message.channel.send(
-          "> Use `settings transcription`, `settings errorlogs`, `settings vc`, `settings prefix`, or `settings bot` to configure settings."
+          "> Use `settings transcription`, `settings errorlogs`, `settings vc`, `settings prefix`, `settings consent`, or `settings bot` to configure settings."
         );
     }
   } catch (error) {
@@ -698,6 +710,9 @@ async function handleSettingsSlashCommand(interaction) {
         break;
       case "prefix":
         await showPrefixSettingsUI(interaction, false);
+        break;
+      case "consent":
+        await showConsentSettingsUI(interaction, true);
         break;
       case "toggle": {
         const option = interaction.options.getString("option");
@@ -828,7 +843,7 @@ async function handleSettingsSlashCommand(interaction) {
       default:
         await interaction.reply({
           content:
-            "> <❌> Invalid settings category. Use `/settings transcription`, `settings prefix`, `/settings errorlogs`, `/settings vc`, or `/settings bot`.",
+            "> <❌> Invalid settings category. Use `/settings transcription`, `settings prefix`, `/settings errorlogs`, `/settings vc`, `/settings consent`, or `/settings bot`.",
           ephemeral: true,
         });
     }
