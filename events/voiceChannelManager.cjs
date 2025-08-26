@@ -28,6 +28,9 @@ const {
   PermissionsBitField,
   AuditLogEvent,
 } = require("discord.js");
+const {
+  sendConsentPrompt,
+} = require("../logic/consent_logic.cjs");
 
 // VC State importing
 const { saveVCState, clearVCState } = require("../util/vc_state.cjs");
@@ -510,64 +513,10 @@ async function execute(oldState, newState, client) {
     audioListeningFunctions(connection, guild);
 
     // ─────────────────────────────────────────────
-    // Consent message builders
+    // Consent enforcement (new flow using sendConsentPrompt)
     // ─────────────────────────────────────────────
-    function buildConsentMessage(userId) {
-      return {
-        content:
-          `# Consent Required\n` +
-          `Inside this voice call, your voice will be transcribed into text.\n` +
-          `Please click the button below to consent.\n\n` +
-          `> All audio files of your voice are temporary and will not be permanently saved.\n` +
-          `-# > You can also take a look at our [privacy policy](<https://www.vctools.app/privacy>) for more information.`,
-        mentionContent:
-          `# Consent Required for <@${userId}>\n` +
-          `Inside this voice call, your voice will be transcribed into text.\n` +
-          `Please click the button below to consent.\n\n` +
-          `> All audio files of your voice are temporary and will not be permanently saved.\n` +
-          `-# > You can also take a look at our [privacy policy](<https://www.vctools.app/privacy>) for more information.`,
-      };
-    }
-
-    async function deliverConsent(member, components) {
-      const guild = member.guild;
-      const { content, mentionContent } = buildConsentMessage(member.id);
-
-      try {
-        if (settings.consentDeliveryMode === "dm") {
-          const dm = await member.user.createDM();
-          await dm.send({ content, components: [components] });
-          console.log(`[INFO] Consent DM sent to ${member.id}`);
-          return true;
-        }
-        if (settings.consentDeliveryMode === "specific_channel" && settings.consentChannelId) {
-          const ch = guild.channels.cache.get(settings.consentChannelId);
-          if (ch && canBotSend(ch, member)) {
-            await ch.send({ content: mentionContent, components: [components] });
-            console.log(`[INFO] Consent sent in configured channel #${ch.name}`);
-            return true;
-          }
-        }
-        if (settings.consentDeliveryMode === "server_default") {
-          const sys = guild.systemChannel;
-          if (sys && canBotSend(sys, member)) {
-            await sys.send({ content: mentionContent, components: [components] });
-            console.log(`[INFO] Consent sent in system channel`);
-            return true;
-          }
-        }
-      } catch (err) {
-        console.warn(`[WARN] Preferred consent method failed: ${err.message}`);
-      }
-
-      // Fallback: legacy multi-step chain
-      return await sendConsentPromptWithFallback(member, components);
-    }
-
-    // ─────────────────────────────────────────────
-    // Consent enforcement
-    // ─────────────────────────────────────────────
-    if (await hasUserConsented(userId)) {
+    const hasConsent = await hasUserConsented(userId);
+    if (hasConsent) {
       console.log(`[INFO] User ${userId} has already consented. Allowing audio capture.`);
       try {
         if (newState.serverDeaf) {
@@ -579,16 +528,33 @@ async function execute(oldState, newState, client) {
       }
     } else {
       console.log(`[DEBUG] User ${userId} has NOT consented. Sending consent request...`);
+
+      // Build the consent button row
       const consentButtons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`consent:grant:${userId}`)
           .setLabel("Consent")
           .setStyle(ButtonStyle.Success)
       );
+
+      // Track interaction context
       interactionContexts.set(userId, { guildId: guild.id, mode: "consent" });
 
-      await deliverConsent(newState.member, consentButtons);
+      // Use the centralized consent sender (respects settings + fallback)
+      await sendConsentPrompt({
+        guild,
+        user: newState.member.user,
+        client,
+        content:
+          `# Consent Required\nInside this voice call, your voice will be transcribed into text.\n` +
+          `Please click the button below to consent.\n\n` +
+          `> All audio files of your voice are temporary and will not be permanently saved.\n` +
+          `-# > You can also take a look at our [privacy policy](<https://www.vctools.app/privacy>) for more information.`,
+        components: [consentButtons],
+        mentionUserInChannel: true,
+      });
 
+      // Mute until consent is given
       try {
         await newState.setMute(true, "Awaiting transcription consent.");
         console.log(`[INFO] User ${userId} muted until consent is given.`);
