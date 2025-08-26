@@ -90,15 +90,17 @@ function buildConsentComponents(guild, userId, state) {
 /** Compose the message content */
 function buildConsentContent(guild, state) {
   const { mode, channelId } = state;
-  const channelName =
-    channelId && guild.channels.cache.get(channelId)
-      ? `#${guild.channels.cache.get(channelId).name}`
-      : "Not set";
+
+  // Use a channel mention so it’s clickable
+  const channelDisplay =
+    mode === "specific_channel" && channelId
+      ? `<#${channelId}>`
+      : "`—`";
 
   return [
     "## ◈ Consent Settings",
     `> **Delivery Method:** \`${mode}\``,
-    `> **Assigned Channel:** ${mode === "specific_channel" ? channelName : "`—`"}`,
+    `> **Assigned Channel:** ${channelDisplay}`,
     "",
     "-# VC Tools will fallback to the next best option if your delivery method fails.",
   ].join("\n");
@@ -305,7 +307,7 @@ async function sendConsentPrompt({
 
   // If posting in a channel, optionally mention the user so they see it.
   const maybeMention =
-    dest.type === "channel" && mentionUserInChannel ? `-# <@${user.id}>\n`: "";
+    dest.type === "channel" && mentionUserInChannel ? `-# <@${user.id}>\n` : "";
 
   try {
     if (dest.type === "dm") {
