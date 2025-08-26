@@ -748,6 +748,7 @@ client.once("ready", async () => {
     const channel = guild.channels.cache.get(savedChannelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) continue;
 
+    const existingConnection = getVoiceConnection(guild.id);
     if (existingConnection) {
       try {
         existingConnection.destroy();
