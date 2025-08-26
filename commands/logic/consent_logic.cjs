@@ -253,9 +253,6 @@ async function handleConsentSettingChange(interaction) {
   }
 }
 
-// --- permissions helper (local) ---
-const { PermissionFlagsBits, ChannelType } = require("discord.js");
-
 function canBotSend(channel) {
   if (!channel?.guild?.members?.me) return false;
   const mePerms = channel.permissionsFor(channel.guild.members.me);
