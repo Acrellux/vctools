@@ -22,11 +22,11 @@ const {
 /** Normalize settings keys (snake or camel) + defaults */
 function getConsentState(settings = {}) {
   const mode =
-    settings.consentDeliveryMode ??
+    settings.consent_delivery_mode ??
     settings.consent_delivery_mode ??
     "server_default";
   const channelId =
-    settings.consentChannelId ?? settings.consent_channel_id ?? null;
+    settings.consent_channel_id ?? settings.consent_channel_id ?? null;
   return { mode, channelId };
 }
 
@@ -193,7 +193,7 @@ async function handleConsentSettingChange(interaction) {
       if (interaction.customId.startsWith("consent:select-mode:")) {
         const newMode = interaction.values?.[0];
         await updateSettingsForGuild(guild.id, {
-          consentDeliveryMode: newMode,
+          consent_delivery_mode: newMode,
         });
         // If switching away from specific_channel, keep channelId but it won’t be used.
         await interaction.update({
@@ -211,8 +211,8 @@ async function handleConsentSettingChange(interaction) {
           channelId: newChannelId,
         };
         await updateSettingsForGuild(guild.id, {
-          consentDeliveryMode: "specific_channel",
-          consentChannelId: newChannelId,
+          consent_delivery_mode: "specific_channel",
+          consent_channel_id: newChannelId,
         });
         await interaction.update({
           content: buildConsentContent(guild, newState),
