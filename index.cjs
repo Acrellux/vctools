@@ -748,10 +748,10 @@ client.once("ready", async () => {
     const channel = guild.channels.cache.get(savedChannelId);
     if (!channel || channel.type !== ChannelType.GuildVoice) continue;
 
-    const existingConnection = getVoiceConnection(guild.id);
     if (existingConnection) {
       try {
         existingConnection.destroy();
+        await new Promise(r => setTimeout(r, 1000)); // short delay to ensure cleanup
         console.log(`[INFO] Destroyed stale VC connection in ${guild.name}`);
       } catch (e) {
         console.warn(`[WARN] Failed to destroy VC connection: ${e.message}`);
