@@ -293,7 +293,7 @@ async function onInteractionCreate(interaction) {
 
           // Ack quickly to avoid the red toast if anything else runs long
           if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply({ ephemeral: true }).catch(() => { });
+            await interaction.deferReply().catch(() => { });
           }
 
           // Persist consent + auto-unmute (grantUserConsent already unmutes if in VC)
@@ -303,7 +303,7 @@ async function onInteractionCreate(interaction) {
           const { interactionContexts } = require("../database/contextStore.cjs");
           interactionContexts.delete(targetUserId);
 
-          return interaction.reply({
+          return interaction.editReply({
             content: "✅ Consent recorded.",
           });
         } catch (err) {
