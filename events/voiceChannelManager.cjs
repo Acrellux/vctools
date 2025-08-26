@@ -30,7 +30,7 @@ const {
 } = require("discord.js");
 const {
   sendConsentPrompt,
-} = require("../logic/consent_logic.cjs");
+} = require("../commands/logic/consent_logic.cjs");
 
 // VC State importing
 const { saveVCState, clearVCState } = require("../util/vc_state.cjs");
