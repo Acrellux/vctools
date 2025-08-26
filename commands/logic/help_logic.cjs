@@ -104,7 +104,8 @@ Of course, there are also privacy settings to control who can see your activity 
 - \`settings errorlogs\` - Configure error logging settings.
 - \`settings bot\` - View and modify bot settings, including admin and moderator roles.
 - \`settings vc\` - View and modify voice channel settings, including VC event logging.
-- \`settings prefix\` - Configure command prefixes for the bot.`,
+- \`settings prefix\` - Configure command prefixes for the bot.
+- \`settings consent\` - Manage where the consent message is delivered.`,
 
   safeuser: `## **VC Tools ◈ Help ◈ Safeuser**
 > **Safeuser Commands:**
