@@ -492,41 +492,6 @@ async function execute(oldState, newState, client) {
   if (!oldState.channelId && newState.channelId) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
 
-    const entryLog = {
-      guild_id: newState.guild.id,
-      user_id: newState.id,
-      duration: 0,
-    };
-
-    const { error: joinError } = await supabase
-      .from('voice_activity')
-      .insert([entryLog], { returning: 'minimal' });
-
-    if (joinError) {
-      console.error('[Heatmap] Supabase join insert failed:', joinError.message, joinError.details);
-    }
-
-    userJoinTimes.set(userId, Date.now());
-    if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
-      const activityChannel = guild.channels.cache.get(settings.vcLoggingChannelId);
-      if (activityChannel) {
-        const joinedChannel = guild.channels.cache.get(newState.channelId);
-        const joinedChannelName = joinedChannel?.name || "Unknown Channel";
-        const memberCount = joinedChannel.members.filter((m) => !m.user.bot).size;
-        const now = new Date();
-        const timestamp = now.toLocaleTimeString("en-US", {
-          minute: "2-digit",
-          second: "2-digit",
-        });
-        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} joined voice channel ${ansi.white}${joinedChannelName}${ansi.darkGray}. Member count: ${memberCount}`;
-        await activityChannel.send(buildLog(timestamp, logMsg)).catch(console.error);
-      } else {
-        console.error(
-          `[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`
-        );
-      }
-    }
-
     let connection = getVoiceConnection(guild.id);
     if (!connection) {
       console.log("[INFO] Bot is not in a voice channel. Joining now...");
@@ -535,7 +500,6 @@ async function execute(oldState, newState, client) {
         console.error("[ERROR] Failed to join voice channel.");
         return;
       }
-
       saveVCState(guild.id, newState.channelId);
       console.log("[INFO] Voice connection established.");
     } else {
@@ -545,87 +509,9 @@ async function execute(oldState, newState, client) {
     // ✅ Ensure listeners are always set up
     audioListeningFunctions(connection, guild);
 
-    // ───────────────────────────────────────────────────────────────────────────
-    // Helpers (scoped here so you can drop-in replace just this block)
-    // ───────────────────────────────────────────────────────────────────────────
-    const { ChannelType, PermissionsBitField, SnowflakeUtil } = require("discord.js");
-
-    function canBotSend(channel, memberToViewCheck = null) {
-      if (!channel || typeof channel.permissionsFor !== "function") return false;
-      const mePerms = channel.permissionsFor(channel.guild.members.me);
-      if (!mePerms) return false;
-
-      const canView = mePerms.has(PermissionsBitField.Flags.ViewChannel);
-      const canSend = channel.isTextBased?.()
-        ? mePerms.has(PermissionsBitField.Flags.SendMessages)
-        : false;
-
-      if (!canView || !canSend) return false;
-
-      if (memberToViewCheck) {
-        const memPerms = channel.permissionsFor(memberToViewCheck);
-        if (!memPerms || !memPerms.has(PermissionsBitField.Flags.ViewChannel)) return false;
-      }
-      return true;
-    }
-
-    async function channelHasPublicMessages(channel) {
-      try {
-        if (!channel.isTextBased?.()) return false;
-        const msgs = await channel.messages.fetch({ limit: 1 });
-        return msgs?.size > 0;
-      } catch {
-        return false;
-      }
-    }
-
-    async function findMostRecentUserMessageChannel(guild, member, opts = {}) {
-      const { channelScanLimit = 15, perChannelMessages = 25 } = opts;
-
-      const candidates = guild.channels.cache.filter((c) => {
-        const isText = c.type === ChannelType.GuildText;
-        const isVoiceText = (c.type === ChannelType.GuildVoice) && c.isTextBased?.();
-        if (!(isText || isVoiceText)) return false;
-        return canBotSend(c, member);
-      });
-
-      const sorted = [...candidates.values()].sort((a, b) => {
-        // Prefer newest activity by lastMessageId (falls back to 0)
-        const ta = a.lastMessageId ? SnowflakeUtil.timestampFrom(a.lastMessageId) : 0;
-        const tb = b.lastMessageId ? SnowflakeUtil.timestampFrom(b.lastMessageId) : 0;
-        return tb - ta;
-      });
-
-      for (let i = 0; i < Math.min(sorted.length, channelScanLimit); i++) {
-        const ch = sorted[i];
-        try {
-          const msgs = await ch.messages.fetch({ limit: perChannelMessages });
-          const hit = msgs.find((m) => m.author?.id === member.id);
-          if (hit) return ch;
-        } catch {
-          // ignore and continue
-        }
-      }
-      return null;
-    }
-
-    async function findFirstVisibleTextChannelWithHistory(guild, member) {
-      const channels = guild.channels.cache
-        .filter((c) => c.isTextBased?.() && c.type === ChannelType.GuildText)
-        .sort((a, b) => {
-          if (a.parentId === b.parentId) return a.rawPosition - b.rawPosition;
-          const aP = a.parent ?? { rawPosition: -1 };
-          const bP = b.parent ?? { rawPosition: -1 };
-          return aP.rawPosition - bP.rawPosition;
-        });
-
-      for (const [, ch] of channels) {
-        if (!canBotSend(ch, member)) continue;
-        if (await channelHasPublicMessages(ch)) return ch;
-      }
-      return null;
-    }
-
+    // ─────────────────────────────────────────────
+    // Consent message builders
+    // ─────────────────────────────────────────────
     function buildConsentMessage(userId) {
       return {
         content:
@@ -643,77 +529,44 @@ async function execute(oldState, newState, client) {
       };
     }
 
-    async function sendConsentPromptWithFallback(member, components) {
+    async function deliverConsent(member, components) {
       const guild = member.guild;
-      const uid = member.id;
-      const { content, mentionContent } = buildConsentMessage(uid);
+      const { content, mentionContent } = buildConsentMessage(member.id);
 
-      // 1) DM
       try {
-        const dm = await member.user.createDM();
-        await dm.send({ content, components: [components] });
-        console.log(`[INFO] Consent request sent to ${uid} via DM`);
-        return true;
-      } catch (err) {
-        console.warn(`[WARN] DM to ${uid} failed: ${err.message}`);
-      }
-
-      // 2) Voice channel chat (Text-in-VC)
-      const vc = member.voice?.channel ?? null;
-      if (vc && vc.isTextBased?.() && canBotSend(vc, member)) {
-        try {
-          await vc.send({ content: mentionContent, components: [components] });
-          console.log(`[INFO] Consent request sent in voice channel chat for ${uid}`);
+        if (settings.consentDeliveryMode === "dm") {
+          const dm = await member.user.createDM();
+          await dm.send({ content, components: [components] });
+          console.log(`[INFO] Consent DM sent to ${member.id}`);
           return true;
-        } catch (err) {
-          console.warn(`[WARN] Voice chat post failed for ${uid}: ${err.message}`);
         }
-      }
-
-      // 3) Last place the user sent a message (best-effort scan)
-      try {
-        const recentCh = await findMostRecentUserMessageChannel(guild, member, {
-          channelScanLimit: 15,
-          perChannelMessages: 25,
-        });
-        if (recentCh) {
-          await recentCh.send({ content: mentionContent, components: [components] });
-          console.log(`[INFO] Consent request sent in recent #${recentCh.name} for ${uid}`);
-          return true;
+        if (settings.consentDeliveryMode === "specific_channel" && settings.consentChannelId) {
+          const ch = guild.channels.cache.get(settings.consentChannelId);
+          if (ch && canBotSend(ch, member)) {
+            await ch.send({ content: mentionContent, components: [components] });
+            console.log(`[INFO] Consent sent in configured channel #${ch.name}`);
+            return true;
+          }
+        }
+        if (settings.consentDeliveryMode === "server_default") {
+          const sys = guild.systemChannel;
+          if (sys && canBotSend(sys, member)) {
+            await sys.send({ content: mentionContent, components: [components] });
+            console.log(`[INFO] Consent sent in system channel`);
+            return true;
+          }
         }
       } catch (err) {
-        console.warn(`[WARN] Recent-channel fallback failed for ${uid}: ${err.message}`);
+        console.warn(`[WARN] Preferred consent method failed: ${err.message}`);
       }
 
-      // 4) First visible text channel with public messages
-      try {
-        const ch = await findFirstVisibleTextChannelWithHistory(guild, member);
-        if (ch) {
-          await ch.send({ content: mentionContent, components: [components] });
-          console.log(`[INFO] Consent request sent in #${ch.name} for ${uid}`);
-          return true;
-        }
-      } catch (err) {
-        console.warn(`[WARN] Public text-channel fallback failed for ${uid}: ${err.message}`);
-      }
-
-      // 5) System channel
-      const sys = guild.systemChannel;
-      if (sys && canBotSend(sys, member)) {
-        try {
-          await sys.send({ content: mentionContent, components: [components] });
-          console.log(`[INFO] Consent request sent in system channel for ${uid}`);
-          return true;
-        } catch (err) {
-          console.warn(`[WARN] System channel send failed for ${uid}: ${err.message}`);
-        }
-      }
-
-      console.error(`[ERROR] No viable path to deliver consent prompt for ${uid}`);
-      return false;
+      // Fallback: legacy multi-step chain
+      return await sendConsentPromptWithFallback(member, components);
     }
-    // ───────────────────────────────────────────────────────────────────────────
 
+    // ─────────────────────────────────────────────
+    // Consent enforcement
+    // ─────────────────────────────────────────────
     if (await hasUserConsented(userId)) {
       console.log(`[INFO] User ${userId} has already consented. Allowing audio capture.`);
       try {
@@ -721,8 +574,8 @@ async function execute(oldState, newState, client) {
           await newState.setMute(false, "User has consented to transcription.");
           console.log(`[INFO] User ${userId} unmuted.`);
         }
-      } catch (error) {
-        console.error(`[ERROR] Failed to unmute user ${userId}: ${error.message}`);
+      } catch (err) {
+        console.error(`[ERROR] Failed to unmute user ${userId}: ${err.message}`);
       }
     } else {
       console.log(`[DEBUG] User ${userId} has NOT consented. Sending consent request...`);
@@ -734,15 +587,13 @@ async function execute(oldState, newState, client) {
       );
       interactionContexts.set(userId, { guildId: guild.id, mode: "consent" });
 
-      // ✨ Deliver consent prompt with fallbacks
-      await sendConsentPromptWithFallback(newState.member, consentButtons);
+      await deliverConsent(newState.member, consentButtons);
 
-      // Mute regardless; they must click to proceed
       try {
         await newState.setMute(true, "Awaiting transcription consent.");
         console.log(`[INFO] User ${userId} muted until consent is given.`);
-      } catch (error) {
-        console.error(`[ERROR] Failed to mute user ${userId}: ${error.message}`);
+      } catch (err) {
+        console.error(`[ERROR] Failed to mute user ${userId}: ${err.message}`);
       }
     }
   }
