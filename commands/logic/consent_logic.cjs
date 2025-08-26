@@ -83,15 +83,7 @@ function buildConsentComponents(guild, userId, state) {
 
   const channelRow = new ActionRowBuilder().addComponents(channelMenu);
 
-  // Tiny help button (optional)
-  const helpRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`consent:help:${userId}`)
-      .setLabel("What is this?")
-      .setStyle(ButtonStyle.Secondary)
-  );
-
-  return [modeRow, channelRow, helpRow];
+  return [modeRow, channelRow];
 }
 
 /** Compose the message content */
@@ -105,9 +97,9 @@ function buildConsentContent(guild, state) {
   return [
     "## ◈ Consent Settings",
     `> **Delivery Method:** \`${mode}\``,
-    `> **Assigned Channel:** ${mode === "specific_channel" ? channelName : "—"}`,
+    `> **Assigned Channel:** ${mode === "specific_channel" ? channelName : "`—`"}`,
     "",
-    "This chooses *where* the **“You need to consent”** prompt is sent.",
+    "-# VC Tools will fallback to the next best option if your delivery method fails.",
   ].join("\n");
 }
 
