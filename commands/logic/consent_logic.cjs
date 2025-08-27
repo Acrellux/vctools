@@ -2,11 +2,13 @@
 const {
   ActionRowBuilder,
   StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
   Message,
   PermissionFlagsBits,
+  SnowflakeUtil,
 } = require("discord.js");
 
 const {
@@ -34,11 +36,45 @@ function getConsentState(settings = {}) {
   return { mode, channelId };
 }
 
+/** Helpers */
+const MAX_SELECT_OPTIONS = 25;
+
+function sortGuildTextChannels(guild) {
+  // Stable sort: by category position, then channel position
+  return guild.channels.cache
+    .filter((c) => c.type === ChannelType.GuildText)
+    .sort((a, b) => {
+      if (a.parentId === b.parentId) return a.rawPosition - b.rawPosition;
+      const aP = a.parent ?? { rawPosition: -1 };
+      const bP = b.parent ?? { rawPosition: -1 };
+      return aP.rawPosition - bP.rawPosition;
+    });
+}
+
+function makeOptionForChannel(ch, selectedId) {
+  return new StringSelectMenuOptionBuilder()
+    .setLabel(`#${String(ch.name).slice(0, 100)}`)
+    .setValue(String(ch.id))
+    .setDefault(String(ch.id) === String(selectedId));
+}
+
+function dedupeOptionsKeepFirst(options) {
+  const seen = new Set();
+  const out = [];
+  for (const opt of options) {
+    const v = opt.data.value;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    out.push(opt);
+  }
+  return out;
+}
+
 /** Build the two dropdown rows (channel selector is ALWAYS enabled) */
 function buildConsentComponents(guild, userId, state) {
   const { mode, channelId } = state;
 
-  // Delivery mode dropdown
+  // ───────── Delivery mode dropdown ─────────
   const modeMenu = new StringSelectMenuBuilder()
     .setCustomId(`consent:select-mode:${userId}`)
     .setPlaceholder("Choose consent delivery method")
@@ -65,23 +101,43 @@ function buildConsentComponents(guild, userId, state) {
 
   const modeRow = new ActionRowBuilder().addComponents(modeMenu);
 
-  // Channel dropdown (text channels only)
-  const channelOptions = guild.channels.cache
-    .filter((ch) => ch.type === ChannelType.GuildText)
-    .map((ch) => ({
-      label: `#${String(ch.name).slice(0, 100)}`,
-      value: String(ch.id),
-      default: String(ch.id) === String(channelId),
-    }));
+  // ───────── Channel dropdown (max 25 options) ─────────
+  const sortedText = sortGuildTextChannels(guild);
+  const total = sortedText.size;
+
+  // Build base list from sorted channels
+  let options = [];
+  for (const [, ch] of sortedText) {
+    options.push(makeOptionForChannel(ch, channelId));
+    if (options.length >= MAX_SELECT_OPTIONS) break; // cap
+  }
+
+  // If we have a saved channel that's not in the first 25, force-insert it at the top
+  if (channelId && !options.find((o) => o.data.value === String(channelId))) {
+    const selectedChannel =
+      guild.channels.cache.get(channelId) ||
+      null;
+    if (selectedChannel && selectedChannel.type === ChannelType.GuildText) {
+      options.unshift(makeOptionForChannel(selectedChannel, channelId));
+      options = dedupeOptionsKeepFirst(options).slice(0, MAX_SELECT_OPTIONS);
+    }
+  }
+
+  // Placeholder reflects truncation
+  const truncated = total > MAX_SELECT_OPTIONS;
+  const placeholder = total === 0
+    ? "No text channels found"
+    : truncated
+      ? `Select the consent channel… (showing ${MAX_SELECT_OPTIONS} of ${total})`
+      : "Select the consent channel…";
 
   const channelMenu = new StringSelectMenuBuilder()
     .setCustomId(`consent:select-channel:${userId}`)
-    .setPlaceholder("Select the consent channel…")
+    .setPlaceholder(placeholder)
     .setMinValues(1)
     .setMaxValues(1)
-    .setOptions(channelOptions)
-    // 🔓 Always enabled (you can set a channel regardless of mode)
-    .setDisabled(false);
+    .addOptions(options)
+    .setDisabled(total === 0); // disable if no options
 
   const channelRow = new ActionRowBuilder().addComponents(channelMenu);
 
@@ -209,8 +265,7 @@ async function handleConsentSettingChange(interaction) {
           channelId: newChannelId,
         };
         await updateSettingsForGuild(guild.id, {
-          // store snake_case columns in DB
-          consent_channel_id: newChannelId,
+          consent_channel_id: newChannelId, // snake_case for DB
         });
         await interaction.update({
           content: buildConsentContent(guild, newState),
@@ -248,11 +303,9 @@ async function handleConsentSettingChange(interaction) {
 
 function canBotSend(channel) {
   if (!channel?.guild?.members?.me) return false;
-  if (
-    channel.type !== ChannelType.GuildText && // exclude news/forums/stage/threads
-    channel.type !== ChannelType.GuildAnnouncement
-  ) return false;
-  if (channel.type === ChannelType.GuildAnnouncement) return false;
+
+  // Only true public text channels (no announcements/forums/threads)
+  if (channel.type !== ChannelType.GuildText) return false;
 
   const mePerms = channel.permissionsFor(channel.guild.members.me);
   if (!mePerms) return false;
@@ -266,14 +319,9 @@ async function findMostRecentPublicMessageChannel(guild, userId, {
   channelScanLimit = 25,
   perChannelMessages = 50,
 } = {}) {
-  const { SnowflakeUtil } = require("discord.js");
-
-  const candidates = guild.channels.cache.filter((c) => {
-    const isPublicText =
-      c.type === ChannelType.GuildText &&
-      canBotSend(c);
-    return isPublicText;
-  });
+  const candidates = guild.channels.cache.filter(
+    (c) => c.type === ChannelType.GuildText && canBotSend(c)
+  );
 
   const sorted = [...candidates.values()].sort((a, b) => {
     const ta = a.lastMessageId ? SnowflakeUtil.timestampFrom(a.lastMessageId) : 0;
@@ -288,7 +336,7 @@ async function findMostRecentPublicMessageChannel(guild, userId, {
       const hit = msgs.find((m) => m.author?.id === userId);
       if (hit) return ch;
     } catch {
-      // ignore fetch errors and continue
+      // ignore and continue
     }
   }
   return null;
@@ -306,11 +354,6 @@ async function findMostRecentPublicMessageChannel(guild, userId, {
 async function resolveConsentDestination(guild, user) {
   const settings = (await getSettingsForGuild(guild.id)) || {};
   const { channelId } = getConsentState(settings);
-
-  // 1) DM first
-  // We don't "return" here immediately because we need to actually attempt sending to know if it fails.
-  // The actual sending + fallback is handled in sendConsentPrompt where we can try/catch.
-  // Here, we just compute non-DM fallbacks.
 
   // 2) Specified channel (even if mode isn’t specific_channel)
   if (channelId) {
@@ -352,10 +395,10 @@ async function sendConsentPrompt({
   files,
   mentionUserInChannel = true,
 }) {
-  // Compute non-DM fallbacks first
+  // Compute non-DM fallbacks first (so we have them ready if DM fails)
   const dest = await resolveConsentDestination(guild, user);
 
-  // 1) Try DM
+  // 1) Try DM first
   try {
     return await user.send({ content, embeds, components, files });
   } catch (_) {
@@ -371,7 +414,6 @@ async function sendConsentPrompt({
         });
       }
     } catch (err) {
-      // fall through to log
       try {
         await logErrorToChannel(guild.id, err?.stack || String(err), client, "sendConsentPrompt");
       } catch { }
