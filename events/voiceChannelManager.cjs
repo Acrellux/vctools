@@ -30,6 +30,7 @@ const {
 } = require("discord.js");
 const {
   sendConsentPrompt,
+  resolveConsentDestination,
 } = require("../commands/logic/consent_logic.cjs");
 
 // VC State importing
@@ -516,6 +517,18 @@ async function execute(oldState, newState, client) {
     // ─────────────────────────────────────────────
     // Consent enforcement (new flow using sendConsentPrompt)
     // ─────────────────────────────────────────────
+
+    function describeConsentDest(dest, user) {
+      // dest = { preferDM: true, channel?: TextChannel|null }
+      if (!dest || (!dest.channel && !dest.preferDM)) return "no available destination";
+      if (dest.preferDM) {
+        if (dest.channel) return `DM first → fallback <#${dest.channel.id}>`;
+        return "DM first (no public fallback available)";
+      }
+      if (dest.channel) return `<#${dest.channel.id}>`;
+      return "no available destination";
+    }
+
     const hasConsent = await hasUserConsented(userId);
     if (hasConsent) {
       console.log(`[INFO] User ${userId} has already consented. Allowing audio capture.`);
@@ -542,7 +555,18 @@ async function execute(oldState, newState, client) {
       interactionContexts.set(userId, { guildId: guild.id, mode: "consent" });
 
       // Use the centralized consent sender (respects settings + fallback)
-      await sendConsentPrompt({
+      // Preview where we plan to send (for logs/diagnostics only)
+      try {
+        const previewDest = await resolveConsentDestination(guild, newState.member.user);
+        console.log(
+          `[CONSENT ROUTER] Target for ${userId}: ${describeConsentDest(previewDest, newState.member.user)}`
+        );
+      } catch (e) {
+        console.warn(`[CONSENT ROUTER] Preview failed for ${userId}: ${e.message}`);
+      }
+
+      // Use the centralized consent sender (implements fallback chain)
+      const sentMsg = await sendConsentPrompt({
         guild,
         user: newState.member.user,
         client,
@@ -554,6 +578,12 @@ async function execute(oldState, newState, client) {
         components: [consentButtons],
         mentionUserInChannel: true,
       });
+
+      if (!sentMsg) {
+        console.warn(
+          `[CONSENT ROUTER] Could not deliver consent prompt for ${userId} (DM failed and no public destination available).`
+        );
+      }
 
       // Mute until consent is given
       try {

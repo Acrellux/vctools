@@ -22,15 +22,19 @@ const {
 /** Normalize settings keys (snake or camel) + defaults */
 function getConsentState(settings = {}) {
   const mode =
-    settings.consent_delivery_mode ??
+    settings.consentDeliveryMode ??
     settings.consent_delivery_mode ??
     "server_default";
+
   const channelId =
-    settings.consent_channel_id ?? settings.consent_channel_id ?? null;
+    settings.consentChannelId ??
+    settings.consent_channel_id ??
+    null;
+
   return { mode, channelId };
 }
 
-/** Build the two dropdown rows */
+/** Build the two dropdown rows (channel selector is ALWAYS enabled) */
 function buildConsentComponents(guild, userId, state) {
   const { mode, channelId } = state;
 
@@ -72,15 +76,12 @@ function buildConsentComponents(guild, userId, state) {
 
   const channelMenu = new StringSelectMenuBuilder()
     .setCustomId(`consent:select-channel:${userId}`)
-    .setPlaceholder(
-      mode === "specific_channel"
-        ? "Select the consent channel…"
-        : "Select the consent channel (enable ‘Specific channel’ first)"
-    )
+    .setPlaceholder("Select the consent channel…")
     .setMinValues(1)
     .setMaxValues(1)
     .setOptions(channelOptions)
-    .setDisabled(mode !== "specific_channel");
+    // 🔓 Always enabled (you can set a channel regardless of mode)
+    .setDisabled(false);
 
   const channelRow = new ActionRowBuilder().addComponents(channelMenu);
 
@@ -91,18 +92,15 @@ function buildConsentComponents(guild, userId, state) {
 function buildConsentContent(guild, state) {
   const { mode, channelId } = state;
 
-  // Use a channel mention so it’s clickable
-  const channelDisplay =
-    mode === "specific_channel" && channelId
-      ? `<#${channelId}>`
-      : "`—`";
+  // Always show a clickable mention if a channel is set, regardless of mode.
+  const channelDisplay = channelId ? `<#${channelId}>` : "`—`";
 
   return [
     "## ◈ Consent Settings",
     `> **Delivery Method:** \`${mode}\``,
     `> **Assigned Channel:** ${channelDisplay}`,
     "",
-    "-# VC Tools will fallback to the next best option if your delivery method fails.",
+    "-# VC Tools will fall back to the next best option if delivery fails.",
   ].join("\n");
 }
 
@@ -195,9 +193,8 @@ async function handleConsentSettingChange(interaction) {
       if (interaction.customId.startsWith("consent:select-mode:")) {
         const newMode = interaction.values?.[0];
         await updateSettingsForGuild(guild.id, {
-          consent_delivery_mode: newMode,
+          consent_delivery_mode: newMode, // snake_case for DB
         });
-        // If switching away from specific_channel, keep channelId but it won’t be used.
         await interaction.update({
           content: buildConsentContent(guild, { mode: newMode, channelId: state.channelId }),
           components: buildConsentComponents(guild, ownerId, {
@@ -207,13 +204,12 @@ async function handleConsentSettingChange(interaction) {
         });
       } else if (interaction.customId.startsWith("consent:select-channel:")) {
         const newChannelId = interaction.values?.[0] ?? null;
-        // Set channel ID and ensure mode is specific_channel (user intent)
         const newState = {
-          mode: "specific_channel",
+          mode: state.mode,
           channelId: newChannelId,
         };
         await updateSettingsForGuild(guild.id, {
-          consent_delivery_mode: "specific_channel",
+          // store snake_case columns in DB
           consent_channel_id: newChannelId,
         });
         await interaction.update({
@@ -229,7 +225,7 @@ async function handleConsentSettingChange(interaction) {
             "**Consent delivery options**",
             "- **DM**: Sends consent prompts to the user’s Direct Messages.",
             "- **Server default**: Uses your server’s default/system channel.",
-            "- **Specific channel**: Sends to one channel you choose (select below).",
+            "- **Specific channel**: Sends to one channel you choose (always selectable).",
           ].join("\n"),
         });
       }
@@ -238,7 +234,7 @@ async function handleConsentSettingChange(interaction) {
     clearTimeout(watchdog);
   } catch (error) {
     console.error("[ERROR] handleConsentSettingChange:", error);
-    await logErrorToChannel(guild?.id, error.stack, interaction.client, "handleConsentSettingChange");
+    await logErrorToChannel(interaction.guild?.id, error.stack, interaction.client, "handleConsentSettingChange");
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
         content: "> <❌> Failed to update Consent settings.",
@@ -248,8 +244,16 @@ async function handleConsentSettingChange(interaction) {
   }
 }
 
+/* ----------------------- helpers for delivery ----------------------- */
+
 function canBotSend(channel) {
   if (!channel?.guild?.members?.me) return false;
+  if (
+    channel.type !== ChannelType.GuildText && // exclude news/forums/stage/threads
+    channel.type !== ChannelType.GuildAnnouncement
+  ) return false;
+  if (channel.type === ChannelType.GuildAnnouncement) return false;
+
   const mePerms = channel.permissionsFor(channel.guild.members.me);
   if (!mePerms) return false;
   const canView = mePerms.has(PermissionFlagsBits.ViewChannel);
@@ -257,42 +261,87 @@ function canBotSend(channel) {
   return Boolean(canView && canSend);
 }
 
-// --- resolver: pick DM vs channel (with robust fallbacks) ---
-async function resolveConsentDestination(guild, user) {
-  const { getSettingsForGuild } = require("../settings.cjs"); // local import to avoid cycles
-  const settings = (await getSettingsForGuild(guild.id)) || {};
-  const { mode, channelId } = getConsentState(settings);
+/** Find the most recent PUBLIC text channel where the member has a message */
+async function findMostRecentPublicMessageChannel(guild, userId, {
+  channelScanLimit = 25,
+  perChannelMessages = 50,
+} = {}) {
+  const { SnowflakeUtil } = require("discord.js");
 
-  // 1) DM
-  if (mode === "dm") {
-    return { type: "dm", user };
+  const candidates = guild.channels.cache.filter((c) => {
+    const isPublicText =
+      c.type === ChannelType.GuildText &&
+      canBotSend(c);
+    return isPublicText;
+  });
+
+  const sorted = [...candidates.values()].sort((a, b) => {
+    const ta = a.lastMessageId ? SnowflakeUtil.timestampFrom(a.lastMessageId) : 0;
+    const tb = b.lastMessageId ? SnowflakeUtil.timestampFrom(b.lastMessageId) : 0;
+    return tb - ta;
+  });
+
+  for (let i = 0; i < Math.min(sorted.length, channelScanLimit); i++) {
+    const ch = sorted[i];
+    try {
+      const msgs = await ch.messages.fetch({ limit: perChannelMessages });
+      const hit = msgs.find((m) => m.author?.id === userId);
+      if (hit) return ch;
+    } catch {
+      // ignore fetch errors and continue
+    }
   }
+  return null;
+}
 
-  // 2) Specific channel
-  if (mode === "specific_channel" && channelId) {
+/* ------------------------ destination resolver ------------------------ */
+/**
+ * New fallback order (independent of selected mode):
+ * 1) DM
+ * 2) Specified channel (if set & speakable)
+ * 3) Last public channel the member messaged
+ * 4) First public speakable text channel
+ * 5) Nothing (caller should log)
+ */
+async function resolveConsentDestination(guild, user) {
+  const settings = (await getSettingsForGuild(guild.id)) || {};
+  const { channelId } = getConsentState(settings);
+
+  // 1) DM first
+  // We don't "return" here immediately because we need to actually attempt sending to know if it fails.
+  // The actual sending + fallback is handled in sendConsentPrompt where we can try/catch.
+  // Here, we just compute non-DM fallbacks.
+
+  // 2) Specified channel (even if mode isn’t specific_channel)
+  if (channelId) {
     const ch =
       guild.channels.cache.get(channelId) ||
       (await guild.channels.fetch(channelId).catch(() => null));
-    if (ch && canBotSend(ch)) return { type: "channel", channel: ch };
+    if (ch && canBotSend(ch)) {
+      return { preferDM: true, channel: ch };
+    }
   }
 
-  // 3) Server default/system channel
-  if (guild.systemChannel && canBotSend(guild.systemChannel)) {
-    return { type: "channel", channel: guild.systemChannel };
+  // 3) Last public channel member messaged in
+  const lastPublic = await findMostRecentPublicMessageChannel(guild, user.id).catch(() => null);
+  if (lastPublic) {
+    return { preferDM: true, channel: lastPublic };
   }
 
-  // 4) First text channel the bot can speak in
-  const fallback = guild.channels.cache
+  // 4) First public speakable text channel
+  const firstSpeakable = guild.channels.cache
     .filter((c) => c.type === ChannelType.GuildText && canBotSend(c))
     .sort((a, b) => a.rawPosition - b.rawPosition)
     .first();
-  if (fallback) return { type: "channel", channel: fallback };
+  if (firstSpeakable) {
+    return { preferDM: true, channel: firstSpeakable };
+  }
 
-  // 5) Ultimate fallback: DM
-  return { type: "dm", user };
+  // 5) No public option available
+  return { preferDM: true, channel: null };
 }
 
-// --- sender: use resolver, send, and auto-fallback ---
+/* --------------------------- sender w/ fallbacks --------------------------- */
 async function sendConsentPrompt({
   guild,
   user,
@@ -303,39 +352,43 @@ async function sendConsentPrompt({
   files,
   mentionUserInChannel = true,
 }) {
+  // Compute non-DM fallbacks first
   const dest = await resolveConsentDestination(guild, user);
 
-  // If posting in a channel, optionally mention the user so they see it.
-  const maybeMention =
-    dest.type === "channel" && mentionUserInChannel ? `-# <@${user.id}>\n` : "";
-
+  // 1) Try DM
   try {
-    if (dest.type === "dm") {
-      return await user.send({ content, embeds, components, files });
-    } else {
-      return await dest.channel.send({
-        content: maybeMention + (content || ""),
-        embeds,
-        components,
-        files,
-      });
-    }
-  } catch (err) {
-    // If channel send failed, try DM as a last resort.
+    return await user.send({ content, embeds, components, files });
+  } catch (_) {
+    // 2) Specified/derived channel path
     try {
-      if (dest.type !== "dm") {
-        return await user.send({ content, embeds, components, files });
+      if (dest.channel && canBotSend(dest.channel)) {
+        const maybeMention = mentionUserInChannel ? `-# <@${user.id}>\n` : "";
+        return await dest.channel.send({
+          content: maybeMention + (content || ""),
+          embeds,
+          components,
+          files,
+        });
       }
-    } catch (_) {
-      // Log and give up quietly
+    } catch (err) {
+      // fall through to log
       try {
-        const { logErrorToChannel } = require("./helpers.cjs");
         await logErrorToChannel(guild.id, err?.stack || String(err), client, "sendConsentPrompt");
       } catch { }
       return null;
     }
+
+    // 3) Nothing else to try — log and bail
+    try {
+      await logErrorToChannel(
+        guild.id,
+        "Consent prompt could not be delivered: no public destination available.",
+        client,
+        "sendConsentPrompt"
+      );
+    } catch { }
+    return null;
   }
-  return null;
 }
 
 module.exports = {
