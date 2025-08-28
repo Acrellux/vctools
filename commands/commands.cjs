@@ -126,7 +126,7 @@ async function onMessageCreate(message) {
     // If the message doesn't start with a command prefix, ignore it
     if (!used) return;
 
-    // If that prefix type is disabled, respond with fallback options
+    /*// If that prefix type is disabled, respond with fallback options
     if (prefixes && prefixes[used] === false) {
       let reply = "> <❌> That command prefix is not enabled.\n";
       const fallback = [];
@@ -138,7 +138,8 @@ async function onMessageCreate(message) {
         : "No commands are currently enabled.";
       await message.channel.send(reply);
       return;
-    }
+    }*/
+   
     // ──────────────────────────────────
 
     const args = message.content.slice(1).trim().split(/\s+/);
