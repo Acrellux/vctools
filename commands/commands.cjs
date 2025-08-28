@@ -104,9 +104,12 @@ const {
   handleFilterSlashCommand,
   showFilterSettingsUI,
 } = require("./logic/filter_logic.cjs");
+// Consent UI + delivery helpers (✅ correct path)
 const {
   showConsentSettingsUI,
   handleConsentSettingChange,
+  resolveConsentDestination,
+  sendConsentPrompt,
 } = require("./logic/consent_logic.cjs");
 
 /* =============================
@@ -340,41 +343,25 @@ async function onInteractionCreate(interaction) {
           const processingRows = replaceConsentButton(interaction.message, btn =>
             btn.setLabel("Processing…").setStyle(ButtonStyle.Secondary).setDisabled(true)
           );
-          // Use interaction.update() so we only touch components on the original message
           await interaction.update({ components: processingRows });
 
-          // 2) If already consented, short-circuit UI to "Already consented"
-          const { isUserConsented } = require("../database/consent.cjs");
-          const already = await isUserConsented(targetUserId, interaction.guild?.id);
-          if (already) {
-            const alreadyRows = replaceConsentButton(interaction.message, btn =>
-              btn.setLabel("Already consented").setStyle(ButtonStyle.Success).setDisabled(true)
-            );
-            await interaction.message.edit({ components: alreadyRows }); // components only
-            try {
-              await interaction.followUp({ ephemeral: true, content: "> <✅> You had already granted consent." });
-            } catch { }
-            return;
-          }
-
-          // 3) Persist consent + auto-unmute (make this function UPSERT/idempotent)
+          // 2) Persist consent (UPSERT/idempotent)
           await grantUserConsent(targetUserId, interaction.guild);
 
-          // 4) Clear any pending context for this user
+          // 3) Clear any pending context for this user
           const { interactionContexts } = require("../database/contextStore.cjs");
           interactionContexts.delete(targetUserId);
 
-          // 5) Final UI: change ONLY the button to "Consent recorded"
+          // 4) Final UI: change ONLY the button to "Consent recorded"
           const successRows = replaceConsentButton(interaction.message, btn =>
             btn.setLabel("Consent recorded").setStyle(ButtonStyle.Success).setDisabled(true)
           );
-          await interaction.message.edit({ components: successRows }); // components only
+          await interaction.message.edit({ components: successRows });
 
           // Optional ephemeral confirm
           try {
-            await interaction.followUp({ content: "> <✅> Consent recorded." });
+            await interaction.followUp({ ephemeral: true, content: "> <✅> Consent recorded." });
           } catch { }
-
           return;
         } catch (err) {
           console.error("[ERROR] consent:grant handler:", err);
@@ -384,7 +371,6 @@ async function onInteractionCreate(interaction) {
             interaction.client,
             "consent:grant"
           );
-          // Best-effort error toast
           try {
             await interaction.followUp({
               ephemeral: true,
