@@ -109,6 +109,31 @@ const {
 } = require("./logic/consent_logic.cjs");
 
 /* =============================
+    GLOBALS & HELPERS
+============================= */
+
+const inflightConsent = new Set();
+
+/** Replace only the consent:grant button in the given message's components */
+function replaceConsentButton(msg, transformFn) {
+  const rows = msg.components ?? [];
+  return rows.map(row => {
+    const newRow = new ActionRowBuilder();
+    newRow.addComponents(
+      ...row.components.map(c => {
+        // Only transform our target button; leave everything else intact
+        const isTarget =
+          c.customId &&
+          typeof c.customId === "string" &&
+          c.customId.startsWith("consent:grant:");
+        return isTarget ? transformFn(ButtonBuilder.from(c)) : ButtonBuilder.from(c);
+      })
+    );
+    return newRow;
+  });
+}
+
+/* =============================
    MESSAGE-BASED COMMAND ROUTING
 ============================= */
 async function onMessageCreate(message) {
@@ -139,7 +164,7 @@ async function onMessageCreate(message) {
       await message.channel.send(reply);
       return;
     }*/
-   
+
     // ──────────────────────────────────
 
     const args = message.content.slice(1).trim().split(/\s+/);
@@ -300,21 +325,55 @@ async function onInteractionCreate(interaction) {
             });
           }
 
-          // Ack quickly to avoid the red toast if anything else runs long
-          if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply().catch(() => { });
+          // If another handler run is already in-flight for this user, noop
+          if (inflightConsent.has(targetUserId)) {
+            return interaction.reply({
+              ephemeral: true,
+              content: "> <❇️> Your consent is already being processed.",
+            });
+          }
+          inflightConsent.add(targetUserId);
+
+          // 1) Immediate UI ack: change ONLY the button to "Processing…" (no content changes)
+          const processingRows = replaceConsentButton(interaction.message, btn =>
+            btn.setLabel("Processing…").setStyle(ButtonStyle.Secondary).setDisabled(true)
+          );
+          // Use interaction.update() so we only touch components on the original message
+          await interaction.update({ components: processingRows });
+
+          // 2) If already consented, short-circuit UI to "Already consented"
+          const { isUserConsented } = require("../database/consent.cjs");
+          const already = await isUserConsented(targetUserId, interaction.guild?.id);
+          if (already) {
+            const alreadyRows = replaceConsentButton(interaction.message, btn =>
+              btn.setLabel("Already consented").setStyle(ButtonStyle.Success).setDisabled(true)
+            );
+            await interaction.message.edit({ components: alreadyRows }); // components only
+            try {
+              await interaction.followUp({ ephemeral: true, content: "> <✅> You had already granted consent." });
+            } catch { }
+            return;
           }
 
-          // Persist consent + auto-unmute (grantUserConsent already unmutes if in VC)
+          // 3) Persist consent + auto-unmute (make this function UPSERT/idempotent)
           await grantUserConsent(targetUserId, interaction.guild);
 
-          // Clear any pending context for this user
+          // 4) Clear any pending context for this user
           const { interactionContexts } = require("../database/contextStore.cjs");
           interactionContexts.delete(targetUserId);
 
-          return interaction.editReply({
-            content: "✅ Consent recorded.",
-          });
+          // 5) Final UI: change ONLY the button to "Consent recorded"
+          const successRows = replaceConsentButton(interaction.message, btn =>
+            btn.setLabel("Consent recorded").setStyle(ButtonStyle.Success).setDisabled(true)
+          );
+          await interaction.message.edit({ components: successRows }); // components only
+
+          // Optional ephemeral confirm
+          try {
+            await interaction.followUp({ content: "> <✅> Consent recorded." });
+          } catch { }
+
+          return;
         } catch (err) {
           console.error("[ERROR] consent:grant handler:", err);
           await logErrorToChannel(
@@ -323,13 +382,17 @@ async function onInteractionCreate(interaction) {
             interaction.client,
             "consent:grant"
           );
-          if (!interaction.replied) {
-            return interaction.reply({
+          // Best-effort error toast
+          try {
+            await interaction.followUp({
               ephemeral: true,
               content: "> <❌> Failed to record your consent. Please try again.",
             });
-          }
+          } catch { }
           return;
+        } finally {
+          const [, , targetUserId] = interaction.customId.split(":");
+          inflightConsent.delete(targetUserId);
         }
       }
 
