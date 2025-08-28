@@ -598,12 +598,6 @@ async function execute(oldState, newState, client) {
         mentionUserInChannel: true,
       });
 
-      if (!sentMsg) {
-        console.warn(
-          `[CONSENT ROUTER] Could not deliver consent prompt for ${userId} (DM failed and no public destination available).`
-        );
-      }
-
       // Mute until consent is given
       try {
         await newState.setMute(true, "Awaiting transcription consent.");
