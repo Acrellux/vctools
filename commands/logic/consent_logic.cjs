@@ -351,85 +351,103 @@ async function findMostRecentPublicMessageChannel(guild, userId, {
  * 4) First public speakable text channel
  * 5) Nothing (caller should log)
  */
-async function resolveConsentDestination(guild, user) {
-  const settings = (await getSettingsForGuild(guild.id)) || {};
-  const { channelId } = getConsentState(settings);
+async function resolveConsentDestination(guild, member, settings) {
+  const s = settings || (await getSettingsForGuild(guild.id)) || {};
+  const { mode, channelId } = getConsentState(s);
 
-  // 2) Specified channel (even if mode isn’t specific_channel)
-  if (channelId) {
-    const ch =
-      guild.channels.cache.get(channelId) ||
-      (await guild.channels.fetch(channelId).catch(() => null));
-    if (ch && canBotSend(ch)) {
-      return { preferDM: true, channel: ch };
-    }
-  }
-
-  // 3) Last public channel member messaged in
-  const lastPublic = await findMostRecentPublicMessageChannel(guild, user.id).catch(() => null);
-  if (lastPublic) {
-    return { preferDM: true, channel: lastPublic };
-  }
-
-  // 4) First public speakable text channel
+  // Helper: first speakable public text channel
   const firstSpeakable = guild.channels.cache
     .filter((c) => c.type === ChannelType.GuildText && canBotSend(c))
     .sort((a, b) => a.rawPosition - b.rawPosition)
     .first();
-  if (firstSpeakable) {
-    return { preferDM: true, channel: firstSpeakable };
+
+  // Prefer channel according to mode
+  let preferredChannel = null;
+
+  if (mode === "specific_channel" && channelId) {
+    const ch =
+      guild.channels.cache.get(channelId) ||
+      (await guild.channels.fetch(channelId).catch(() => null));
+    if (ch && canBotSend(ch)) preferredChannel = ch;
+  } else if (mode === "server_default") {
+    const sys = guild.systemChannel;
+    if (sys && canBotSend(sys)) preferredChannel = sys;
   }
 
-  // 5) No public option available
-  return { preferDM: true, channel: null };
+  // Fallbacks
+  if (!preferredChannel) {
+    const lastPublic = await findMostRecentPublicMessageChannel(
+      guild,
+      member?.id
+    ).catch(() => null);
+    preferredChannel = lastPublic || firstSpeakable || null;
+  }
+
+  return {
+    // DM first only if the admin explicitly chose DM
+    preferDM: mode === "dm",
+    channel: preferredChannel,
+  };
 }
 
 /* --------------------------- sender w/ fallbacks --------------------------- */
 async function sendConsentPrompt({
   guild,
   user,
+  member,
   client,
+  settings,
+  destination,
   content,
-  embeds,
   components,
+  embeds,
   files,
   mentionUserInChannel = true,
 }) {
-  // Compute non-DM fallbacks first (so we have them ready if DM fails)
-  const dest = await resolveConsentDestination(guild, user);
+  const dest =
+    destination ||
+    (await resolveConsentDestination(
+      guild,
+      member || (await guild.members.fetch(user.id).catch(() => null)),
+      settings
+    ));
 
-  // 1) Try DM first
+  if (!dest) return null;
+
+  const tryDMFirst = !!dest.preferDM;
+
+  const sendDM = async () =>
+    user.send({ content, embeds, components, files });
+
+  const sendChannel = async () => {
+    if (!dest.channel || !canBotSend(dest.channel))
+      throw new Error("No speakable channel");
+    const maybeMention = mentionUserInChannel ? `-# <@${user.id}>\n` : "";
+    return dest.channel.send({
+      content: maybeMention + (content || ""),
+      embeds,
+      components,
+      files,
+    });
+  };
+
+  // Attempt in preferred order, then swap
   try {
-    return await user.send({ content, embeds, components, files });
-  } catch (_) {
-    // 2) Specified/derived channel path
+    return tryDMFirst ? await sendDM() : await sendChannel();
+  } catch (e1) {
     try {
-      if (dest.channel && canBotSend(dest.channel)) {
-        const maybeMention = mentionUserInChannel ? `-# <@${user.id}>\n` : "";
-        return await dest.channel.send({
-          content: maybeMention + (content || ""),
-          embeds,
-          components,
-          files,
-        });
-      }
-    } catch (err) {
+      return tryDMFirst ? await sendChannel() : await sendDM();
+    } catch (e2) {
       try {
-        await logErrorToChannel(guild.id, err?.stack || String(err), client, "sendConsentPrompt");
+        await logErrorToChannel(
+          guild.id,
+          e2?.stack || String(e2),
+          client,
+          "sendConsentPrompt"
+        );
       } catch { }
       return null;
     }
-
-    // 3) Nothing else to try — log and bail
-    try {
-      await logErrorToChannel(
-        guild.id,
-        "Consent prompt could not be delivered: no public destination available.",
-        client,
-        "sendConsentPrompt"
-      );
-    } catch { }
-    return null;
   }
 }
 

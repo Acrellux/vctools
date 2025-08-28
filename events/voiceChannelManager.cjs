@@ -565,17 +565,36 @@ async function execute(oldState, newState, client) {
         console.warn(`[CONSENT ROUTER] Preview failed for ${userId}: ${e.message}`);
       }
 
-      // Use the centralized consent sender (implements fallback chain)
-      const sentMsg = await sendConsentPrompt({
+      // BEFORE sending the prompt
+      const settings = await getSettingsForGuild(guild.id);
+
+      // Use member instead of user so perms checks don't degrade to fallback
+      const member = newState.member;
+
+      // Resolve destination with settings (update the helper to accept settings if needed)
+      const dest = await resolveConsentDestination(guild, member, settings);
+
+      // Now send, explicitly providing destination + settings
+      await sendConsentPrompt({
         guild,
-        user: newState.member.user,
+        user: member.user,
+        member,                // <-- pass the GuildMember
         client,
+        settings,              // <-- pass settings so the helper doesn't have to refetch
+        destination: dest,     // <-- pass the resolved plan to avoid recomputation/fallback
         content:
           `# Consent Required\nInside this voice call, your voice will be transcribed into text.\n` +
           `Please click the button below to consent.\n\n` +
           `> All audio files of your voice are temporary and will not be permanently saved.\n` +
           `-# > You can also take a look at our [privacy policy](<https://www.vctools.app/privacy>) for more information.`,
-        components: [consentButtons],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`consent:grant:${member.id}`)
+              .setLabel("Consent")
+              .setStyle(ButtonStyle.Success)
+          ),
+        ],
         mentionUserInChannel: true,
       });
 
