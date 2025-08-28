@@ -275,6 +275,14 @@ async function onInteractionCreate(interaction) {
       await handleReportSubmission(interaction);
     } else if (interaction.isButton() || interaction.isStringSelectMenu()) {
       if (interaction.customId.startsWith("help:")) return;
+      // report + activity buttons → open the modal
+      if (
+        interaction.isButton() &&
+        (interaction.customId.startsWith("report:") ||
+          interaction.customId.startsWith("activity:"))
+      ) {
+        return handleReportInteractions(interaction);
+      }
       if (interaction.customId.startsWith("notify:")) return handleNotifyFlow(interaction);
       if (interaction.isButton() && interaction.customId.startsWith("prefix:")) return handlePrefixSettingsFlow(interaction);
 
