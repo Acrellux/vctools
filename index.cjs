@@ -5,7 +5,8 @@ const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 const commands = require("./commands/commands.cjs");
-const { ChannelType, AuditLogEvent, PermissionFlagsBits } = require("discord.js");
+const { ChannelType, AuditLogEvent, PermissionFlagsBits, PermissionsBitField, SnowflakeUtil,
+} = require("discord.js");
 const {
   joinChannel,
   audioListeningFunctions
@@ -564,9 +565,6 @@ client.on(Events.GuildCreate, async (guild) => {
 
     const hierarchyMsg = "Please **move my role up the hierarchy** so I can operate properly.";
 
-    // ─── Helpers (scoped here for drop-in) ───
-    const { ChannelType, PermissionFlagsBits, PermissionsBitField, SnowflakeUtil } = require("discord.js");
-
     function canBotSend(channel, memberToViewCheck = null) {
       if (!channel || typeof channel.permissionsFor !== "function") return false;
 
@@ -646,7 +644,24 @@ client.on(Events.GuildCreate, async (guild) => {
       return null;
     }
 
-    // ─── Choose ONE target for both messages (no DMs) ───
+    // ─── 0) Try to DM inviter first ───
+    let sentDM = false;
+    if (inviter) {
+      try {
+        await inviter.send(`${welcomeMsg}\n\n${hierarchyMsg}`);
+        console.log("[INFO] Sent welcome/setup message via DM to inviter.");
+        sentDM = true;
+      } catch (e) {
+        console.warn("[WARN] Could not DM inviter, will try channels instead:", e.message);
+      }
+    }
+
+    // If DM succeeded, skip public posting entirely.
+    if (sentDM) {
+      return;
+    }
+
+    // ─── Choose ONE target for both messages (fallback to channels) ───
     let target = null;
 
     // 1) Last place inviter spoke (if known)
