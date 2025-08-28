@@ -6,6 +6,7 @@ const {
   ButtonStyle,
   Message,
   Interaction,
+  ComponentType,
 } = require("discord.js");
 
 // Import your Supabase-based settings helpers
@@ -121,12 +122,13 @@ function replaceConsentButton(msg, transformFn) {
     const newRow = new ActionRowBuilder();
     newRow.addComponents(
       ...row.components.map(c => {
-        // Only transform our target button; leave everything else intact
-        const isTarget =
-          c.customId &&
-          typeof c.customId === "string" &&
-          c.customId.startsWith("consent:grant:");
-        return isTarget ? transformFn(ButtonBuilder.from(c)) : ButtonBuilder.from(c);
+        if (c.type !== ComponentType.Button) {
+          // leave non-buttons exactly as-is
+          return c;
+        }
+        const btn = ButtonBuilder.from(c);
+        const isTarget = btn.data?.custom_id?.startsWith?.("consent:grant:");
+        return isTarget ? transformFn(btn) : btn;
       })
     );
     return newRow;
