@@ -68,7 +68,7 @@ async function getSettingsForGuild(guildId) {
       vcLoggingChannelId: null,
       vcModeratorRoleId: null,
       prefixes: { slash: true, exclamation: true, greater: true },
-      consent_delivery_mode: "server_default",
+      consent_delivery_mode: "dm",
       consent_channel_id: null,
     };
 
@@ -141,7 +141,7 @@ async function updateSettingsForGuild(guildId, updates, guild) {
     vcLoggingChannelId: null,
     vcModeratorRoleId: null,
     prefixes: { slash: true, exclamation: true, greater: true },
-    consent_delivery_mode: "server_default",
+    consent_delivery_mode: "dm",
     consent_channel_id: null,
   };
 
