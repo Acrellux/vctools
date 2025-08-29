@@ -61,24 +61,24 @@ async function reportActivity(userId) {
 
 /**
  * handleReportActivity:
- * Posts user report summary to the logs channel if enabled.
+ * Posts user report summary to the activity logs channel if enabled.
  */
 async function handleReportActivity(userId, client, guildId) {
   const settings = await settingsModule.getSettingsForGuild(guildId);
-  if (!settings.transcriptionEnabled || !settings.channelId) {
+  if (!settings.vcLoggingChannelId) {
     return { error: "<❇️> Activity reporting has not been enabled in this server yet." };
   }
 
   const activityResult = await reportActivity(userId);
   if (activityResult.error) return { error: activityResult.error };
 
-  const channel = await client.channels.fetch(settings.channelId).catch(() => null);
+  const channel = await client.channels.fetch(settings.vcLoggingChannelId).catch(() => null);
   if (!channel) {
-    return { error: "<❌> Transcription logs channel not found." };
+    return { error: "<❌> Activity logs channel not found." };
   }
 
   await channel.send(activityResult.message);
-  return { message: "<✅> Your report activity has been posted in the logs channel." };
+  return { message: "<✅> Your report activity has been forwarded to the server's staff members." };
 }
 
 /**
@@ -231,12 +231,18 @@ async function handleReportSubmission(interaction) {
 
   let reportChannel;
   if (isActivity) {
-    if (!settings.channelId) return interaction.reply({ content: "<❇️> Activity reporting has not been enabled in this server yet.", ephemeral: true });
-    reportChannel = await interaction.client.channels.fetch(settings.channelId).catch(() => null);
-    if (!reportChannel) return interaction.reply({ content: "<❌> Report logs channel is missing.", ephemeral: true });
+    if (!settings.vcLoggingChannelId) {
+      return interaction.reply({ content: "<❇️> Activity reporting has not been enabled in this server yet.", ephemeral: true });
+    }
+    reportChannel = await interaction.client.channels.fetch(settings.vcLoggingChannelId).catch(() => null);
+    if (!reportChannel) {
+      return interaction.reply({ content: "<❌> Activity logs channel is missing.", ephemeral: true });
+    }
   } else {
     reportChannel = await interaction.client.channels.fetch(REPORT_CHANNEL_ID).catch(() => null);
-    if (!reportChannel) return interaction.reply({ content: "<❌> Unable to forward report.", ephemeral: true });
+    if (!reportChannel) {
+      return interaction.reply({ content: "<❌> Unable to forward report.", ephemeral: true });
+    }
   }
 
   const reportMessage = await reportChannel.send({ embeds: [embed] });
@@ -397,7 +403,7 @@ async function editReport(userId, reportId, updates, client) {
     let channel;
     if (updatedReport.type === "activity") {
       const settings = await settingsModule.getSettingsForGuild(updatedReport.guild_id);
-      channel = await client.channels.fetch(settings.channelId).catch(() => null);
+      channel = await client.channels.fetch(settings.vcLoggingChannelId).catch(() => null);
     } else {
       channel = await client.channels.fetch(REPORT_CHANNEL_ID).catch(() => null);
     }
