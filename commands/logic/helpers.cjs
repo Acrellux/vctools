@@ -2,8 +2,6 @@
 
 const {
   ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   StringSelectMenuBuilder,
   ChannelType,
   PermissionsBitField,
@@ -84,21 +82,14 @@ function logErrorToChannel(guildId, errorMessage, client, context = "General") {
     });
 }
 
-/**
- * Utility: build safe min/max (1..25) for select menus.
- * Ensures we never send NaN/0 to Discord.
- */
+/** Utility: clamp 1..25 for select menus */
 function safeMax(len) {
   return Math.min(25, Math.max(1, Number(len) || 1));
 }
 
 /**
- * Creates a dropdown for selecting a text channel (logging).
- * @param {string} mode - Combined action scope, e.g. "init:select_logging_channel"
- * @param {import("discord.js").Guild} guild
- * @param {string} userId
- * @param {string|null} currentchannelId
- * @returns {ActionRowBuilder}
+ * Channel dropdown for transcription logs.
+ * Always emits: customId = "init:select_logging_channel:<userId>"
  */
 function createchannelIdropdown(mode, guild, userId, currentchannelId) {
   const options = guild.channels.cache
@@ -110,27 +101,20 @@ function createchannelIdropdown(mode, guild, userId, currentchannelId) {
     }))
     .slice(0, 25);
 
-  // Allow a "create new" sentinel during init (first, but only if there are any real choices or not)
-  const withNew = mode.startsWith("init:")
-    ? [{ label: "Make a new channel", value: "new_channel" }, ...options]
+  const withNew = mode?.startsWith?.("init:")
+    ? [{ label: "➕ Create new #transcription-logs", value: "new_channel" }, ...options]
     : options;
 
   const safe = withNew.length
     ? withNew
-    : [
-        {
-          label: "No text channels found",
-          value: "placeholder-no-channels",
-          default: true,
-        },
-      ];
+    : [{ label: "No text channels found", value: "placeholder-no-channels", default: true }];
 
   const max = safeMax(safe.length);
 
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`${mode}:${String(userId)}`) // e.g. "init:select_logging_channel:<userId>"
-      .setPlaceholder("Choose a logging channel...")
+      .setCustomId(`init:select_logging_channel:${String(userId)}`)
+      .setPlaceholder("Choose a logging channel…")
       .setMinValues(1)
       .setMaxValues(max)
       .addOptions(safe)
@@ -138,12 +122,8 @@ function createchannelIdropdown(mode, guild, userId, currentchannelId) {
 }
 
 /**
- * Creates a dropdown for selecting an error logs channel.
- * @param {string} mode - e.g. "init:select_error_logs_channel"
- * @param {import("discord.js").Guild} guild
- * @param {string} userId
- * @param {string|null} currentchannelId
- * @returns {ActionRowBuilder}
+ * Channel dropdown for error logs.
+ * Always emits: customId = "init:select_error_logs_channel:<userId>"
  */
 function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
   const options = guild.channels.cache
@@ -155,26 +135,20 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
     }))
     .slice(0, 25);
 
-  const withNew = mode.startsWith("init:")
-    ? [{ label: "Create a new error logs channel", value: "new_channel" }, ...options]
+  const withNew = mode?.startsWith?.("init:")
+    ? [{ label: "➕ Create new #error-logs", value: "new_channel" }, ...options]
     : options;
 
   const safe = withNew.length
     ? withNew
-    : [
-        {
-          label: "No text channels found",
-          value: "placeholder-no-channels",
-          default: true,
-        },
-      ];
+    : [{ label: "No text channels found", value: "placeholder-no-channels", default: true }];
 
   const max = safeMax(safe.length);
 
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`${mode}:${String(userId)}`) // e.g. "init:select_error_logs_channel:<userId>"
-      .setPlaceholder("Choose an error logs channel...")
+      .setCustomId(`init:select_error_logs_channel:${String(userId)}`)
+      .setPlaceholder("Choose an error logs channel…")
       .setMinValues(1)
       .setMaxValues(max)
       .addOptions(safe)
@@ -182,13 +156,10 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
 }
 
 /**
- * Creates a dropdown for selecting a role for log access.
- * Filters @everyone + managed roles.
- * @param {string} mode - e.g. "init:select_admin_role"
- * @param {import("discord.js").Guild} guild
- * @param {string} userId
- * @param {string|null} currentRoleId
- * @returns {ActionRowBuilder}
+ * Role dropdown used by multiple init steps.
+ * Emits:
+ *  - "init:select_log_viewers:<userId>" for admin/mod/log-viewers steps
+ *  - "init:select_vcmoderator_role:<userId>" for VC moderator step
  */
 function createRoleDropdown(mode, guild, userId, currentRoleId) {
   const options = guild.roles.cache
@@ -202,20 +173,20 @@ function createRoleDropdown(mode, guild, userId, currentRoleId) {
 
   const safe = options.length
     ? options
-    : [
-        {
-          label: "No eligible roles found",
-          value: "placeholder-no-roles",
-          default: true,
-        },
-      ];
+    : [{ label: "No eligible roles found", value: "placeholder-no-roles", default: true }];
 
   const max = safeMax(safe.length);
 
+  const isVCMod =
+    mode === "init_vcmoderator_role" ||
+    mode === "init:select_vcmoderator_role";
+
+  const action = isVCMod ? "select_vcmoderator_role" : "select_log_viewers";
+
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`${mode}:${String(userId)}`) // e.g. "init:select_admin_role:<userId>"
-      .setPlaceholder("Select a role...")
+      .setCustomId(`init:${action}:${String(userId)}`)
+      .setPlaceholder(isVCMod ? "Select a Voice Channel Moderator role…" : "Select a role…")
       .setMinValues(1)
       .setMaxValues(max)
       .addOptions(safe)
@@ -223,13 +194,8 @@ function createRoleDropdown(mode, guild, userId, currentRoleId) {
 }
 
 /**
- * Creates a dropdown for selecting a role for error logs access.
- * Includes @everyone (if you want to let the server choose broad visibility).
- * @param {string} mode - e.g. "init:select_error_logs_role"
- * @param {import("discord.js").Guild} guild
- * @param {string} userId
- * @param {string|null} currentRoleId
- * @returns {ActionRowBuilder}
+ * Role dropdown for error logs visibility.
+ * Always emits: customId = "init:select_error_logs_role:<userId>"
  */
 function createErrorLogRoleDropdown(mode, guild, userId, currentRoleId) {
   const options = guild.roles.cache
@@ -242,20 +208,14 @@ function createErrorLogRoleDropdown(mode, guild, userId, currentRoleId) {
 
   const safe = options.length
     ? options
-    : [
-        {
-          label: "No roles found",
-          value: "placeholder-no-roles",
-          default: true,
-        },
-      ];
+    : [{ label: "No roles found", value: "placeholder-no-roles", default: true }];
 
   const max = safeMax(safe.length);
 
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`${mode}:${String(userId)}`) // e.g. "init:select_error_logs_role:<userId>"
-      .setPlaceholder("Select a role...")
+      .setCustomId(`init:select_error_logs_role:${String(userId)}`)
+      .setPlaceholder("Select a role to view error logs…")
       .setMinValues(1)
       .setMaxValues(max)
       .addOptions(safe)
@@ -264,8 +224,6 @@ function createErrorLogRoleDropdown(mode, guild, userId, currentRoleId) {
 
 /*
  * Checks if the target user is valid for operations.
- * @param {import("discord.js").User} user
- * @return {string|null} - Returns an error message if invalid, otherwise null.
  */
 const VC_TOOLS_BOT_ID = "1278547607798415401";
 function isInvalidTarget(user) {
