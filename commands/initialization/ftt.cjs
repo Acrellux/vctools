@@ -155,7 +155,9 @@ async function transitionToAdminRole(interaction) {
 
     await interaction.update({
       content: `## **<3.2A> Select an Admin Role**
-> Choose the role that you use for administration purposes.`,
+> Choose the role that you use for administration purposes.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
       components: [
         // Use a consistent custom ID format.
         createRoleDropdown("init:select_admin_role", guild, userId),
@@ -183,7 +185,9 @@ async function transitionToModeratorRole(interaction) {
 
     await interaction.update({
       content: `## **<3.3> Select a Moderator Role**
-> Now choose the role that moderators will use.`,
+> Now choose the role that moderators will use.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
       components: [
         createRoleDropdown("init:select_moderator_role", guild, userId),
       ],
@@ -215,7 +219,9 @@ async function transitionToVcModeratorRole(interaction) {
 
     await interaction.update({
       content: `## **<3.4> Select a Voice Channel Moderator Role**
-> Now choose the role that will moderate voice channels.`,
+> Now choose the role that will moderate voice channels.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
       components: [
         createRoleDropdown("init:select_vcmoderator_role", guild, userId),
       ],

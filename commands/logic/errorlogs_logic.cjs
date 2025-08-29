@@ -72,7 +72,9 @@ async function showErrorLogsSettingsUI(
         ? guild.roles.cache.get(settings.errorLogsRoleId)?.name ||
         "Unknown Role"
         : "Not set"
-      }`;
+      }
+
+-# *Unable to find a specific channel/role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
 
     // 🛠 Reset components to avoid duplication
     const components = [];

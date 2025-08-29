@@ -58,7 +58,9 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
 > **Notify for Loud Users:** ${settings.notifyLoudUser ? "Enabled" : "Disabled"}
 > **Soundboard Logging:** ${settings.soundboardLogging ? "Enabled" : "Disabled"}
 > **Kick on Soundboard Spam:** ${settings.kickOnSoundboardSpam ? "Enabled" : "Disabled"
-      }`;
+      }
+
+-# *Unable to find a specific channel/role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
 
     // Create dropdown for VC Ping role selection.
     const vcRoleDropdown = createRoleDropdown(

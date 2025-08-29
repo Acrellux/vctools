@@ -34,13 +34,13 @@ const helpTopics = {
 
   initialize: `## **VC Tools ◈ Help ◈ Initialize**
 > \`initialize\` ◈ Start the setup process for VC Tools.
->
+
 > **Initialization Methods:**
 - \`ftt\` (from the top) ◈ Full setup process, including transcription, error logs, and staffroles.
 - \`transcription\` ◈ Sets up voice transcription without error logging or staff roles.
 - \`errorlogs\` ◈ Only sets up error logging without transcription or staff roles.
 - \`staffroles\` ◈ Only sets up staff roles for managing the bot without transcription or error logging.
->
+
 > **Setup Notes:**
 - \`ftt\` ensures everything is configured at once.
 - You can configure settings later using \`settings transcription\`, \`settings errorlogs\`, \`settings bot\`, or \`settings vc\`.

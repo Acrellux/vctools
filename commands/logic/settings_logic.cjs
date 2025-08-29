@@ -242,7 +242,7 @@ async function handleSettingsFlow(interaction, mode, action) {
         );
 
         const updatedSettings = await getSettingsForGuild(guild.id);
-        const contentMessage = `## **Bot Settings**
+        const contentMessage = `## **◈ Bot Settings**
   > **Admin Role:** ${updatedSettings.adminRoleId
             ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
             "Unknown Role"
@@ -254,7 +254,9 @@ async function handleSettingsFlow(interaction, mode, action) {
             : "Not set"
           }
   > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-          }`;
+          }
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
 
         const adminRoleDropdown = createRoleDropdown(
           `bot:select-admin-role:${userId}`,
@@ -312,7 +314,7 @@ async function handleSettingsFlow(interaction, mode, action) {
         );
         const updatedSettings = await getSettingsForGuild(guild.id);
         const role = guild.roles.cache.get(updatedSettings.adminRoleId);
-        const contentMessage = `## **Bot Settings**
+        const contentMessage = `## **◈ Bot Settings**
   > **Admin Role:** ${role ? role.name : "Not set"}
   > **Moderator Role:** ${updatedSettings.moderatorRoleId
             ? guild.roles.cache.get(updatedSettings.moderatorRoleId)?.name ||
@@ -320,7 +322,9 @@ async function handleSettingsFlow(interaction, mode, action) {
             : "Not set"
           }
   > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-          }`;
+          }
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
         const adminRoleDropdown = createRoleDropdown(
           `bot:select-admin-role:${userId}`,
           guild,
@@ -374,7 +378,7 @@ async function handleSettingsFlow(interaction, mode, action) {
         );
         const updatedSettings = await getSettingsForGuild(guild.id);
         const role = guild.roles.cache.get(updatedSettings.moderatorRoleId);
-        const contentMessage = `## **Bot Settings**
+        const contentMessage = `## **◈ Bot Settings**
   > **Admin Role:** ${updatedSettings.adminRoleId
             ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
             "Unknown Role"
@@ -382,7 +386,9 @@ async function handleSettingsFlow(interaction, mode, action) {
           }
   > **Moderator Role:** ${role ? role.name : "Not set"}
   > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-          }`;
+          }
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
         const adminRoleDropdown = createRoleDropdown(
           `bot:select-admin-role:${userId}`,
           guild,

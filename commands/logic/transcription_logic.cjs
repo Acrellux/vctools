@@ -59,7 +59,7 @@ async function showTranscriptionSettingsUI(
       }
       return;
     }
-    
+
     const settings = await getSettingsForGuild(guild.id);
     const userId =
       interactionOrMessage instanceof Message
@@ -72,7 +72,9 @@ async function showTranscriptionSettingsUI(
   > **Transcription Logs Role:** ${settings.allowedRoleId
         ? guild.roles.cache.get(settings.allowedRoleId)?.name || "Unknown Role"
         : "Not set"
-      }`;
+      }
+
+-# *Unable to find a specific channel/role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
 
     const transcriptionButtons = new ActionRowBuilder().addComponents(
       new ButtonBuilder()

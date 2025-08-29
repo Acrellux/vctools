@@ -258,7 +258,9 @@ async function handleInitializeFlow(interaction, mode, action) {
     if (action === "setup_transcription_yes") {
       await interaction.update({
         content: `## **<1.2> Choose a Transcription Logs Channel**
-  > Which channel should transcription logs be saved in?`,
+  > Which channel should transcription logs be saved in?
+
+-# *Unable to find a specific channel? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
         components: [createchannelIdropdown("init", guild, userId, null)],
       });
       return;
@@ -300,8 +302,10 @@ async function handleInitializeFlow(interaction, mode, action) {
         await interaction.update({
           content: `> <✅> **New channel created: <#${newChannel.id}> for transcription logs.**
       
-  ## **<1.3> Choose who can view transcription logs**
-  > Select a role:`,
+## **<1.3> Choose who can view transcription logs**
+> Select a role:
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [createRoleDropdown("init", guild, userId, null)],
         });
         return;
@@ -315,7 +319,9 @@ async function handleInitializeFlow(interaction, mode, action) {
         content: `> <✅> **Selected <#${selectedchannelId}> for transcription logs.**
       
   ## **<1.3> Choose who can view transcription logs**
-  > Select a role:`,
+  > Select a role:
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
         components: [createRoleDropdown("init", guild, userId, null)],
       });
       return;
@@ -459,7 +465,9 @@ async function handleInitializeFlow(interaction, mode, action) {
           content: `> <✅> **New channel created: <#${newChannel.id}> for error logs.**
       
   ## **<2.3> Choose who can view the error logs**
-  > Select the role that can view error logs:`,
+  > Select the role that can view error logs:
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [createErrorLogRoleDropdown("init", guild, userId, null)],
         });
         return;
@@ -473,7 +481,9 @@ async function handleInitializeFlow(interaction, mode, action) {
         content: `> <✅> **Error logs channel set to <#${selectedchannelId}>.**
       
   ## **<2.3> Choose who can view the error logs**
-  > Select the role that can view error logs:`,
+  > Select the role that can view error logs:
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
         components: [createErrorLogRoleDropdown("init", guild, userId, null)],
       });
       return;
@@ -564,7 +574,9 @@ async function handleInitializeFlow(interaction, mode, action) {
       });
       await interaction.update({
         content: `## **<3.2> Select an Admin Role**
-  > Choose the role you use for administration purposes.`,
+  > Choose the role you use for administration purposes.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
         components: [
           createRoleDropdown("init_admin_role", guild, userId, null),
         ],
@@ -594,7 +606,9 @@ async function handleInitializeFlow(interaction, mode, action) {
       });
       await interaction.update({
         content: `## **<3.3> Select a Moderator Role**
-  > Now choose the role that moderators will use.`,
+  > Now choose the role that moderators will use.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
         components: [
           createRoleDropdown("init_moderator_role", guild, userId, null),
         ],
@@ -623,7 +637,9 @@ async function handleInitializeFlow(interaction, mode, action) {
         content: `> <✅> **Moderator role set to: ${role.name}.**
             
 ## **<3.4> Select a Voice Channel Moderator Role**
-> Now choose the role that will moderate voice channels.`,
+> Now choose the role that will moderate voice channels.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
         components: [
           createRoleDropdown("init:select_vcmoderator_role", guild, userId),
         ],

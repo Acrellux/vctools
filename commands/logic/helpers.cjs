@@ -156,12 +156,13 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
 }
 
 /**
- * Role dropdown used by multiple init steps.
- * Emits:
- *  - "init:select_log_viewers:<userId>" for admin/mod/log-viewers steps
- *  - "init:select_vcmoderator_role:<userId>" for VC moderator step
+ * Role dropdown used by multiple flows.
+ * @param {string} customId - MUST be unique within the message (e.g., "bot:select-admin-role:<userId>")
+ * @param {import('discord.js').Guild} guild
+ * @param {string} userId
+ * @param {string|null} currentRoleId
  */
-function createRoleDropdown(mode, guild, userId, currentRoleId) {
+function createRoleDropdown(customId, guild, userId, currentRoleId) {
   const options = guild.roles.cache
     .filter((r) => r.name !== "@everyone" && !r.managed)
     .map((r) => ({
@@ -177,16 +178,10 @@ function createRoleDropdown(mode, guild, userId, currentRoleId) {
 
   const max = safeMax(safe.length);
 
-  const isVCMod =
-    mode === "init_vcmoderator_role" ||
-    mode === "init:select_vcmoderator_role";
-
-  const action = isVCMod ? "select_vcmoderator_role" : "select_log_viewers";
-
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(`init:${action}:${String(userId)}`)
-      .setPlaceholder(isVCMod ? "Select a Voice Channel Moderator role…" : "Select a role…")
+      .setCustomId(String(customId)) // <-- use the provided ID
+      .setPlaceholder("Select a role…")
       .setMinValues(1)
       .setMaxValues(max)
       .addOptions(safe)

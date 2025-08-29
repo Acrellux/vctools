@@ -86,7 +86,9 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       }
 > **VC Event Logging Channel:** ${vcLoggingChannel ? vcLoggingChannel.name : "Not set"
       }
-> **VC Event Logging:** ${settings.vcLoggingEnabled ? "Enabled" : "Disabled"}`;
+> **VC Event Logging:** ${settings.vcLoggingEnabled ? "Enabled" : "Disabled"}
+
+"-# *Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*",`;
 
     const userId =
       interactionOrMessage.user?.id || interactionOrMessage.author?.id;

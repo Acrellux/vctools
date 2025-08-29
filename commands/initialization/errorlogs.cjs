@@ -115,7 +115,9 @@ async function handleErrorLogsFlow(interaction, mode, action) {
       case "setup_error_logs_yes":
         await interaction.update({
           content: `## **<2.2> Choose an error logs channel**
-> Which channel should errors be logged in?`,
+> Which channel should errors be logged in?
+
+-# *Unable to find a specific channel? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [
             createErrorLogchannelIdropdown("init", guild, userId, null),
           ],
@@ -154,7 +156,9 @@ Error logs initialization complete! You can modify these settings later by typin
             content: `> <✅> **New channel created: <#${newChannel.id}> for error logs.**
               
 ## **<2.3> Choose who can view error logs**
-> Select the role that can view error logs:`,
+> Select the role that can view error logs:
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
             components: [
               createErrorLogRoleDropdown("init", guild, userId, null),
             ],
@@ -169,7 +173,9 @@ Error logs initialization complete! You can modify these settings later by typin
             content: `> <✅> **Error logs channel set to <#${selectedchannelId}>.**
               
 ## **<2.3> Choose who can view error logs**
-> Select the role that can view error logs:`,
+> Select the role that can view error logs:
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
             components: [
               createErrorLogRoleDropdown("init", guild, userId, null),
             ],

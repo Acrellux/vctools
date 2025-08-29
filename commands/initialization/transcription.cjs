@@ -114,7 +114,9 @@ async function handleTranscriptionFlow(interaction, mode, action) {
       case "setup_transcription_yes":
         await interaction.update({
           content: `## **<1.2> Choose a Transcription Logs Channel**
-> Which channel should transcription logs be saved in?`,
+> Which channel should transcription logs be saved in?
+
+-# *Unable to find a specific channel? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [createchannelIdropdown("init", guild, userId, null)],
         });
         break;
@@ -151,7 +153,9 @@ Transcription initialization complete.`,
               content: `> <✅> **New channel created: <#${newChannel.id}> for transcription logs.**
                 
 ## **<1.3> Choose Who Can View Transcription Logs**
-> Select the role that can view transcription logs:`,
+> Select the role that can view transcription logs:
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
               components: [createRoleDropdown("init", guild, userId, null)],
             });
           } else {
@@ -164,7 +168,9 @@ Transcription initialization complete.`,
               content: `> <✅> **Transcription logs channel set to <#${selectedchannelId}>.**
                 
 ## **<1.3> Choose Who Can View Transcription Logs**
-> Select the role that can view transcription logs:`,
+> Select the role that can view transcription logs:
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
               components: [createRoleDropdown("init", guild, userId, null)],
             });
           }

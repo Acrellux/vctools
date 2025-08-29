@@ -93,7 +93,9 @@ async function handleStaffRolesFlow(interaction, mode, action) {
         // Prompt for Admin Role selection.
         await interaction.update({
           content: `## **<3.2A> Select an Admin Role**
-> Choose the role that you use for administration purposes.`,
+> Choose the role that you use for administration purposes.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [
             createRoleDropdown("init:select_admin_role", guild, userId),
           ],
@@ -128,7 +130,9 @@ async function handleStaffRolesFlow(interaction, mode, action) {
           content: `> <✅> Admin role set to: ${adminRole.name}.
             
 ## **<3.2B> Select a Moderator Role**
-> Now choose the role that moderators will use.`,
+> Now choose the role that moderators will use.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [
             createRoleDropdown("init:select_moderator_role", guild, userId),
           ],
@@ -156,7 +160,9 @@ async function handleStaffRolesFlow(interaction, mode, action) {
           content: `> <✅> Moderator role set to: ${moderatorRole.name}.
             
 ## **<3.2C> Select a Voice Channel Moderator Role**
-> Now choose the role that will be used for voice channel moderation.`,
+> Now choose the role that will be used for voice channel moderation.
+
+-# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [
             createRoleDropdown("init:select_vcmoderator_role", guild, userId),
           ],

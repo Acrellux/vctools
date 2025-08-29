@@ -157,6 +157,7 @@ function buildConsentContent(guild, state) {
     `> **Assigned Channel:** ${channelDisplay}`,
     "",
     "-# VC Tools will fall back to the next best option if delivery fails.",
+    "-# *Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*",
   ].join("\n");
 }
 
