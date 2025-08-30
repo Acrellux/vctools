@@ -55,6 +55,7 @@ const { interactionContexts } = require("./database/contextStore.cjs");
 const { handleReaction } = require("./commands/report/reportHandler.cjs");
 const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
 const { VC_STATE_PATH, saveVCState } = require("./util/vc_state.cjs");
+const transcription = require("./events/transcription.cjs");
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
@@ -184,6 +185,19 @@ client.once("ready", async () => {
     } default soundboard sounds.`
   );
 });
+
+try {
+  console.log("[CLEANUP] Startup sweep: deleting temp files now…");
+  // Sweep *everything* not currently in-use right away.
+  await transcription.forceCleanNow(0);
+
+  // a moment after startup (ensure fully released handles)
+  setTimeout(() => {
+    transcription.forceCleanNow(0).catch(() => { });
+  }, 10_000);
+} catch (e) {
+  console.warn("[CLEANUP] Startup sweep failed:", e.message);
+}
 
 // Ensure transcription channel function
 const ensureTranscriptionChannel = async (guild) => {

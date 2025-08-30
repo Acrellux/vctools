@@ -11,6 +11,7 @@ const {
 } = require("@discordjs/voice");
 const { EventEmitter } = require("events");
 const { Readable, PassThrough } = require("stream");
+const { finished } = require("stream/promises");
 const prism = require("prism-media");
 const transcription = require("./transcription.cjs"); // Import transcription module
 const { interactionContexts } = require("../database/contextStore.cjs"); // Import context store
@@ -66,6 +67,7 @@ const outputStreams = {};
 const userSubscriptions = {};
 const userAudioIds = {}; // userId -> unique
 const pipelines = new Map(); // userId -> { audioStream, decoder, pcmWriter }
+const finalizingKeys = new Set();
 
 /************************************************************************************************
  * REUSABLE TRANSCRIPTION FUNCTIONS
@@ -104,18 +106,14 @@ const userWarningTimestamps = new Map(); // Tracks last warning time per user
 
 const initiateLoudnessWarning = async (
   userId,
-  audioStream,
+  audioStream,   // Opus stream
   guild,
   updateTimestamp
 ) => {
   const settings = await getSettingsForGuild(guild.id);
-
-  // Skip loudness detection for safe users
   if (settings.safeUsers && settings.safeUsers.includes(userId)) {
-    console.log(
-      `[INFO] User ${userId} is a safe user. Skipping loudness detection.`
-    );
-    return;
+    console.log(`[INFO] User ${userId} is a safe user. Skipping loudness detection.`);
+    return null;
   }
 
   const options = {
@@ -127,91 +125,71 @@ const initiateLoudnessWarning = async (
     prolongedDuration: 6000,
   };
 
-  // Callback for when loud audio is detected.
   const warnIfTooLoud = async (uid, rms) => {
     const now = Date.now();
     const lastWarning = userWarningTimestamps.get(uid) || 0;
-    const cooldownMs = 15000; // 15 seconds cooldown per user
-
-    if (now - lastWarning < cooldownMs) {
-      return; // Don't warn again if cooldown hasn't expired
-    }
-
-    userWarningTimestamps.set(uid, now); // ✅ Update last warning time
+    const cooldownMs = 15000;
+    if (now - lastWarning < cooldownMs) return;
+    userWarningTimestamps.set(uid, now);
 
     console.log(`*** WARNING: User ${uid} is too loud (RMS: ${rms}) ***`);
 
-    const settings = await getSettingsForGuild(guild.id);
-    let voiceCallPingRoleId = null;
-    if (settings.notifyLoudUser) {
-      voiceCallPingRoleId = settings.voiceCallPingRoleId;
+    const s = await getSettingsForGuild(guild.id);
+    const roleId = s.notifyLoudUser ? s.voiceCallPingRoleId : null;
+
+    try {
+      const channel = await transcription.ensureTranscriptionChannel(guild);
+      if (!channel) {
+        console.error(`[ERROR] No transcription channel available for guild ${guild.id}`);
+        return;
+      }
+      const base = `## ⚠️ User <@${uid}> is being loud (RMS: **${rms}**)\n-# Confused by what RMS means? Check \`help rms\`.`;
+      const msg = roleId
+        ? `## ⚠️ <@&${roleId}> User <@${uid}> is being loud (RMS: **${rms}**)\n-# Confused by what RMS means? Check \`help rms\`.`
+        : base;
+      await channel.send(msg);
+    } catch (err) {
+      console.error(`[ERROR] Failed to send loudness warning: ${err.message}`);
     }
-
-    transcription
-      .ensureTranscriptionChannel(guild)
-      .then((channel) => {
-        if (!channel) {
-          console.error(
-            `[ERROR] No transcription channel available for guild ${guild.id}`
-          );
-          return;
-        }
-
-        let warningMessage = `## ⚠️ User <@${uid}> is being loud (RMS: **${rms}**)\n-# Confused by what RMS means? Check \`help rms\` for a quick explanation.`;
-        if (voiceCallPingRoleId) {
-          warningMessage = `## ⚠️ <@&${voiceCallPingRoleId}> User <@${uid}> is being loud (RMS: **${rms}**)\n-# Confused by what RMS means? Check \`help rms\` for a quick explanation.`;
-        }
-
-        channel
-          .send(warningMessage)
-          .catch((err) =>
-            console.error(
-              `[ERROR] Failed to send loudness warning: ${err.message}`
-            )
-          );
-      })
-      .catch((err) =>
-        console.error(
-          `[ERROR] Failed to retrieve transcription channel: ${err.message}`
-        )
-      );
   };
 
-  // Create the detector from transcription.cjs using our warning callback.
   const loudnessDetector = transcription.createLoudnessDetector(
-    guild,
-    userId,
-    warnIfTooLoud,
-    options
+    guild, userId, warnIfTooLoud, options
   );
-
-  // Decode the Opus data to PCM before passing to the detector.
   const opusDecoderForLoudness = new prism.opus.Decoder({
-    frameSize: 960,
-    channels: 1,
-    rate: 48000,
+    frameSize: 960, channels: 1, rate: 48000,
   });
 
+  // Track *activity* using source data (fixes RMS-event bug)
   let lastActiveTime = Date.now();
-  const QUIET_THRESHOLD_RMS = 500;        // Customize as needed
-  const QUIET_TIMEOUT_MS = 4000;          // Time of low RMS before finalizing
+  const onData = () => {
+    lastActiveTime = Date.now();
+    if (typeof updateTimestamp === "function") updateTimestamp();
+  };
+  audioStream.on("data", onData);
 
-  loudnessDetector.on("data", (rms) => {
-    if (rms >= QUIET_THRESHOLD_RMS) {
-      lastActiveTime = Date.now(); // User is talking above quiet threshold
-      if (typeof updateTimestamp === "function") updateTimestamp();
-    } else {
-      const silentDuration = Date.now() - lastActiveTime;
-      if (silentDuration >= QUIET_TIMEOUT_MS) {
-        console.warn(`[QUIET FINALIZE] ${userId} silent (low RMS) for ${silentDuration}ms`);
-        loudnessDetector.destroy(); // Stop processing further
-      }
+  const QUIET_TIMEOUT_MS = 4000;
+  const quietTimer = setInterval(() => {
+    const silentDuration = Date.now() - lastActiveTime;
+    if (silentDuration >= QUIET_TIMEOUT_MS) {
+      console.warn(`[QUIET FINALIZE] ${userId} silent (low activity) for ${silentDuration}ms`);
+      teardown();
     }
-  });
+  }, 1000);
 
-  audioStream
-    .pipe(opusDecoderForLoudness)
-    .pipe(loudnessDetector);
+  // Wire the branch
+  audioStream.pipe(opusDecoderForLoudness).pipe(loudnessDetector);
+
+  const teardown = () => {
+    clearInterval(quietTimer);
+    audioStream.off("data", onData);
+    try { opusDecoderForLoudness.unpipe(loudnessDetector); } catch { }
+    try { audioStream.unpipe(opusDecoderForLoudness); } catch { }
+    try { loudnessDetector.destroy(); } catch { }
+    try { opusDecoderForLoudness.destroy(); } catch { }
+  };
+
+  return { loudnessDetector, opusDecoderForLoudness, quietTimer, teardown };
 };
 
 /**
@@ -788,11 +766,14 @@ function audioListeningFunctions(connection, guild) {
   function stopUserPipeline(userId) {
     const p = pipelines.get(userId);
     if (p) {
-      const { audioStream, decoder, pcmWriter } = p;
+      const { audioStream, decoder, pcmWriter, loudnessRes } = p;
 
       // disconnect the pipeline first
       try { audioStream?.unpipe?.(decoder); } catch (_) { }
       try { decoder?.unpipe?.(pcmWriter); } catch (_) { }
+
+      // tear down loudness branch if present
+      try { loudnessRes?.teardown?.(); } catch (_) { }
 
       // kill upstream so nothing else writes
       try { audioStream?.destroy?.(); } catch (_) { }
@@ -847,10 +828,8 @@ function audioListeningFunctions(connection, guild) {
     const audioStream = receiver.subscribe(userId, { end: { behavior: "manual" } });
     userSubscriptions[userId] = audioStream;
 
-    // Loudness detector
-    const loudPass = new PassThrough();
-    audioStream.pipe(loudPass);
-    initiateLoudnessWarning(userId, loudPass, guild, () => {
+    // Loudness detector (returns teardown handles)
+    const loudnessRes = await initiateLoudnessWarning(userId, audioStream, guild, () => {
       userLastSpokeTime[userId] = Date.now();
     });
 
@@ -864,7 +843,7 @@ function audioListeningFunctions(connection, guild) {
     } catch (err) {
       console.warn(`[PIPE ERROR] ${err.message}`);
     }
-    pipelines.set(userId, { audioStream, decoder, pcmWriter });
+    pipelines.set(userId, { audioStream, decoder, pcmWriter, loudnessRes });
     outputStreams[userId] = pcmWriter;
 
     // Silence-based fallback if stop never fires
@@ -912,12 +891,16 @@ function audioListeningFunctions(connection, guild) {
   connection.once(VoiceConnectionStatus.Disconnected, () => {
     receiver.speaking.removeAllListeners();
     receiver.isListening = false;
-    Object.values(perUserSilenceTimer).forEach(clearInterval);
+    Object.values(perUserSilenceTimer).forEach((t) => { try { clearInterval(t); } catch { } });
   });
 
   /* ───────────────────────── FINALISE & TRANSCRIBE ───────────────────────── */
 
   async function finalizeUserAudio(userId, guild, unique, channelId) {
+    const key = `${userId}-${unique}`;
+    if (finalizingKeys.has(key)) return;
+    finalizingKeys.add(key);
+
     const base = path.join(__dirname, "../../temp_audio", `${userId}-${unique}`);
     const pcm = `${base}.pcm`;
     const wav = `${base}.wav`;
@@ -929,6 +912,12 @@ function audioListeningFunctions(connection, guild) {
         writer.once("close", resolve);
         writer.end();          // triggers 'finish' ➜ 'close'
       }).catch(() => { /* ignore */ });
+    }
+
+    // Also await the decoder flush if it still exists
+    const pipeObj = pipelines.get(userId);
+    if (pipeObj?.decoder) {
+      try { await finished(pipeObj.decoder); } catch (_) { /* ignore */ }
     }
 
     try {
@@ -950,6 +939,7 @@ function audioListeningFunctions(connection, guild) {
       await transcription.safeDeleteFile(pcm);
       await transcription.safeDeleteFile(wav);
       cleanup(userId);
+      finalizingKeys.delete(key);
     }
   }
 
