@@ -897,6 +897,20 @@ process.on("uncaughtException", async (error) => {
   );
 });
 
+// at bot bootstrap
+client.rest.on('rateLimited', (info) => {
+  console.warn(
+    `[RATE LIMIT] route=${info.route} timeout=${info.timeToReset}ms global=${info.global}`
+  );
+});
+
+// Optional: see when you’re approaching Discord’s invalid-request thresholds
+client.rest.on('invalidRequestWarningData', (data) => {
+  console.warn(
+    `[INVALID WARN] count=${data.count} remaining=${data.remaining} resetAfter=${data.resetAfter}ms`
+  );
+});
+
 // Handle prefix commands (refactored to use commands.onMessageCreate)
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
