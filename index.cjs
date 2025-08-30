@@ -743,6 +743,35 @@ client.once("ready", async () => {
   client.user.setPresence({ status: "idle" });
   console.log("Presence set to idle.");
 
+  const now = new Date();
+  const timestamp = now.toLocaleTimeString("en-US", {
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  try {
+    const channel = await client.channels.fetch("1356838107818885151");
+    if (channel && channel.send) {
+      const ansi = {
+        darkGray: '\u001b[2;30m',
+        lightGray: '\u001b[2;37m',
+        blue: '\u001b[2;34m',
+        reset: '\u001b[0m',
+      };
+
+      await channel.send(
+        "```ansi\n" +
+        `${ansi.darkGray}[${ansi.blue}${timestamp}${ansi.darkGray}] ` +
+        `${ansi.lightGray}VC Tools ${ansi.darkGray}is now ${ansi.blue}online${ansi.darkGray}.${ansi.reset}` +
+        "```"
+      );
+      console.log("[INFO] Startup message sent to boot channel.");
+    }
+  } catch (err) {
+    console.warn("[WARN] Failed to send startup message:", err.message);
+  }
+
   const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
   const { audioListeningFunctions } = require("./events/voiceChannelManager.cjs");
   const { VC_STATE_PATH, saveVCState } = require("./util/vc_state.cjs");
@@ -795,35 +824,6 @@ client.once("ready", async () => {
     } catch (err) {
       console.error(`[JOIN ERROR] Failed to rejoin ${channel.name} in ${guild.name}:`, err);
     }
-  }
-
-  const now = new Date();
-  const timestamp = now.toLocaleTimeString("en-US", {
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-
-  try {
-    const channel = await client.channels.fetch("1356838107818885151");
-    if (channel && channel.send) {
-      const ansi = {
-        darkGray: '\u001b[2;30m',
-        lightGray: '\u001b[2;37m',
-        blue: '\u001b[2;34m',
-        reset: '\u001b[0m',
-      };
-
-      await channel.send(
-        "```ansi\n" +
-        `${ansi.darkGray}[${ansi.blue}${timestamp}${ansi.darkGray}] ` +
-        `${ansi.lightGray}VC Tools ${ansi.darkGray}is now ${ansi.blue}online${ansi.darkGray}.${ansi.reset}` +
-        "```"
-      );
-      console.log("[INFO] Startup message sent to boot channel.");
-    }
-  } catch (err) {
-    console.warn("[WARN] Failed to send startup message:", err.message);
   }
 
   // Cleanup old reports + reset presence if needed
