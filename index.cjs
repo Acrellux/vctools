@@ -1,4 +1,8 @@
-﻿// ── single-instance lock ─────────────────────────────────────
+﻿const { Client, GatewayIntentBits, Events } = require("discord.js");
+// Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
+process.env.DISCORDJS_DISABLE_UDP = "true";
+
+// ── single-instance lock ─────────────────────────────────────
 const fs = require("fs");
 const path = require("path");
 
@@ -38,9 +42,6 @@ try {
   console.error("[LOCK] Failed to set lock:", e?.message || e);
 }
 
-const { Client, GatewayIntentBits, Events } = require("discord.js");
-// Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
-process.env.DISCORDJS_DISABLE_UDP = "true";
 const dotenv = require("dotenv");
 const commands = require("./commands/commands.cjs");
 const { ChannelType, AuditLogEvent, PermissionFlagsBits, PermissionsBitField, SnowflakeUtil,
@@ -75,17 +76,6 @@ const {
 } = require("./commands/logic/notify_logic.cjs");
 
 dotenv.config();
-
-// Auto-pull repo on start
-const { execSync } = require("child_process");
-
-try {
-  console.log("[GIT] Pulling latest changes from origin...");
-  execSync('git pull', { stdio: 'inherit' });
-  console.log("[GIT] Repo up-to-date.");
-} catch (error) {
-  console.error("[GIT] Failed to pull repo:", error.message);
-}
 
 // Clean up the .pcm containing folder
 const audioDir = path.resolve(__dirname, "../../temp_audio");
