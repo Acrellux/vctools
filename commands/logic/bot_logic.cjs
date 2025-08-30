@@ -57,35 +57,33 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
     let settings = (await getSettingsForGuild(guild.id)) || {};
     console.log(`[DEBUG] Loaded settings for guild ${guild.id}:`, settings);
 
-    // For debugging: Check for both camelCase and snake_case
+    // camelCase / snake_case tolerance
     const adminRoleId = settings.adminRoleId || settings.admin_role_id || null;
     const moderatorRoleId =
       settings.moderatorRoleId || settings.moderator_role_id || null;
-    console.log(`[DEBUG] adminRoleId: ${adminRoleId}, moderatorRoleId: ${moderatorRoleId}`);
 
-    // Retrieve roles from cache (if they exist)
-    const adminRole = adminRoleId ? guild.roles.cache.get(adminRoleId) : null;
-    const modRole = moderatorRoleId ? guild.roles.cache.get(moderatorRoleId) : null;
     console.log(
-      `[DEBUG] Retrieved roles: Admin: ${adminRole ? adminRole.name : "Not set"
-      }, Moderator: ${modRole ? modRole.name : "Not set"}`
+      `[DEBUG] adminRoleId: ${adminRoleId}, moderatorRoleId: ${moderatorRoleId}`
     );
 
-    // Retrieve the VC Logging Channel from cache (if set)
+    const adminRole = adminRoleId ? guild.roles.cache.get(adminRoleId) : null;
+    const modRole = moderatorRoleId ? guild.roles.cache.get(moderatorRoleId) : null;
+
+    console.log(
+      `[DEBUG] Retrieved roles: Admin: ${adminRole ? adminRole.name : "Not set"}, Moderator: ${modRole ? modRole.name : "Not set"}`
+    );
+
     const vcLoggingChannelId =
       settings.vcLoggingChannelId || settings.vc_logging_channel_id || null;
     const vcLoggingChannel = vcLoggingChannelId
       ? guild.channels.cache.get(vcLoggingChannelId)
       : null;
 
-    // Updated settings message including VC Logging status and channel.
     const contentMessage = `## ◈ **Bot Settings**
 > **Admin Role:** ${adminRole ? adminRole.name : "Not set"}
 > **Moderator Role:** ${modRole ? modRole.name : "Not set"}
-> **Notify for Activity Reports:** ${settings.notifyActivityReports ? "Enabled" : "Disabled"
-      }
-> **VC Event Logging Channel:** ${vcLoggingChannel ? vcLoggingChannel.name : "Not set"
-      }
+> **Notify for Activity Reports:** ${settings.notifyActivityReports ? "Enabled" : "Disabled"}
+> **VC Event Logging Channel:** ${vcLoggingChannel ? vcLoggingChannel.name : "Not set"}
 > **VC Event Logging:** ${settings.vcLoggingEnabled ? "Enabled" : "Disabled"}
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
@@ -93,7 +91,7 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
     const userId =
       interactionOrMessage.user?.id || interactionOrMessage.author?.id;
 
-    // Create dropdowns with the current role IDs for pre-selection.
+    // Role dropdowns (your helper builds these)
     const adminRoleDropdown = createRoleDropdown(
       `bot:select-admin-role:${userId}`,
       guild,
@@ -107,7 +105,7 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       moderatorRoleId
     );
 
-    // Create the toggle button for Activity Reports.
+    // Activity Reports toggle
     const toggleActivityNotificationsButton = new ButtonBuilder()
       .setCustomId(`bot:toggle-notify-activity-reports:${userId}`)
       .setLabel(
@@ -116,49 +114,74 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
           : "Enable Notify for Activity Reports"
       )
       .setStyle(
-        settings.notifyActivityReports
-          ? ButtonStyle.Danger
-          : ButtonStyle.Success
+        settings.notifyActivityReports ? ButtonStyle.Danger : ButtonStyle.Success
       );
     const toggleRow = new ActionRowBuilder().addComponents(
       toggleActivityNotificationsButton
     );
 
-    // Create the toggle button for VC Logging.
+    // VC Logging toggle
     const toggleVcLoggingButton = new ButtonBuilder()
       .setCustomId(`bot:toggle-vc-logging:${userId}`)
       .setLabel(
-        settings.vcLoggingEnabled
-          ? "Disable VC Event Logging"
-          : "Enable VC Event Logging"
+        settings.vcLoggingEnabled ? "Disable VC Event Logging" : "Enable VC Event Logging"
       )
-      .setStyle(
-        settings.vcLoggingEnabled ? ButtonStyle.Danger : ButtonStyle.Success
-      );
+      .setStyle(settings.vcLoggingEnabled ? ButtonStyle.Danger : ButtonStyle.Success);
     const toggleVcLoggingRow = new ActionRowBuilder().addComponents(
       toggleVcLoggingButton
     );
 
-    // Create a dropdown for VC Logging Channel selection.
-    const vcLoggingChannelOptions = guild.channels.cache
+    // ----- FIXED SECTION: build the channel select safely -----
+    // Use builders for each option, slice to 25, and avoid setOptions().
+    const textChannels = guild.channels.cache
       .filter((ch) => ch.type === ChannelType.GuildText)
       .map((ch) => ({
-        label: `#${String(ch.name).slice(0, 100)}`,
-        value: String(ch.id),
-        default: String(ch.id) === String(vcLoggingChannelId),
+        id: String(ch.id),
+        name: `#${String(ch.name ?? "").slice(0, 100)}`,
       }));
 
-    const vcLoggingChannelDropdown = new StringSelectMenuBuilder()
-      .setCustomId(`bot:select-vc-logging-channel:${userId}`)
-      .setPlaceholder("Select a channel for VC Logging")
-      .setOptions(vcLoggingChannelOptions)
-      .setMinValues(1)
-      .setMaxValues(1);
-    const vcLoggingChannelRow = new ActionRowBuilder().addComponents(
-      vcLoggingChannelDropdown
-    );
+    const { StringSelectMenuOptionBuilder } = require("discord.js");
 
-    // Aggregate all components
+    const vcLoggingChannelOptionBuilders = textChannels
+      .map(({ id, name }) =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(name)
+          .setValue(id)
+          .setDefault(String(id) === String(vcLoggingChannelId))
+      )
+      .slice(0, 25);
+
+    let vcLoggingChannelRow;
+    if (vcLoggingChannelOptionBuilders.length > 0) {
+      const vcLoggingChannelDropdown = new StringSelectMenuBuilder()
+        .setCustomId(`bot:select-vc-logging-channel:${userId}`)
+        .setPlaceholder("Select a channel for VC Logging")
+        .addOptions(vcLoggingChannelOptionBuilders)
+        .setMinValues(1)
+        .setMaxValues(1);
+
+      vcLoggingChannelRow = new ActionRowBuilder().addComponents(
+        vcLoggingChannelDropdown
+      );
+    } else {
+      // Graceful empty state: disabled select with a single info option.
+      const emptyOption = new StringSelectMenuOptionBuilder()
+        .setLabel("No text channels available")
+        .setValue("none")
+        .setDefault(true);
+
+      const disabledSelect = new StringSelectMenuBuilder()
+        .setCustomId(`bot:select-vc-logging-channel:${userId}`)
+        .setPlaceholder("No text channels available")
+        .addOptions(emptyOption)
+        .setMinValues(1)
+        .setMaxValues(1)
+        .setDisabled(true);
+
+      vcLoggingChannelRow = new ActionRowBuilder().addComponents(disabledSelect);
+    }
+    // ----- END FIXED SECTION -----
+
     const components = [
       adminRoleDropdown,
       moderatorRoleDropdown,
@@ -167,7 +190,7 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
       toggleVcLoggingRow,
     ];
 
-    // Send or update the message based on whether interactionOrMessage is repliable
+    // Send or update
     if (interactionOrMessage.isRepliable?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
         await interactionOrMessage.editReply({
@@ -199,13 +222,11 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
     if (interactionOrMessage.isRepliable?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
         await interactionOrMessage.editReply({
-          content:
-            "> <❌> An error occurred displaying Bot settings. (INT_ERR_006)",
+          content: "> <❌> An error occurred displaying Bot settings. (INT_ERR_006)",
         });
       } else {
         await interactionOrMessage.reply({
-          content:
-            "> <❌> An error occurred displaying Bot settings. (INT_ERR_006)",
+          content: "> <❌> An error occurred displaying Bot settings. (INT_ERR_006)",
           ephemeral: true,
         });
       }
