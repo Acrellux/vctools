@@ -1,4 +1,19 @@
 // =========================================
+// VC TOOLS — TRANSCRIPTION + SAFE CLEANUP
+// =========================================
+
+const INLINE_CONFIG = {
+  STALE_MS: 5 * 60 * 1000,        // 5 minutes
+  SWEEP_INTERVAL_MS: 2 * 60 * 1000, // 2 minutes
+  TEMP_DIRS: [
+    // Whitelisted temp folders (SAFE: will not delete outside these)
+    require("path").resolve(__dirname, "../../temp_audio"),
+  ],
+  SWEEP_EXTS: [".wav", ".pcm", ".tmp", ".json", ".log", ".ogg"], // files eligible for sweeping
+};
+// ─────────────────────────────────────────────────────────────────────────
+
+// =========================================
 // DEPENDENCIES & CONFIGURATION
 // =========================================
 const { config } = require("dotenv");
@@ -29,6 +44,16 @@ const {
   getSettingsForGuild,
   updateSettingsForGuild,
 } = require("../commands/settings.cjs");
+
+// =========================================
+// TEMP FILE SAFETY CONFIG (env → inline defaults)
+// =========================================
+const DEFAULT_STALE_MS = Number(process.env.VC_TOOLS_STALE_MS ?? INLINE_CONFIG.STALE_MS);
+const SWEEP_INTERVAL_MS = Number(process.env.VC_TOOLS_SWEEP_INTERVAL_MS ?? INLINE_CONFIG.SWEEP_INTERVAL_MS);
+const TEMP_DIRS = (INLINE_CONFIG.TEMP_DIRS || []).map((d) => path.resolve(d));
+const SWEEP_EXTS = new Set(INLINE_CONFIG.SWEEP_EXTS || []);
+
+const inUsePaths = new Set(); // files currently in use; do not delete
 
 // =========================================
 // PROFANITY FILTER FUNCTIONS (USING LEO-PROFANITY)
@@ -95,51 +120,6 @@ async function clean(guild, text) {
 async function containsProfanity(guild, text) {
   const censored = await clean(guild, text);
   return censored !== text;
-}
-
-/**
- * Updates the custom filter list in the settings.
- * @param {string} guildId - The guild ID.
- * @param {string} action - "add" or "remove".
- * @param {string} word - The word to add or remove.
- * @returns {Promise<string>} - A confirmation message.
- */
-async function updateFilterList(guildId, action, word) {
-  const settings = await getSettingsForGuild(guildId);
-  let currentCustom = settings?.filterCustom || [];
-
-  if (action === "add") {
-    if (!currentCustom.includes(word)) {
-      currentCustom.push(word);
-      await updateSettingsForGuild(guildId, { filterCustom: currentCustom });
-      leoProfanity.add(word);
-      return `✅ Added **${word}** to the filter.`;
-    }
-    return `⚠️ The word **${word}** is already in the filter.`;
-  } else if (action === "remove") {
-    if (currentCustom.includes(word)) {
-      currentCustom = currentCustom.filter((w) => w !== word);
-      await updateSettingsForGuild(guildId, { filterCustom: currentCustom });
-      leoProfanity.remove(word);
-      return `✅ Removed **${word}** from the filter.`;
-    }
-    return `⚠️ The word **${word}** was not found in the filter.`;
-  }
-  return "❌ Invalid action.";
-}
-
-/**
- * Sets the filter level for the guild.
- * @param {string} guildId - The guild ID.
- * @param {string} level - The filter level ("moderate" or "strict").
- * @returns {Promise<string>} - A confirmation message.
- */
-async function setfilterLevel(guildId, level) {
-  if (!["moderate", "strict"].includes(level)) {
-    return "❌ Invalid filter level. Use `moderate` or `strict`.";
-  }
-  await updateSettingsForGuild(guildId, { filterLevel: level });
-  return `✅ Filter level set to **${level}**.`;
 }
 
 /**
@@ -352,11 +332,14 @@ async function ensureTranscriptionChannel(guild) {
 async function processAudio(userId, guild) {
   return new Promise((resolve, reject) => {
     const audioDir = path.resolve(__dirname, "../../temp_audio");
+    ensureDirectoryExistence(path.join(audioDir, "._ensure")); // ensure directory exists
     const unique = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const wavFilePath = path.join(audioDir, `${userId}-${unique}.wav`);
     console.log(
       `[DEBUG] Pushing to queue: userId=${userId}, wavFilePath=${wavFilePath}`
     );
+    // Mark as in-use to protect from sweeper until we're done
+    inUsePaths.add(path.resolve(wavFilePath));
     processingQueue.push({ userId, guild, wavFilePath, unique, resolve, reject });
 
     processQueue();
@@ -387,13 +370,17 @@ async function processQueue() {
       `[QUEUE] Transcription for user ${userId}: ${transcriptionText}`
     );
     resolve(transcriptionText);
+    // Always attempt to delete the WAV after processing (success case)
     setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 500);
   } catch (err) {
     console.error(
       `[QUEUE] Error processing audio for user ${userId}: ${err.message}`
     );
     reject(err);
+    // Also try to delete the WAV even if transcription failed
+    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 500);
   } finally {
+    inUsePaths.delete(path.resolve(wavFilePath));
     isProcessing = false;
     processQueue();
   }
@@ -494,15 +481,15 @@ async function postTranscription(guild, userId, transcription, channelId) {
     if (guild.ownerId === userId) {
       roleColor = "\u001b[31m"; // 🔴 Red
       nameColor = "\u001b[31m";
-    } else if (member.permissions.has("Administrator")) {
+    } else if (member?.permissions?.has?.("Administrator")) {
       roleColor = "\u001b[34m"; // 🔵 Blue
       nameColor = "\u001b[34m";
     } else if (
-      member.permissions.has("ManageGuild") ||
-      member.permissions.has("KickMembers") ||
-      member.permissions.has("MuteMembers") ||
-      member.permissions.has("BanMembers") ||
-      member.permissions.has("ManageMessages")
+      member?.permissions?.has?.("ManageGuild") ||
+      member?.permissions?.has?.("KickMembers") ||
+      member?.permissions?.has?.("MuteMembers") ||
+      member?.permissions?.has?.("BanMembers") ||
+      member?.permissions?.has?.("ManageMessages")
     ) {
       roleColor = "\u001b[33m"; // 🟡 Yellow/Gold
       nameColor = "\u001b[33m";
@@ -562,7 +549,7 @@ ${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${idColor}${use
 }
 
 /**
- * Converts a raw **16‑bit PCM** file (decoded from Opus) to a WAV file.
+ * Converts a raw **16-bit PCM** file (decoded from Opus) to a WAV file.
  * @param {string} pcmPath      Absolute path of the source `.pcm` file.
  * @param {string} wavFilePath  Destination path for the `.wav` file.
  * @returns {Promise<void>}
@@ -578,9 +565,13 @@ async function convertOpusToWav(pcmPath, wavFilePath) {
     `[DEBUG] Converting PCM → WAV:\n  src: ${pcmPath}\n  dst: ${wavFilePath}`
   );
 
+  // Mark both files as in-use
+  inUsePaths.add(path.resolve(pcmPath));
+  inUsePaths.add(path.resolve(wavFilePath));
+
   return new Promise((resolve, reject) => {
     ffmpeg(pcmPath)
-      .inputFormat("s16le")      // raw 16‑bit little‑endian PCM
+      .inputFormat("s16le")      // raw 16-bit little-endian PCM
       .inputOptions(['-ar 48000', '-ac 1'])   // tell FFmpeg what it *really* receives
       .audioFrequency(16000)                 // then resample
       .audioChannels(1)
@@ -589,10 +580,22 @@ async function convertOpusToWav(pcmPath, wavFilePath) {
       .save(wavFilePath)
       .on("end", () => {
         console.log(`[INFO] PCM → WAV conversion complete: ${wavFilePath}`);
+        // Try to delete the PCM right away (with retries)
+        setTimeout(() => {
+          safeDeleteFile(pcmPath).catch(() => { });
+          inUsePaths.delete(path.resolve(pcmPath));
+          // wav stays in-use until processQueue finishes
+        }, 500);
         resolve();
       })
       .on("error", (error) => {
         console.error(`[ERROR] FFmpeg failed: ${error.message}`);
+        // Even on error, try to delete PCM (best-effort)
+        setTimeout(() => {
+          safeDeleteFile(pcmPath).catch(() => { });
+          inUsePaths.delete(path.resolve(pcmPath));
+          inUsePaths.delete(path.resolve(wavFilePath));
+        }, 500);
         reject(error);
       });
   });
@@ -600,16 +603,64 @@ async function convertOpusToWav(pcmPath, wavFilePath) {
 
 /**
  * Safely deletes a file if it exists.
- * @param {string} filePath - The path to the file.
+ * - Only deletes inside whitelisted TEMP_DIRS
+ * - Skips files marked in-use
+ * - Retries on Windows locks (EPERM/EACCES/EBUSY) with exponential backoff
+ * - Optionally requires the file to be older than N ms (based on timestamp
+ *   embedded in filename if present, else mtime)
+ * @param {string} filePath
+ * @param {object} [opts]
+ * @param {number} [opts.retries=7]
+ * @param {number} [opts.delayMs=200]
+ * @param {number} [opts.olderThanMs=0]
  */
-async function safeDeleteFile(filePath) {
-  try {
-    if (fs.existsSync(filePath)) {
-      await fs.promises.unlink(filePath);
-    }
-  } catch (error) {
-    console.error(`[ERROR] Failed to delete ${filePath}: ${error.message}`);
+async function safeDeleteFile(filePath, opts = {}) {
+  const { retries = 7, delayMs = 200, olderThanMs = 0 } = opts;
+  if (!filePath) return false;
+
+  const full = path.resolve(filePath);
+
+  if (!isInTempDirs(full)) {
+    console.warn(`[SAFE-DEL] Refused to delete outside temp dirs: ${full}`);
+    return false;
   }
+  if (inUsePaths.has(full)) {
+    // Skip deletion while in use
+    return false;
+  }
+
+  if (olderThanMs > 0) {
+    try {
+      const stat = await fs.promises.stat(full);
+      const base = path.basename(full);
+      const tsFromName = parseTimestampFromName(base);
+      const referenceTime = tsFromName ?? stat.mtimeMs;
+      if (Date.now() - referenceTime < olderThanMs) {
+        return false;
+      }
+    } catch (e) {
+      if (e.code === "ENOENT") return true; // already gone
+    }
+  }
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      await fs.promises.unlink(full);
+      tryRemoveEmptyParents(full).catch(() => { });
+      return true;
+    } catch (err) {
+      if (err.code === "ENOENT") return true;
+      const retriable = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
+      if (retriable && attempt < retries) {
+        await wait(delayMs * Math.pow(2, attempt));
+        continue;
+      } else {
+        console.error(`[SAFE-DEL] Failed to delete ${full} (${err.code}): ${err.message}`);
+        if (attempt >= retries) return false;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -619,7 +670,7 @@ async function safeDeleteFile(filePath) {
 async function cleanupFiles(filePaths = []) {
   for (const filePath of filePaths) {
     try {
-      await fs.promises.unlink(filePath);
+      await safeDeleteFile(filePath);
     } catch (err) {
       console.error(`[ERROR] Failed to delete ${filePath}: ${err.message}`);
     }
@@ -637,8 +688,109 @@ function ensureDirectoryExistence(filePath) {
   }
 }
 
+// ── Helper: sweeping & path safety ─────────────────────────────────────────
+
+function isPathInside(child, parent) {
+  const rel = path.relative(parent, child);
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function isInTempDirs(fullPath) {
+  const resolved = path.resolve(fullPath);
+  return TEMP_DIRS.some((dir) => isPathInside(resolved, dir) || resolved === dir);
+}
+
+function parseTimestampFromName(basename) {
+  // Looks for a 13+ digit number (Date.now()) in the name
+  const m = basename.match(/(\d{13,})/);
+  if (m) {
+    const n = Number(m[1]);
+    if (!Number.isNaN(n)) return n;
+  }
+  return null;
+}
+
+async function tryRemoveEmptyParents(fullPath) {
+  let dir = path.dirname(fullPath);
+  for (const root of TEMP_DIRS) {
+    while (isPathInside(dir, root) || dir === root) {
+      try {
+        const entries = await fs.promises.readdir(dir);
+        if (entries.length === 0) {
+          await fs.promises.rmdir(dir).catch(() => { });
+          dir = path.dirname(dir);
+        } else {
+          break;
+        }
+      } catch {
+        break;
+      }
+    }
+  }
+}
+
+function wait(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Sweep function: delete OLD files in TEMP_DIRS (age ≥ DEFAULT_STALE_MS).
+ * Uses file name timestamp if present; otherwise mtime.
+ */
+async function sweepTempDirs(olderThanMs = DEFAULT_STALE_MS) {
+  for (const dir of TEMP_DIRS) {
+    try {
+      await fs.promises.mkdir(dir, { recursive: true });
+      const entries = await fs.promises.readdir(dir);
+      for (const name of entries) {
+        const full = path.join(dir, name);
+        try {
+          const stat = await fs.promises.stat(full);
+          if (!stat.isFile()) continue;
+          const ext = path.extname(full).toLowerCase();
+          if (!SWEEP_EXTS.has(ext)) continue;
+          if (inUsePaths.has(full)) continue;
+
+          const tsFromName = parseTimestampFromName(name);
+          const referenceTime = tsFromName ?? stat.mtimeMs;
+          const age = Date.now() - referenceTime;
+          if (age >= olderThanMs) {
+            await safeDeleteFile(full, { retries: 7, delayMs: 200, olderThanMs: 0 });
+          }
+        } catch {
+          // ignore per-file errors
+        }
+      }
+    } catch (err) {
+      console.error(`[SWEEP] Failed to sweep ${dir}: ${err.message}`);
+    }
+  }
+}
+
+/** Public trigger to run a sweep immediately */
+async function forceCleanNow(ms = DEFAULT_STALE_MS) {
+  await sweepTempDirs(ms);
+}
+
+// Start sweeper automatically and run once now
+sweepTempDirs().catch(() => { });
+const _sweepTimer = setInterval(() => {
+  sweepTempDirs().catch(() => { });
+}, SWEEP_INTERVAL_MS);
+_sweepTimer.unref?.();
+
+// Also try on shutdown
+const _finalCleanup = async () => {
+  try {
+    await sweepTempDirs(0); // delete anything not marked in-use
+  } catch { }
+};
+process.on("beforeExit", _finalCleanup);
+process.on("SIGINT", async () => { await _finalCleanup(); process.exit(0); });
+process.on("SIGTERM", async () => { await _finalCleanup(); process.exit(0); });
+
 // =========================================
-// EXPORTS
+/** EXPORTS */
 // =========================================
 module.exports = {
   // Transcription & Audio Processing
@@ -647,10 +799,12 @@ module.exports = {
   convertOpusToWav,
   transcribeAudio,
   postTranscription,
+  // File utilities
   safeDeleteFile,
   cleanupFiles,
   ensureDirectoryExistence,
   createLoudnessDetector,
+  forceCleanNow, // (new) manual sweeper trigger
   // Profanity & Flagging Functions
   updateProfanityFilter,
   containsProfanity,
