@@ -7,6 +7,8 @@ const {
   Message,
   Interaction,
   ComponentType,
+  PermissionFlagsBits,
+  PermissionsBitField,
 } = require("discord.js");
 
 // Import your Supabase-based settings helpers
@@ -104,7 +106,7 @@ const {
   handleFilterSlashCommand,
   showFilterSettingsUI,
 } = require("./logic/filter_logic.cjs");
-// Consent UI + delivery helpers (✅ correct path)
+// Consent UI + delivery helpers
 const {
   showConsentSettingsUI,
   handleConsentSettingChange,
@@ -119,16 +121,13 @@ const {
 const inflightConsent = new Set();
 
 /** Replace only the consent:grant button in the given message's components */
-function replaceConsentButton(msg, transformFn) {
-  const rows = msg.components ?? [];
+function replaceConsentButton(msgLike, transformFn) {
+  const rows = msgLike.components ?? [];
   return rows.map(row => {
     const newRow = new ActionRowBuilder();
     newRow.addComponents(
       ...row.components.map(c => {
-        if (c.type !== ComponentType.Button) {
-          // leave non-buttons exactly as-is
-          return c;
-        }
+        if (c.type !== ComponentType.Button) return c;
         const btn = ButtonBuilder.from(c);
         const isTarget = btn.data?.custom_id?.startsWith?.("consent:grant:");
         return isTarget ? transformFn(btn) : btn;
@@ -138,6 +137,24 @@ function replaceConsentButton(msg, transformFn) {
   });
 }
 
+/** Safely acknowledge a component interaction only once */
+async function safeDeferUpdate(interaction) {
+  try {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferUpdate();
+    }
+  } catch (_) {
+    // If we can't defer because it's already acknowledged, ignore.
+  }
+}
+
+/** Best-effort user feedback without crashing on perms */
+async function safeChannelNotify(interaction, content) {
+  try {
+    await interaction.channel?.send({ content });
+  } catch (_) { }
+}
+
 /* =============================
    MESSAGE-BASED COMMAND ROUTING
 ============================= */
@@ -145,32 +162,13 @@ async function onMessageCreate(message) {
   try {
     if (message.author.bot) return;
 
-    // ────── check enabled prefixes ──────
     const settings = (await getSettingsForGuild(message.guild.id)) || {};
     const prefixes = settings.prefixes ?? { slash: true, greater: true, exclamation: true };
 
     let used = null;
     if (message.content.startsWith(">")) used = "greater";
     else if (message.content.startsWith("!")) used = "exclamation";
-
-    // If the message doesn't start with a command prefix, ignore it
     if (!used) return;
-
-    /*// If that prefix type is disabled, respond with fallback options
-    if (prefixes && prefixes[used] === false) {
-      let reply = "> <❌> That command prefix is not enabled.\n";
-      const fallback = [];
-      if (prefixes.greater && used !== "greater") fallback.push("the `>` prefix");
-      if (prefixes.exclamation && used !== "exclamation") fallback.push("the `!` prefix");
-      if (prefixes.slash) fallback.push("`/slash` commands");
-      reply += fallback.length
-        ? `You can try using ${fallback.join(" or ")} instead.`
-        : "No commands are currently enabled.";
-      await message.channel.send(reply);
-      return;
-    }*/
-
-    // ──────────────────────────────────
 
     const args = message.content.slice(1).trim().split(/\s+/);
     const command = args.shift().toLowerCase();
@@ -302,10 +300,13 @@ async function onInteractionCreate(interaction) {
         default:
           console.log(`[DEBUG] Unhandled slash command: ${interaction.commandName}`);
       }
+
     } else if (interaction.isModalSubmit()) {
       await handleReportSubmission(interaction);
+
     } else if (interaction.isButton() || interaction.isStringSelectMenu()) {
       if (interaction.customId.startsWith("help:")) return;
+
       // report + activity buttons → open the modal
       if (
         interaction.isButton() &&
@@ -314,72 +315,116 @@ async function onInteractionCreate(interaction) {
       ) {
         return handleReportInteractions(interaction);
       }
+
       if (interaction.customId.startsWith("notify:")) return handleNotifyFlow(interaction);
       if (interaction.isButton() && interaction.customId.startsWith("prefix:")) return handlePrefixSettingsFlow(interaction);
 
-      // ✅ Handle the user consent button (consent:grant:<userId>)
+      // ✅ Safer consent grant handler: defer first, then editReply (no .update())
       if (interaction.isButton() && interaction.customId.startsWith("consent:grant:")) {
-        try {
-          const [, , targetUserId] = interaction.customId.split(":");
+        const [, , targetUserId] = interaction.customId.split(":");
 
-          // Only the targeted user can grant their consent
-          if (interaction.user.id !== targetUserId) {
-            return interaction.reply({
+        // Only the targeted user can grant their consent
+        if (interaction.user.id !== targetUserId) {
+          if (!interaction.deferred && !interaction.replied) {
+            await interaction.reply({
               ephemeral: true,
               content: "> <❇️> You cannot interact with this button. (INT_ERR_004)",
-            });
+            }).catch(() => { });
           }
+          return;
+        }
 
-          // If another handler run is already in-flight for this user, noop
-          if (inflightConsent.has(targetUserId)) {
-            return interaction.reply({
+        // If another handler run is already in-flight for this user, noop
+        if (inflightConsent.has(targetUserId)) {
+          if (!interaction.deferred && !interaction.replied) {
+            await interaction.reply({
               ephemeral: true,
               content: "> <❇️> Your consent is already being processed.",
-            });
+            }).catch(() => { });
           }
-          inflightConsent.add(targetUserId);
+          return;
+        }
 
-          // 1) Immediate UI ack: change ONLY the button to "Processing…" (no content changes)
-          const processingRows = replaceConsentButton(interaction.message, btn =>
-            btn.setLabel("Processing…").setStyle(ButtonStyle.Secondary).setDisabled(true)
+        inflightConsent.add(targetUserId);
+
+        // Watchdog: ensure we ACK quickly to avoid token expiry
+        const watchdog = setTimeout(() => safeDeferUpdate(interaction), 1500);
+
+        try {
+          // ACK immediately (safe, idempotent)
+          await safeDeferUpdate(interaction);
+
+          // 1) Show "Processing…" on the original message (editReply after defer)
+          const processingRows = replaceConsentButton(
+            interaction.message,
+            btn => btn.setLabel("Processing…").setStyle(ButtonStyle.Secondary).setDisabled(true)
           );
-          await interaction.update({ components: processingRows });
+
+          // For component interactions, editReply() edits the original message
+          await interaction.editReply({ components: processingRows }).catch(async (err) => {
+            // Fallback to message.edit if token is in a weird state
+            if (interaction.message?.editable) {
+              await interaction.message.edit({ components: processingRows }).catch(() => { });
+            } else {
+              throw err;
+            }
+          });
 
           // 2) Persist consent (UPSERT/idempotent)
           await grantUserConsent(targetUserId, interaction.guild);
 
           // 3) Clear any pending context for this user
-          const { interactionContexts } = require("../database/contextStore.cjs");
           interactionContexts.delete(targetUserId);
 
-          // 4) Final UI: change ONLY the button to "Consent recorded"
-          const successRows = replaceConsentButton(interaction.message, btn =>
-            btn.setLabel("Consent recorded").setStyle(ButtonStyle.Success).setDisabled(true)
+          // 4) Final UI: "Consent recorded"
+          const successRows = replaceConsentButton(
+            interaction.message,
+            btn => btn.setLabel("Consent recorded").setStyle(ButtonStyle.Success).setDisabled(true)
           );
-          await interaction.message.edit({ components: successRows });
+
+          await interaction.editReply({ components: successRows }).catch(async () => {
+            if (interaction.message?.editable) {
+              await interaction.message.edit({ components: successRows }).catch(() => { });
+            }
+          });
 
           // Optional ephemeral confirm
           try {
             await interaction.followUp({ ephemeral: true, content: "> <✅> Consent recorded." });
-          } catch { }
+          } catch (_) { }
           return;
+
         } catch (err) {
-          console.error("[ERROR] consent:grant handler:", err);
-          await logErrorToChannel(
-            interaction.guild?.id,
-            err?.stack || String(err),
-            interaction.client,
-            "consent:grant"
-          );
-          try {
-            await interaction.followUp({
-              ephemeral: true,
-              content: "> <❌> Failed to record your consent. Please try again.",
-            });
-          } catch { }
+          const msg = String(err?.message || err);
+          // If the token was somehow invalid/late, fall back to a channel notice
+          if (msg.includes("Unknown interaction") || msg.includes("already been acknowledged")) {
+            await safeChannelNotify(interaction, "> That button expired or was already used. Try again.");
+          } else {
+            console.error("[ERROR] consent:grant handler:", err);
+            await logErrorToChannel(
+              interaction.guild?.id,
+              err?.stack || String(err),
+              interaction.client,
+              "consent:grant"
+            );
+            try {
+              if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({
+                  ephemeral: true,
+                  content: "> <❌> Failed to record your consent. Please try again.",
+                });
+              } else {
+                await interaction.followUp({
+                  ephemeral: true,
+                  content: "> <❌> Failed to record your consent. Please try again.",
+                });
+              }
+            } catch (_) { }
+          }
           return;
+
         } finally {
-          const [, , targetUserId] = interaction.customId.split(":");
+          clearTimeout(watchdog);
           inflightConsent.delete(targetUserId);
         }
       }
@@ -413,7 +458,7 @@ async function onInteractionCreate(interaction) {
             await interaction.reply({
               content: "> <❌> You cannot interact with this component. (INT_ERR_004)",
               ephemeral: true,
-            });
+            }).catch(() => { });
           }
           return;
         }
@@ -452,7 +497,7 @@ async function onInteractionCreate(interaction) {
             await interaction.reply({
               content: "> <❌> Something went wrong handling that step. (INIT_ROUTER_ERR)",
               ephemeral: true,
-            });
+            }).catch(() => { });
           }
         } finally {
           clearTimeout(watchdog);
@@ -477,7 +522,7 @@ async function onInteractionCreate(interaction) {
       await interaction.reply({
         content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
         ephemeral: true,
-      });
+      }).catch(() => { });
     }
   }
 }
