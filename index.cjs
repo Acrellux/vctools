@@ -186,19 +186,6 @@ client.once("ready", async () => {
   );
 });
 
-try {
-  console.log("[CLEANUP] Startup sweep: deleting temp files now…");
-  // Sweep *everything* not currently in-use right away.
-  await transcription.forceCleanNow(0);
-
-  // a moment after startup (ensure fully released handles)
-  setTimeout(() => {
-    transcription.forceCleanNow(0).catch(() => { });
-  }, 10_000);
-} catch (e) {
-  console.warn("[CLEANUP] Startup sweep failed:", e.message);
-}
-
 // Ensure transcription channel function
 const ensureTranscriptionChannel = async (guild) => {
   const settings = await getSettingsForGuild(guild.id);
