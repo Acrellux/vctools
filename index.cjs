@@ -1,8 +1,46 @@
-﻿const { Client, GatewayIntentBits, Events } = require("discord.js");
-// Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
-process.env.DISCORDJS_DISABLE_UDP = "true";
+﻿// ── single-instance lock ─────────────────────────────────────
 const fs = require("fs");
 const path = require("path");
+
+const LOCK_PATH = path.join(__dirname, "vc_tools_index.lock");
+const PID_PATH = path.join(__dirname, "vc_tools_index.pid");
+
+try {
+  if (fs.existsSync(LOCK_PATH)) {
+    const oldPid = Number(fs.readFileSync(LOCK_PATH, "utf8"));
+    if (!Number.isNaN(oldPid)) {
+      try {
+        // Probe if old process exists
+        process.kill(oldPid, 0);
+        console.error(`[LOCK] Another VC Tools instance is running (pid ${oldPid}). Exiting.`);
+        process.exit(0);
+      } catch {
+        // Stale lock; continue
+      }
+    }
+  }
+  fs.writeFileSync(LOCK_PATH, String(process.pid));
+  fs.writeFileSync(PID_PATH, String(process.pid));
+
+  const cleanup = () => {
+    try { fs.unlinkSync(LOCK_PATH); } catch { }
+    try { fs.unlinkSync(PID_PATH); } catch { }
+  };
+  process.on("exit", cleanup);
+  process.on("SIGINT", () => { cleanup(); process.exit(); });
+  process.on("SIGTERM", () => { cleanup(); process.exit(); });
+  process.on("uncaughtException", (err) => {
+    console.error("[LOCK] Uncaught exception:", err?.stack || err);
+    cleanup();
+    process.exit(1);
+  });
+} catch (e) {
+  console.error("[LOCK] Failed to set lock:", e?.message || e);
+}
+
+const { Client, GatewayIntentBits, Events } = require("discord.js");
+// Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
+process.env.DISCORDJS_DISABLE_UDP = "true";
 const dotenv = require("dotenv");
 const commands = require("./commands/commands.cjs");
 const { ChannelType, AuditLogEvent, PermissionFlagsBits, PermissionsBitField, SnowflakeUtil,
@@ -399,22 +437,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   // Existing voice channel manager logic
   voiceChannelManager.execute(oldState, newState, client);
 
-  // CONSENT: prompt users on first join if transcription is enabled and they haven't consented
-  try {
-    if (!oldState.channelId && newState.channelId && newState.member?.user) {
-      const guild = newState.guild;
-      const settings = await getSettingsForGuild(guild.id);
-      if (settings?.transcriptionEnabled) {
-        const ok = await requireConsentIfNeeded(guild, newState.member);
-        // If not consented, you can optionally auto-mute or stop further transcription setup here.
-        // (Leaving it as a prompt-only behavior for now.)
-      }
-    }
-  } catch (e) {
-    console.warn("[WARN] consent-on-join failed:", e?.message || e);
-  }
-
-  // NEW: When a user joins a voice channel, notify subscribers
+  // When a user joins a voice channel, notify subscribers
   if (!oldState.channelId && newState.channelId) {
     const joinedUserId = newState.member.user.id;
     const guildId = newState.guild.id;
