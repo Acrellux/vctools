@@ -584,7 +584,8 @@ async function convertOpusToWav(pcmPath, wavFilePath) {
         setTimeout(() => {
           safeDeleteFile(pcmPath).catch(() => { });
           inUsePaths.delete(path.resolve(pcmPath));
-          // wav stays in-use until processQueue finishes
+          // Release WAV lock here; processQueue re-adds it when used via that flow
+          inUsePaths.delete(path.resolve(wavFilePath));
         }, 500);
         resolve();
       })

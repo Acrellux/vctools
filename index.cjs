@@ -84,7 +84,7 @@ const audioDir = path.resolve(__dirname, "../../temp_audio");
 fs.readdir(audioDir, (err, files) => {
   if (err) return;
   for (const file of files) {
-    if (file.endsWith(".pcm")) {
+    if (file.endsWith(".pcm") || file.endsWith(".wav")) {
       fs.unlink(path.join(audioDir, file), () => { });
     }
   }
