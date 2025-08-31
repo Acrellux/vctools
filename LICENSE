@@ -3,40 +3,21 @@
 Version 1.0 — August 31, 2025
 Copyright © 2025 Acrellux. All rights reserved.  
 
-## 1. Grant of Rights
-You are granted a limited, non-exclusive, non-transferable, revocable license to  
-**view and use the VC Tools source code** solely for **personal, educational,  
-or internal non-commercial purposes**.  
+You are granted the right to **view and use the VC Tools source code** at any time solely for **personal, internal non-commercial, or educational** purposes.
+You are **not** granted the right to, unless otherwise stated by the copyright holder:
+- Redistribute, republish, or sublicense code found inside this GitHub repository
+- Create modifications or adaptations to code found inside this GitHub repository
+- Use the code to create or distribute competing software
+- Use the code for any commercial purposes, including paid services, hosting, and resale
 
-## 2. Restrictions
-You may **not**, without prior written permission from the copyright holder:
-- Redistribute, republish, or sublicense the code in any form.  
-- Create derivative works, forks, modifications, or adaptations.  
-- Use the code to develop or distribute competing software.  
-- Use the code for any commercial purpose, including but not limited to  
-  offering hosting, paid services, or resale.  
+## Ownership
+VC Tools and all related intellectual property remain the sole property of Acrellux. This License does not transfer ownership.
 
-## 3. Ownership
-All rights, title, and interest in and to VC Tools, including all updates,  
-derivatives, and modifications, remain the sole property of Acrellux.  
-Nothing in this License transfers or assigns ownership.  
+## Termination
+Any breach of these terms ends your rights immediately. You must stop using the code and delete all existing copies.
 
-## 4. Termination
-This License automatically terminates if you breach any of its terms.  
-Upon termination, you must immediately cease all use of the code and  
-destroy all copies in your possession.  
+## Disclaimer of Warranty
+VC Tools is provided **“AS IS”**, without any warranties, express or implied.
 
-## 5. Disclaimer of Warranty
-VC Tools is provided “AS IS,” without warranty of any kind, express or implied,  
-including but not limited to merchantability, fitness for a particular purpose,  
-or non-infringement.  
-
-## 6. Limitation of Liability
-In no event shall the copyright holder be liable for any damages arising from  
-the use of this source code, including but not limited to loss of profits,  
-data, or business opportunities.  
-
-## 7. Governing Law
-This License shall be governed by and construed in accordance with the laws of  
-the jurisdiction of the copyright holder, without regard to conflict of law  
-principles.
+## Limitation of Liability
+In no event shall the copyright holder be liable for any damages arising from the use of VC Tools.
