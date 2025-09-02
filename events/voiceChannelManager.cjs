@@ -373,25 +373,30 @@ let isDisconnecting = false;
  * DISCORD VOICE CHANNEL HANDLERS
  ************************************************************************************************/
 async function execute(oldState, newState, client) {
-  if (newState.member?.user.bot) return;
+  if (newState?.member?.user?.bot) return;
 
-  // Detect mute and deafen changes
-  await detectUserActivityChanges(oldState, newState);
+  // Detect mute/deafen changes safely (never crash the handler)
+  try {
+    await detectUserActivityChanges(oldState, newState);
+  } catch (e) {
+    console.warn("[VOICE] detectUserActivityChanges failed:", e?.message || e);
+  }
 
-  if (!newState.guild) {
-    console.error("[ERROR] Guild object is missing!");
+  if (!newState?.guild) {
+    console.error("[ERROR] Guild object is missing.");
     return;
   }
 
   const guild = newState.guild;
-  const userId = newState.member?.id;
+  const userId = newState?.member?.id;
   if (!userId) {
     console.error("[ERROR] Failed to retrieve user ID from newState.");
     return;
   }
   console.log(`[DEBUG] Checking voice state update for user: ${userId}`);
 
-  const settings = await getSettingsForGuild(guild.id);
+  // Treat missing/failed settings fetch as {}
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
 
   // ANSI codes for logs
   const ansi = {
