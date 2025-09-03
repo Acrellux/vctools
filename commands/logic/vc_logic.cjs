@@ -140,38 +140,48 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
     const components = [vcRoleDropdown, buttonsRow1, buttonsRow2];
 
     if (interactionOrMessage.isMessageComponent?.()) {
-      await interactionOrMessage.update({
+      return interactionOrMessage.update({
         content: contentMessage,
         components,
       });
-      return;
-    } else if (interactionOrMessage.isCommand?.()) {
+    } else if (interactionOrMessage.isChatInputCommand?.() || interactionOrMessage.isCommand?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
-        await interactionOrMessage.editReply({
+        return interactionOrMessage.editReply({
           content: contentMessage,
           components,
-        });
-      } else {
-        await interactionOrMessage.reply({
-          content: contentMessage,
-          components,
-          ephemeral: isEphemeral,
         });
       }
-      return;
-    } else if (interactionOrMessage instanceof Message) {
-      await interactionOrMessage.channel.send({
-        content: contentMessage,
-        components,
-      });
-      return; // ✅ prevents hitting isRepliable
-    } else if (interactionOrMessage.isRepliable?.()) {
-      await interactionOrMessage.reply({
+      return interactionOrMessage.reply({
         content: contentMessage,
         components,
         ephemeral: isEphemeral,
       });
-      return;
+    } else if (interactionOrMessage instanceof Message) {
+      // De-dup: if we already posted a VC Settings panel here, edit it instead of sending another
+      try {
+        const recent = await interactionOrMessage.channel.messages.fetch({ limit: 10 });
+        const existing = recent.find(m =>
+          m.author.id === interactionOrMessage.client.user.id &&
+          m.editable &&
+          typeof m.content === "string" &&
+          m.content.startsWith("## ◈ **VC Settings**")
+        );
+        if (existing) {
+          await existing.edit({ content: contentMessage, components });
+          return;
+        }
+      } catch (_) { /* ignore fetch/edit issues */ }
+
+      return interactionOrMessage.channel.send({
+        content: contentMessage,
+        components,
+      });
+    } else if (interactionOrMessage.isRepliable?.()) {
+      return interactionOrMessage.reply({
+        content: contentMessage,
+        components,
+        ephemeral: isEphemeral,
+      });
     }
   } catch (error) {
     console.error(`[ERROR] showVCSettingsUI failed: ${error.message}`);
