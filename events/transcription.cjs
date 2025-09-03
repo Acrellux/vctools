@@ -809,8 +809,6 @@ module.exports = {
   // Profanity & Flagging Functions
   updateProfanityFilter,
   containsProfanity,
-  updateFilterList,
-  setfilterLevel,
   clean,
   checkForFlaggedContent,
 };
