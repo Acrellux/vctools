@@ -1,6 +1,7 @@
-﻿const { Client, GatewayIntentBits, Events } = require("discord.js");
-// Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
+﻿// Disable DiscordJS UDP IP discovery (fixes 'socket closed' errors)
 process.env.DISCORDJS_DISABLE_UDP = "true";
+
+const { Client, GatewayIntentBits, Events } = require("discord.js");
 
 // ── single-instance lock ─────────────────────────────────────
 const fs = require("fs");
