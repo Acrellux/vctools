@@ -144,6 +144,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
         content: contentMessage,
         components,
       });
+      return;
     } else if (interactionOrMessage.isCommand?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
         await interactionOrMessage.editReply({
@@ -157,17 +158,20 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
           ephemeral: isEphemeral,
         });
       }
+      return;
     } else if (interactionOrMessage instanceof Message) {
       await interactionOrMessage.channel.send({
         content: contentMessage,
         components,
       });
+      return; // ✅ prevents hitting isRepliable
     } else if (interactionOrMessage.isRepliable?.()) {
       await interactionOrMessage.reply({
         content: contentMessage,
         components,
         ephemeral: isEphemeral,
       });
+      return;
     }
   } catch (error) {
     console.error(`[ERROR] showVCSettingsUI failed: ${error.message}`);
