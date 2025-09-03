@@ -368,7 +368,6 @@ async function detectUserActivityChanges(oldState, newState) {
  * DISCONNECTING FLAG
  ************************************************************************************************/
 let isDisconnecting = false;
-
 /************************************************************************************************
  * DISCORD VOICE CHANNEL HANDLERS
  ************************************************************************************************/
@@ -411,11 +410,11 @@ async function execute(oldState, newState, client) {
   // Get member details for logs
   let member = newState.member || guild.members.cache.get(userId);
   const topRole = member?.roles.highest?.name || "No Role";
-  const username = member?.user.username || "Unknown";
+  const username = member?.user?.username || "Unknown";
   let roleColor = ansi.white;
   if (guild.ownerId === userId) {
     roleColor = ansi.red;
-  } else if (member && member.permissions.has("Administrator")) {
+  } else if (member && member.permissions?.has("Administrator")) {
     roleColor = ansi.cyan;
   } else if (
     member &&
@@ -429,19 +428,14 @@ async function execute(oldState, newState, client) {
   }
 
   // Helper: Build an ANSI-formatted log message
-  const buildLog = (timestamp, msg) => {
-    return `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
-  };
+  const buildLog = (timestamp, msg) =>
+    `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
 
+  // ───────────────────────────────────────────────────────────────────────────
   // Case 1: User moved channels
-  if (
-    oldState.channelId &&
-    newState.channelId &&
-    oldState.channelId !== newState.channelId
-  ) {
-    console.log(
-      `[DEBUG] User ${userId} moved from ${oldState.channelId} to ${newState.channelId}`
-    );
+  // ───────────────────────────────────────────────────────────────────────────
+  if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+    console.log(`[DEBUG] User ${userId} moved from ${oldState.channelId} to ${newState.channelId}`);
 
     if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
       const activityChannel = guild.channels.cache.get(settings.vcLoggingChannelId);
@@ -462,155 +456,157 @@ async function execute(oldState, newState, client) {
       }
     }
 
-    // ⬇️ IMPORTANT: do NOT disconnect first; ignore moves into safe channels
-    const isDestSafe = Array.isArray(settings.safeChannels) && settings.safeChannels.includes(newState.channelId);
+    // If destination is SAFE, do nothing at all (no disconnect, no re-manage).
+    const isDestSafe =
+      Array.isArray(settings.safeChannels) && settings.safeChannels.includes(newState.channelId);
     if (isDestSafe) {
-      console.log("[VC] Move detected into a safe channel; ignoring for VC management.");
+      console.log("[VC] Move into SAFE channel detected; skipping VC management.");
       return;
     }
 
-    // Let the manager decide whether to move/join/leave
+    // Otherwise let the manager decide (may move/join/leave appropriately)
     await manageVoiceChannels(guild, client);
     return;
   }
 
-  let connection = getVoiceConnection(guild.id);
-  if (connection) {
-    await disconnectAndReset(connection);
-  }
-  await manageVoiceChannels(guild, client);
+  // ───────────────────────────────────────────────────────────────────────────
+  // Case 2: User joined a channel
+  // ───────────────────────────────────────────────────────────────────────────
+  if (!oldState.channelId && newState.channelId) {
+    console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
+    userJoinTimes.set(userId, Date.now());
 
-  return;
-}
-
-// Case 2: User joined a channel
-if (!oldState.channelId && newState.channelId) {
-  console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
-  userJoinTimes.set(userId, Date.now());
-
-  // ⬇️ Do not try to join the user's channel directly (it might be SAFE).
-  //     Let the manager pick a non-safe active VC (or do nothing if none).
-  await manageVoiceChannels(guild, client);
-
-  // If we ended up connected, wire listeners; otherwise bail quietly.
-  let connection = getVoiceConnection(guild.id);
-  if (!connection) return;
-  audioListeningFunctions(connection, guild);
-
-  // ─────────────────────────────────────────────
-  // Consent enforcement (keep your existing flow)
-  // ─────────────────────────────────────────────
-  function describeConsentDest(dest, user) {
-    if (!dest || (!dest.channel && !dest.preferDM)) return "no available destination";
-    if (dest.preferDM) {
-      if (dest.channel) return `DM first → fallback <#${dest.channel.id}>`;
-      return "DM first (no public fallback available)";
-    }
-    if (dest.channel) return `<#${dest.channel.id}>`;
-    return "no available destination";
-  }
-
-  const hasConsent = await hasUserConsented(userId);
-  if (hasConsent) {
-    console.log(`[INFO] User ${userId} has already consented. Allowing audio capture.`);
-    try {
-      if (newState.serverMute) {
-        await newState.setMute(false, "User has consented to transcription.");
-        console.log(`[INFO] User ${userId} unmuted.`);
-      }
-    } catch (err) {
-      console.error(`[ERROR] Failed to unmute user ${userId}: ${err.message}`);
-    }
-  } else {
-    console.log(`[DEBUG] User ${userId} has NOT consented. Sending consent request...`);
-
-    const consentButtons = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`consent:grant:${userId}`).setLabel("Consent").setStyle(ButtonStyle.Success)
-    );
-
-    interactionContexts.set(userId, { guildId: guild.id, mode: "consent" });
-
-    try {
-      const previewDest = await resolveConsentDestination(guild, newState.member.user);
-      console.log(`[CONSENT ROUTER] Target for ${userId}: ${describeConsentDest(previewDest, newState.member.user)}`);
-    } catch (e) {
-      console.warn(`[CONSENT ROUTER] Preview failed for ${userId}: ${e.message}`);
-    }
-
-    const settings = await getSettingsForGuild(guild.id);
-    const member = newState.member;
-    const dest = await resolveConsentDestination(guild, member, settings);
-
-    await sendConsentPrompt({
-      guild,
-      user: member.user,
-      member,
-      client,
-      settings,
-      destination: dest,
-      content:
-        `# Consent Required\nInside this voice call, your voice will be transcribed into text.\n` +
-        `Please click the button below to consent.\n\n` +
-        `> All audio files of your voice are temporary and will not be permanently saved.\n` +
-        `-# > You can also take a look at our [privacy policy](<https://www.vctools.app/privacy>) for more information.`,
-      components: [consentButtons],
-      mentionUserInChannel: true,
-    });
-
-    try {
-      await newState.setMute(true, "Awaiting transcription consent.");
-      console.log(`[INFO] User ${userId} muted until consent is given.`);
-    } catch (err) {
-      console.error(`[ERROR] Failed to mute user ${userId}: ${err.message}`);
-    }
-  }
-}
-
-// Case 3: User left a channel
-if (oldState.channelId && !newState.channelId) {
-  console.log(`[DEBUG] User ${userId} left channel: ${oldState.channelId}`);
-
-  const startMs = userJoinTimes.get(userId) || Date.now();
-  const durationSec = Math.floor((Date.now() - startMs) / 1000);
-  userJoinTimes.delete(userId);
-
-  const { data, error } = await supabase
-    .from('voice_activity')
-    .insert(
-      [{ guild_id: guild.id, user_id: userId, duration: durationSec }],
-      { returning: 'minimal' }  // or 'representation' if you want the full row back
-    );
-
-  if (error) {
-    console.error('[Heatmap] Supabase insert failed:', error.message, error.details);
-  } else {
-    console.log('[Heatmap] Insert succeeded:', data);
-  }
-
-  if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
-    const activityChannel = guild.channels.cache.get(
-      settings.vcLoggingChannelId
-    );
-    if (activityChannel) {
-      const leftChannel = guild.channels.cache.get(oldState.channelId);
-      const leftChannelName = leftChannel?.name || "Unknown Channel";
-      const memberCount = leftChannel.members.filter((m) => !m.user.bot).size;
-      const now = new Date();
-      const timestamp = now.toLocaleTimeString("en-US", {
-        minute: "2-digit",
-        second: "2-digit",
-      });
-      const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} left voice channel ${ansi.white}${leftChannelName}${ansi.darkGray}. Member count: ${memberCount}`;
-      await activityChannel.send(buildLog(timestamp, logMsg)).catch(console.error);
-    } else {
-      console.error(
-        `[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`
-      );
-    }
-  }
-  let connection = getVoiceConnection(guild.id);
-  if (connection) {
+    // Do NOT try to join the user's channel directly (might be SAFE). Let manager pick.
     await manageVoiceChannels(guild, client);
+
+    // If we ended up connected, wire listeners; otherwise bail quietly.
+    let connection = getVoiceConnection(guild.id);
+    if (connection) {
+      audioListeningFunctions(connection, guild);
+    }
+
+    // ─────────────────────────────────────────────
+    // Consent enforcement (existing flow, kept intact)
+    // ─────────────────────────────────────────────
+    function describeConsentDest(dest, user) {
+      if (!dest || (!dest.channel && !dest.preferDM)) return "no available destination";
+      if (dest.preferDM) {
+        if (dest.channel) return `DM first → fallback <#${dest.channel.id}>`;
+        return "DM first (no public fallback available)";
+      }
+      if (dest.channel) return `<#${dest.channel.id}>`;
+      return "no available destination";
+    }
+
+    const hasConsent = await hasUserConsented(userId);
+    if (hasConsent) {
+      console.log(`[INFO] User ${userId} has already consented. Allowing audio capture.`);
+      try {
+        if (newState.serverMute) {
+          await newState.setMute(false, "User has consented to transcription.");
+          console.log(`[INFO] User ${userId} unmuted.`);
+        }
+      } catch (err) {
+        console.error(`[ERROR] Failed to unmute user ${userId}: ${err.message}`);
+      }
+    } else {
+      console.log(`[DEBUG] User ${userId} has NOT consented. Sending consent request...`);
+
+      const consentButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`consent:grant:${userId}`)
+          .setLabel("Consent")
+          .setStyle(ButtonStyle.Success)
+      );
+
+      interactionContexts.set(userId, { guildId: guild.id, mode: "consent" });
+
+      try {
+        const previewDest = await resolveConsentDestination(guild, newState.member.user);
+        console.log(
+          `[CONSENT ROUTER] Target for ${userId}: ${describeConsentDest(previewDest, newState.member.user)}`
+        );
+      } catch (e) {
+        console.warn(`[CONSENT ROUTER] Preview failed for ${userId}: ${e.message}`);
+      }
+
+      const freshSettings = await getSettingsForGuild(guild.id);
+      const member = newState.member;
+      const dest = await resolveConsentDestination(guild, member, freshSettings);
+
+      await sendConsentPrompt({
+        guild,
+        user: member.user,
+        member,
+        client,
+        settings: freshSettings,
+        destination: dest,
+        content:
+          `# Consent Required\nInside this voice call, your voice will be transcribed into text.\n` +
+          `Please click the button below to consent.\n\n` +
+          `> All audio files of your voice are temporary and will not be permanently saved.\n` +
+          `-# > You can also take a look at our [privacy policy](<https://www.vctools.app/privacy>) for more information.`,
+        components: [consentButtons],
+        mentionUserInChannel: true,
+      });
+
+      try {
+        await newState.setMute(true, "Awaiting transcription consent.");
+        console.log(`[INFO] User ${userId} muted until consent is given.`);
+      } catch (err) {
+        console.error(`[ERROR] Failed to mute user ${userId}: ${err.message}`);
+      }
+    }
+    return;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Case 3: User left a channel
+  // ───────────────────────────────────────────────────────────────────────────
+  if (oldState.channelId && !newState.channelId) {
+    console.log(`[DEBUG] User ${userId} left channel: ${oldState.channelId}`);
+
+    const startMs = userJoinTimes.get(userId) || Date.now();
+    const durationSec = Math.floor((Date.now() - startMs) / 1000);
+    userJoinTimes.delete(userId);
+
+    const { data, error } = await supabase
+      .from("voice_activity")
+      .insert([{ guild_id: guild.id, user_id: userId, duration: durationSec }], {
+        returning: "minimal",
+      });
+
+    if (error) {
+      console.error("[Heatmap] Supabase insert failed:", error.message, error.details);
+    } else {
+      console.log("[Heatmap] Insert succeeded:", data);
+    }
+
+    if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
+      const activityChannel = guild.channels.cache.get(settings.vcLoggingChannelId);
+      if (activityChannel) {
+        const leftChannel = guild.channels.cache.get(oldState.channelId);
+        const leftChannelName = leftChannel?.name || "Unknown Channel";
+        const memberCount = leftChannel.members.filter((m) => !m.user.bot).size;
+        const timestamp = new Date().toLocaleTimeString("en-US", {
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        const logMsg =
+          `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ` +
+          `${roleColor}${username}${ansi.darkGray} left voice channel ${ansi.white}${leftChannelName}${ansi.darkGray}. ` +
+          `Member count: ${memberCount}`;
+        await activityChannel.send(buildLog(timestamp, logMsg)).catch(console.error);
+      } else {
+        console.error(
+          `[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`
+        );
+      }
+    }
+
+    // Re-evaluate where the bot should be (no unconditional disconnect)
+    await manageVoiceChannels(guild, client);
+    return;
   }
 }
 
