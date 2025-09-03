@@ -98,7 +98,6 @@ async function handleAllInteractions(interaction) {
       settings: handleSettingsFlow,
       bot: handleSettingsFlow,
       vc: handleSettingsFlow,
-      vcsettings: handleSettingsFlow,
       transcription: handleTranscriptionFlow,
       errorlogs: handleErrorLogsFlow,
       staffroles: handleStaffRolesFlow,
