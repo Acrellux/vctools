@@ -31,9 +31,9 @@ async function showPrefixSettingsUI(interactionOrMessage, isEphemeral = false) {
         const settings = (await getSettingsForGuild(guild.id)) || {};
         const raw = settings.prefixes || {};
         const prefixes = {
-            slash: raw.slash ?? true,
-            greater: raw.greater ?? raw[">"] ?? true,
-            exclamation: raw.exclamation ?? raw["!"] ?? true,
+            slash: raw?.slash ?? true,
+            greater: raw?.greater ?? true,
+            exclamation: raw?.exclamation ?? true,
         };
 
         const userId = interactionOrMessage.user?.id || interactionOrMessage.author?.id;
@@ -103,10 +103,11 @@ async function handlePrefixSettingsFlow(interaction) {
         const settings = (await getSettingsForGuild(guildId)) || {};
         const raw = settings.prefixes || {};
         const prefixes = {
-            slash: raw.slash ?? true,
-            greater: raw.greater ?? raw[">"] ?? true,
-            exclamation: raw.exclamation ?? raw["!"] ?? true,
+            slash: raw?.slash ?? true,
+            greater: raw?.greater ?? true,
+            exclamation: raw?.exclamation ?? true,
         };
+
 
         // flip the chosen one
         prefixes[prefixType] = !prefixes[prefixType];

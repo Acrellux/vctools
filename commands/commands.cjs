@@ -305,6 +305,14 @@ async function onInteractionCreate(interaction) {
       await handleReportSubmission(interaction);
 
     } else if (interaction.isButton() || interaction.isStringSelectMenu()) {
+      // VC settings UI (buttons + role select)
+      if (interaction.customId.startsWith("vcsettings:")) {
+        const parts = interaction.customId.split(":");
+        // e.g. "vcsettings:toggle-mod-auto-route:<userId>"
+        const action = parts[1];
+        return handleVCSettingsFlow(interaction, action);
+      }
+      
       if (interaction.customId.startsWith("help:")) return;
 
       // report + activity buttons → open the modal

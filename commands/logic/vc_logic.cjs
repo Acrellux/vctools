@@ -48,8 +48,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
 
     // Display the current Voice Call Ping role.
     const roleName = settings.voiceCallPingRoleId
-      ? guild.roles.cache.get(settings.voiceCallPingRoleId)?.name ||
-      "Unknown Role"
+      ? guild.roles.cache.get(settings.voiceCallPingRoleId)?.name || "Unknown Role"
       : "Not set";
 
     const contentMessage = `## ◈ **VC Settings**
@@ -57,12 +56,13 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
 > **Notify on Bad Words:** ${settings.notifyBadWord ? "Enabled" : "Disabled"}
 > **Notify for Loud Users:** ${settings.notifyLoudUser ? "Enabled" : "Disabled"}
 > **Soundboard Logging:** ${settings.soundboardLogging ? "Enabled" : "Disabled"}
-> **Kick on Soundboard Spam:** ${settings.kickOnSoundboardSpam ? "Enabled" : "Disabled"
-      }
+> **Kick on Soundboard Spam:** ${settings.kickOnSoundboardSpam ? "Enabled" : "Disabled"}
+> **Move to Other Voice Calls when Moderators Join (Mod Auto-Route):** ${settings.mod_auto_route_enabled ? "Enabled" : "Disabled"}
+> **VC Logging:** ${settings.vcLoggingEnabled ? "Enabled" : "Disabled"}
 
 -# *Unable to find a specific channel/role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
 
-    // Create dropdown for VC Ping role selection.
+    // Dropdown for VC Ping role selection
     const vcRoleDropdown = createRoleDropdown(
       `vcsettings:select-log-viewers:${userId}`,
       guild,
@@ -70,7 +70,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
       settings.voiceCallPingRoleId
     );
 
-    // Create toggle buttons for notifications.
+    // Buttons (first row — max 5)
     const togglenotifyBadWordButton = new ButtonBuilder()
       .setCustomId(`vcsettings:toggle-badword:${userId}`)
       .setLabel(
@@ -78,9 +78,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
           ? "Disable Notify on Bad Words"
           : "Enable Notify on Bad Words"
       )
-      .setStyle(
-        settings.notifyBadWord ? ButtonStyle.Danger : ButtonStyle.Success
-      );
+      .setStyle(settings.notifyBadWord ? ButtonStyle.Danger : ButtonStyle.Success);
 
     const togglenotifyLoudUserButton = new ButtonBuilder()
       .setCustomId(`vcsettings:toggle-loud-user:${userId}`)
@@ -89,9 +87,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
           ? "Disable Notify for Loud Users"
           : "Enable Notify for Loud Users"
       )
-      .setStyle(
-        settings.notifyLoudUser ? ButtonStyle.Danger : ButtonStyle.Success
-      );
+      .setStyle(settings.notifyLoudUser ? ButtonStyle.Danger : ButtonStyle.Success);
 
     const togglesoundboardLoggingButton = new ButtonBuilder()
       .setCustomId(`vcsettings:toggle-soundboard-logging:${userId}`)
@@ -100,11 +96,8 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
           ? "Disable Soundboard Logging"
           : "Enable Soundboard Logging"
       )
-      .setStyle(
-        settings.soundboardLogging ? ButtonStyle.Danger : ButtonStyle.Success
-      );
+      .setStyle(settings.soundboardLogging ? ButtonStyle.Danger : ButtonStyle.Success);
 
-    // NEW: Button for Kick on Soundboard Spam toggle.
     const toggleKickSoundboardButton = new ButtonBuilder()
       .setCustomId(`vcsettings:toggle-kick-soundboard-spam:${userId}`)
       .setLabel(
@@ -112,28 +105,46 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
           ? "Disable Kick on Soundboard Spam"
           : "Enable Kick on Soundboard Spam"
       )
-      .setStyle(
-        settings.kickOnSoundboardSpam ? ButtonStyle.Danger : ButtonStyle.Success
-      );
+      .setStyle(settings.kickOnSoundboardSpam ? ButtonStyle.Danger : ButtonStyle.Success);
 
-    // Assemble all buttons into one ActionRow.
-    const buttonsRow = new ActionRowBuilder().addComponents(
+    const toggleModAutoRouteButton = new ButtonBuilder()
+      .setCustomId(`vcsettings:toggle-mod-auto-route:${userId}`)
+      .setLabel(
+        settings.mod_auto_route_enabled
+          ? "Disable Mod Auto-Route"
+          : "Enable Mod Auto-Route"
+      )
+      .setStyle(settings.mod_auto_route_enabled ? ButtonStyle.Danger : ButtonStyle.Success);
+
+    // 1st Action Row: 5 buttons
+    const buttonsRow1 = new ActionRowBuilder().addComponents(
       togglenotifyBadWordButton,
       togglenotifyLoudUserButton,
       togglesoundboardLoggingButton,
-      toggleKickSoundboardButton
+      toggleKickSoundboardButton,
+      toggleModAutoRouteButton
     );
 
-    const components = [vcRoleDropdown, buttonsRow];
+    // 2nd Action Row: 6th button
+    const toggleVCLoggingButton = new ButtonBuilder()
+      .setCustomId(`vcsettings:toggle-vc-logging:${userId}`)
+      .setLabel(
+        settings.vcLoggingEnabled ? "Disable VC Logging" : "Enable VC Logging"
+      )
+      .setStyle(settings.vcLoggingEnabled ? ButtonStyle.Danger : ButtonStyle.Success);
+
+    const buttonsRow2 = new ActionRowBuilder().addComponents(
+      toggleVCLoggingButton
+    );
+
+    const components = [vcRoleDropdown, buttonsRow1, buttonsRow2];
 
     if (interactionOrMessage.isMessageComponent?.()) {
-      // Button/select menu interaction — update the original message
       await interactionOrMessage.update({
         content: contentMessage,
         components,
       });
     } else if (interactionOrMessage.isCommand?.()) {
-      // Slash command
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
         await interactionOrMessage.editReply({
           content: contentMessage,
@@ -147,13 +158,11 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
         });
       }
     } else if (interactionOrMessage instanceof Message) {
-      // Legacy message command or dev test
       await interactionOrMessage.channel.send({
         content: contentMessage,
         components,
       });
     } else if (interactionOrMessage.isRepliable?.()) {
-      // Fallback for unexpected cases
       await interactionOrMessage.reply({
         content: contentMessage,
         components,
@@ -188,23 +197,16 @@ async function handleVCSettingsFlow(interaction, action) {
     const guild = interaction.guild;
     if (!guild) return;
     let settings = await getSettingsForGuild(guild.id);
+
     switch (action) {
       case "toggle-badword": {
         const newValue = !settings.notifyBadWord;
-        await updateSettingsForGuild(
-          guild.id,
-          { notifyBadWord: newValue },
-          guild
-        );
+        await updateSettingsForGuild(guild.id, { notifyBadWord: newValue }, guild);
         break;
       }
       case "toggle-loud-user": {
         const newValue = !settings.notifyLoudUser;
-        await updateSettingsForGuild(
-          guild.id,
-          { notifyLoudUser: newValue },
-          guild
-        );
+        await updateSettingsForGuild(guild.id, { notifyLoudUser: newValue }, guild);
         break;
       }
       case "select-log-viewers": {
@@ -217,29 +219,27 @@ async function handleVCSettingsFlow(interaction, action) {
           });
           return;
         }
-        await updateSettingsForGuild(
-          guild.id,
-          { voiceCallPingRoleId: selectedRoleId },
-          guild
-        );
+        await updateSettingsForGuild(guild.id, { voiceCallPingRoleId: selectedRoleId }, guild);
         break;
       }
       case "toggle-soundboard-logging": {
         const newStatus = !settings.soundboardLogging;
-        await updateSettingsForGuild(
-          guild.id,
-          { soundboardLogging: newStatus },
-          guild
-        );
+        await updateSettingsForGuild(guild.id, { soundboardLogging: newStatus }, guild);
         break;
       }
       case "toggle-kick-soundboard-spam": {
         const newStatus = !settings.kickOnSoundboardSpam;
-        await updateSettingsForGuild(
-          guild.id,
-          { kickOnSoundboardSpam: newStatus },
-          guild
-        );
+        await updateSettingsForGuild(guild.id, { kickOnSoundboardSpam: newStatus }, guild);
+        break;
+      }
+      case "toggle-mod-auto-route": {
+        const newStatus = !settings.mod_auto_route_enabled;
+        await updateSettingsForGuild(guild.id, { mod_auto_route_enabled: newStatus }, guild);
+        break;
+      }
+      case "toggle-vc-logging": {
+        const newStatus = !settings.vcLoggingEnabled;
+        await updateSettingsForGuild(guild.id, { vcLoggingEnabled: newStatus }, guild);
         break;
       }
       default:
@@ -249,6 +249,7 @@ async function handleVCSettingsFlow(interaction, action) {
         });
         return;
     }
+
     await showVCSettingsUI(interaction, true);
   } catch (error) {
     console.error(`[ERROR] handleVCSettingsFlow failed: ${error.message}`);

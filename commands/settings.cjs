@@ -70,6 +70,7 @@ async function getSettingsForGuild(guildId) {
       prefixes: { slash: true, exclamation: true, greater: true },
       consent_delivery_mode: "dm",
       consent_channel_id: null,
+      mod_auto_route_enabled: false,
     };
 
     const { error: insertError } = await supabase
@@ -143,6 +144,7 @@ async function updateSettingsForGuild(guildId, updates, guild) {
     prefixes: { slash: true, exclamation: true, greater: true },
     consent_delivery_mode: "dm",
     consent_channel_id: null,
+    mod_auto_route_enabled: false,
   };
 
   // Merge updates with existing settings
