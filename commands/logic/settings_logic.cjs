@@ -67,12 +67,6 @@ async function handleSettingsFlow(interaction, mode, action) {
       return;
     }
 
-    // Delegate VC settings actions to handleVCSettingsFlow if mode is "vc" or "vcsettings"
-    if (mode === "vc" || mode === "vcsettings") {
-      await handleVCSettingsFlow(interaction, action);
-      return;
-    }
-
     // Prefix settings flow
     if (mode === "prefix") {
       return handlePrefixSettingsFlow(interaction);
