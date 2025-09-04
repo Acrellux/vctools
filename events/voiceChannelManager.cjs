@@ -907,8 +907,7 @@ async function manageVoiceChannels(guild, client) {
       console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Alone; moving to: ${ansi.white}${targetChannel.name}${ansi.reset}`);
       await moveToChannel(targetChannel, connection, guild, client);
     } else {
-      // No better place: LINGER instead of instant disconnect
-      scheduleIdleDisconnect(guild, connection, "no-humans-non-safe");
+      await disconnectAndReset(connection);
     }
     return;
   }
