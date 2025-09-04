@@ -5,280 +5,299 @@ const {
   StringSelectMenuBuilder,
   ChannelType,
   Message,
+  ComponentType,
+  PermissionsBitField,
 } = require("discord.js");
+
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
   updateChannelPermissionsForGuild,
 } = require("../settings.cjs");
-const { createRoleDropdown } = require("./helpers.cjs");
-const { logErrorToChannel } = require("./helpers.cjs");
+
+const { createRoleDropdown, logErrorToChannel, requiredManagerPermissions } = require("./helpers.cjs");
+
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-const { requiredManagerPermissions } = require("./helpers.cjs");
 
-async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
+// ───────────────────────────────────────────────────────────────────────────────
+// Anti-double-fire guard: block rapid duplicate invocations per (guild:user)
+// ───────────────────────────────────────────────────────────────────────────────
+const IN_FLIGHT_WINDOW_MS = 4000;
+const inflight = new Map(); // key -> timestamp
+
+function makeKey(guildId, userId) {
+  return `${guildId || "noguild"}:${userId || "nouser"}:vcsettings`;
+}
+
+function isDuplicateCall(guildId, userId) {
+  const key = makeKey(guildId, userId);
+  const now = Date.now();
+  const last = inflight.get(key);
+  if (last && now - last < IN_FLIGHT_WINDOW_MS) return true;
+  inflight.set(key, now);
+  // Clean up later
+  setTimeout(() => {
+    if (inflight.get(key) === now) inflight.delete(key);
+  }, IN_FLIGHT_WINDOW_MS);
+  return false;
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Safe reply helpers for Interaction or Message
+// ───────────────────────────────────────────────────────────────────────────────
+async function safeReply(target, payload, { ephemeral = true } = {}) {
+  // If it's an Interaction
+  if (typeof target?.isRepliable === "function" && target.isRepliable()) {
+    const opts = { ...payload, ephemeral, fetchReply: true };
+    if (target.deferred || target.replied) {
+      return await target.editReply(opts);
+    } else {
+      return await target.reply(opts);
+    }
+  }
+
+  // If it's a Message
+  if (target instanceof Message) {
+    return await target.reply(payload);
+  }
+
+  // Fallback
+  return await target?.channel?.send?.(payload);
+}
+
+function ensureManagerPerms(member) {
+  // If you use a custom requiredManagerPermissions bitfield from helpers
+  return member?.permissions?.has?.(requiredManagerPermissions ?? PermissionsBitField.Flags.ManageGuild);
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// UI builders
+// ───────────────────────────────────────────────────────────────────────────────
+function buildButtons(settings) {
+  const autoModDisabled = !!(settings?.autoModRouteDisabled ?? false);
+
+  const disableAutoModButton = new ButtonBuilder()
+    .setCustomId("vcsettings:disable_automod_route")
+    // Label exactly as requested:
+    .setLabel("DisableAutoModRoute")
+    .setStyle(autoModDisabled ? ButtonStyle.Secondary : ButtonStyle.Danger);
+
+  const saveButton = new ButtonBuilder()
+    .setCustomId("vcsettings:save")
+    .setLabel("Save")
+    .setStyle(ButtonStyle.Primary);
+
+  const refreshPermsButton = new ButtonBuilder()
+    .setCustomId("vcsettings:sync_permissions")
+    .setLabel("Sync Channel Permissions")
+    .setStyle(ButtonStyle.Secondary);
+
+  const closeButton = new ButtonBuilder()
+    .setCustomId("vcsettings:close")
+    .setLabel("Close")
+    .setStyle(ButtonStyle.Secondary);
+
+  return [
+    new ActionRowBuilder().addComponents(disableAutoModButton, saveButton, refreshPermsButton, closeButton),
+  ];
+}
+
+function buildRoleRow(guild, settings) {
+  // Expect createRoleDropdown(guild, selectedRoleIds?) to return a StringSelectMenuBuilder
+  const selectedRoleIds = settings?.managerRoleIds ?? []; // adjust to your schema
+  const roleSelect = createRoleDropdown(guild, selectedRoleIds)
+    .setCustomId("vcsettings:roles")
+    .setMinValues(0)
+    .setMaxValues(25); // let them pick many if needed
+
+  return new ActionRowBuilder().addComponents(roleSelect);
+}
+
+function renderContent(settings) {
+  const autoModDisabled = !!(settings?.autoModRouteDisabled ?? false);
+  const lines = [
+    "### VC Tools — Settings",
+    "",
+    `• AutoMod Route: **${autoModDisabled ? "Disabled" : "Enabled"}**`,
+    "• Select manager roles and press **Save**.",
+  ];
+  return lines.join("\n");
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Public Entry: showVCSettingsUI
+// ───────────────────────────────────────────────────────────────────────────────
+async function showVCSettingsUI(interactionOrMessage, isEphemeral = true) {
   try {
-    const guild = interactionOrMessage.guild;
-    if (!guild) return;
+    const guild = interactionOrMessage.guild ?? interactionOrMessage?.member?.guild;
+    const userId = interactionOrMessage.user?.id ?? interactionOrMessage.author?.id;
+    const guildId = guild?.id;
 
-    // Permission check
-    if (!(await requiredManagerPermissions(interactionOrMessage))) {
-      const noPermissionMessage =
-        "> <❇️> You do not have the required permissions to do this. (CMD_ERR_008)";
-      if (interactionOrMessage instanceof Message) {
-        await interactionOrMessage.channel.send(noPermissionMessage);
-      } else {
-        await interactionOrMessage.reply({
-          content: noPermissionMessage,
-          ephemeral: true,
-        });
+    if (!guild) {
+      await safeReply(interactionOrMessage, { content: "This must be used in a server.", components: [] }, { ephemeral: true });
+      return;
+    }
+
+    // Hard-stop rapid duplicate invocations
+    if (isDuplicateCall(guildId, userId)) {
+      // If this duplicate is an interaction, quietly acknowledge to avoid "This interaction failed"
+      if (typeof interactionOrMessage?.isRepliable === "function" && interactionOrMessage.isRepliable() && !interactionOrMessage.replied && !interactionOrMessage.deferred) {
+        try { await interactionOrMessage.deferReply({ ephemeral: true }); } catch { }
       }
       return;
     }
 
-    const settings = await getSettingsForGuild(guild.id);
-    const userId =
-      interactionOrMessage instanceof Message
-        ? interactionOrMessage.author.id
-        : interactionOrMessage.user.id;
-
-    // Display the current Voice Call Ping role.
-    const roleName = settings.voiceCallPingRoleId
-      ? guild.roles.cache.get(settings.voiceCallPingRoleId)?.name || "Unknown Role"
-      : "Not set";
-
-    const contentMessage = `## ◈ **VC Settings**
-> **Voice Call Ping Role:** ${roleName}
-> **Notify on Bad Words:** ${settings.notifyBadWord ? "Enabled" : "Disabled"}
-> **Notify for Loud Users:** ${settings.notifyLoudUser ? "Enabled" : "Disabled"}
-> **Soundboard Logging:** ${settings.soundboardLogging ? "Enabled" : "Disabled"}
-> **Kick on Soundboard Spam:** ${settings.kickOnSoundboardSpam ? "Enabled" : "Disabled"}
-> **Move to Other Voice Calls when Moderators Join (Mod Auto-Route):** ${settings.mod_auto_route_enabled ? "Enabled" : "Disabled"}
-> **VC Logging:** ${settings.vcLoggingEnabled ? "Enabled" : "Disabled"}
-
--# *Unable to find a specific channel/role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
-
-    // Dropdown for VC Ping role selection
-    const vcRoleDropdown = createRoleDropdown(
-      `vcsettings:select-log-viewers:${userId}`,
-      guild,
-      userId,
-      settings.voiceCallPingRoleId
-    );
-
-    // Buttons (first row — max 5)
-    const togglenotifyBadWordButton = new ButtonBuilder()
-      .setCustomId(`vcsettings:toggle-badword:${userId}`)
-      .setLabel(
-        settings.notifyBadWord
-          ? "Disable Notify on Bad Words"
-          : "Enable Notify on Bad Words"
-      )
-      .setStyle(settings.notifyBadWord ? ButtonStyle.Danger : ButtonStyle.Success);
-
-    const togglenotifyLoudUserButton = new ButtonBuilder()
-      .setCustomId(`vcsettings:toggle-loud-user:${userId}`)
-      .setLabel(
-        settings.notifyLoudUser
-          ? "Disable Notify for Loud Users"
-          : "Enable Notify for Loud Users"
-      )
-      .setStyle(settings.notifyLoudUser ? ButtonStyle.Danger : ButtonStyle.Success);
-
-    const togglesoundboardLoggingButton = new ButtonBuilder()
-      .setCustomId(`vcsettings:toggle-soundboard-logging:${userId}`)
-      .setLabel(
-        settings.soundboardLogging
-          ? "Disable Soundboard Logging"
-          : "Enable Soundboard Logging"
-      )
-      .setStyle(settings.soundboardLogging ? ButtonStyle.Danger : ButtonStyle.Success);
-
-    const toggleKickSoundboardButton = new ButtonBuilder()
-      .setCustomId(`vcsettings:toggle-kick-soundboard-spam:${userId}`)
-      .setLabel(
-        settings.kickOnSoundboardSpam
-          ? "Disable Kick on Soundboard Spam"
-          : "Enable Kick on Soundboard Spam"
-      )
-      .setStyle(settings.kickOnSoundboardSpam ? ButtonStyle.Danger : ButtonStyle.Success);
-
-    const toggleModAutoRouteButton = new ButtonBuilder()
-      .setCustomId(`vcsettings:toggle-mod-auto-route:${userId}`)
-      .setLabel(
-        settings.mod_auto_route_enabled
-          ? "Disable Mod Auto-Route"
-          : "Enable Mod Auto-Route"
-      )
-      .setStyle(settings.mod_auto_route_enabled ? ButtonStyle.Danger : ButtonStyle.Success);
-
-    // 1st Action Row: 5 buttons
-    const buttonsRow1 = new ActionRowBuilder().addComponents(
-      togglenotifyBadWordButton,
-      togglenotifyLoudUserButton,
-      togglesoundboardLoggingButton,
-      toggleKickSoundboardButton,
-      toggleModAutoRouteButton
-    );
-
-    // 2nd Action Row: 6th button
-    const toggleVCLoggingButton = new ButtonBuilder()
-      .setCustomId(`vcsettings:toggle-vc-logging:${userId}`)
-      .setLabel(
-        settings.vcLoggingEnabled ? "Disable VC Logging" : "Enable VC Logging"
-      )
-      .setStyle(settings.vcLoggingEnabled ? ButtonStyle.Danger : ButtonStyle.Success);
-
-    const buttonsRow2 = new ActionRowBuilder().addComponents(
-      toggleVCLoggingButton
-    );
-
-    const components = [vcRoleDropdown, buttonsRow1, buttonsRow2];
-
-    // Component interaction → update the same message
-    if (interactionOrMessage.isMessageComponent?.()) {
-      return interactionOrMessage.update({
-        content: contentMessage,
-        components,
-      });
+    // Permissions check first, no partial UI sends before we know perms
+    const member = interactionOrMessage.member ?? (await guild.members.fetch(userId).catch(() => null));
+    if (!ensureManagerPerms(member)) {
+      await safeReply(interactionOrMessage, { content: "You need server manager permissions to open VC Tools settings.", components: [] }, { ephemeral: true });
+      return;
     }
 
-    // Slash command → reply or editReply
-    if (interactionOrMessage.isChatInputCommand?.() || interactionOrMessage.isCommand?.()) {
-      if (interactionOrMessage.replied || interactionOrMessage.deferred) {
-        return interactionOrMessage.editReply({
-          content: contentMessage,
-          components,
-        });
+    // Fetch settings BEFORE first render — prevents "first fire missing button"
+    const settings = await getSettingsForGuild(guildId);
+
+    // Build full UI now
+    const components = [
+      buildRoleRow(guild, settings),
+      ...buildButtons(settings),
+    ];
+
+    const content = renderContent(settings);
+
+    // Single reply path
+    const msg = await safeReply(
+      interactionOrMessage,
+      {
+        content,
+        components,
+      },
+      { ephemeral: !!isEphemeral }
+    );
+
+    // Start a scoped collector on THIS message only
+    const collector = msg.createMessageComponentCollector({
+      componentType: ComponentType.Button,
+      time: 5 * 60 * 1000,
+      filter: (i) => i.user.id === userId && i.customId.startsWith("vcsettings:"),
+    });
+
+    // Also collect select changes for roles
+    const roleCollector = msg.createMessageComponentCollector({
+      componentType: ComponentType.StringSelect,
+      time: 5 * 60 * 1000,
+      filter: (i) => i.user.id === userId && i.customId === "vcsettings:roles",
+    });
+
+    // Keep an in-memory draft we save on "Save"
+    const draft = {
+      managerRoleIds: Array.isArray(settings?.managerRoleIds) ? [...settings.managerRoleIds] : [],
+      autoModRouteDisabled: !!(settings?.autoModRouteDisabled ?? false),
+    };
+
+    roleCollector.on("collect", async (i) => {
+      try {
+        draft.managerRoleIds = i.values;
+        await i.deferUpdate(); // update silently, keep UI
+      } catch (e) {
+        await logErrorToChannel(guild, e);
       }
-      return interactionOrMessage.reply({
-        content: contentMessage,
-        components,
-        ephemeral: isEphemeral,
-      });
-    }
+    });
 
-    // Message-based command (e.g., `>settings vc`) → ALWAYS send a NEW panel
-    if (interactionOrMessage instanceof Message) {
-      return interactionOrMessage.channel.send({
-        content: contentMessage,
-        components,
-      });
-    }
+    collector.on("collect", async (i) => {
+      try {
+        const id = i.customId;
 
-    // Fallback for other repliable interactions
-    if (interactionOrMessage.isRepliable?.()) {
-      return interactionOrMessage.reply({
-        content: contentMessage,
-        components,
-        ephemeral: isEphemeral,
-      });
-    }
-  } catch (error) {
-    console.error(`[ERROR] showVCSettingsUI failed: ${error.message}`);
-    await logErrorToChannel(
-      interactionOrMessage.guild?.id,
-      error.stack,
-      interactionOrMessage.client,
-      "showVCSettingsUI"
-    );
-    if (interactionOrMessage instanceof Message) {
-      await interactionOrMessage.channel.send(
-        "> <❌> An error occurred displaying VC settings. (INT_ERR_006)"
-      );
-    } else if (!interactionOrMessage.replied) {
-      await interactionOrMessage.reply({
-        content:
-          "> <❌> An error occurred displaying VC settings. (INT_ERR_006)",
-        ephemeral: true,
-      });
-    }
-  }
-}
+        if (id === "vcsettings:disable_automod_route") {
+          draft.autoModRouteDisabled = !draft.autoModRouteDisabled;
+          await i.deferUpdate();
 
-async function handleVCSettingsFlow(interaction, action) {
-  try {
-    const guild = interaction.guild;
-    if (!guild) return;
-    const settings = await getSettingsForGuild(guild.id);
-
-    switch (action) {
-      case "toggle-badword": {
-        const newValue = !settings.notifyBadWord;
-        await updateSettingsForGuild(guild.id, { notifyBadWord: newValue }, guild);
-        break;
-      }
-      case "toggle-loud-user": {
-        const newValue = !settings.notifyLoudUser;
-        await updateSettingsForGuild(guild.id, { notifyLoudUser: newValue }, guild);
-        break;
-      }
-      case "select-log-viewers": {
-        const selectedRoleId = interaction.values[0];
-        const role = guild.roles.cache.get(selectedRoleId);
-        if (!role) {
-          await interaction.reply({
-            content: "> <❌> Invalid role selected. Please try again.",
-            ephemeral: true,
-          });
+          // Update UI immediately to reflect the toggle
+          const preview = { ...settings, autoModRouteDisabled: draft.autoModRouteDisabled, managerRoleIds: draft.managerRoleIds };
+          await msg.edit({ content: renderContent(preview), components: [buildRoleRow(guild, preview), ...buildButtons(preview)] });
           return;
         }
-        await updateSettingsForGuild(guild.id, { voiceCallPingRoleId: selectedRoleId }, guild);
-        break;
-      }
-      case "toggle-soundboard-logging": {
-        const newStatus = !settings.soundboardLogging;
-        await updateSettingsForGuild(guild.id, { soundboardLogging: newStatus }, guild);
-        break;
-      }
-      case "toggle-kick-soundboard-spam": {
-        const newStatus = !settings.kickOnSoundboardSpam;
-        await updateSettingsForGuild(guild.id, { kickOnSoundboardSpam: newStatus }, guild);
-        break;
-      }
-      case "toggle-mod-auto-route": {
-        const newStatus = !settings.mod_auto_route_enabled;
-        await updateSettingsForGuild(guild.id, { mod_auto_route_enabled: newStatus }, guild);
-        break;
-      }
-      case "toggle-vc-logging": {
-        const newStatus = !settings.vcLoggingEnabled;
-        await updateSettingsForGuild(guild.id, { vcLoggingEnabled: newStatus }, guild);
-        break;
-      }
-      default:
-        await interaction.reply({
-          content: "> <❌> Unrecognized VC settings action.",
-          ephemeral: true,
-        });
-        return;
-    }
 
-    // Re-render with fresh settings (updates the SAME message for component interactions)
-    await showVCSettingsUI(interaction, true);
-  } catch (error) {
-    console.error(`[ERROR] handleVCSettingsFlow failed: ${error.message}`);
-    await logErrorToChannel(
-      interaction.guild?.id,
-      error.stack,
-      interaction.client,
-      "handleVCSettingsFlow"
-    );
-    if (!interaction.replied) {
-      await interaction.reply({
-        content:
-          "> <❌> An error occurred processing VC settings. (INT_ERR_006)",
-        ephemeral: true,
-      });
-    }
+        if (id === "vcsettings:save") {
+          // Persist to DB
+          await updateSettingsForGuild(guildId, {
+            managerRoleIds: draft.managerRoleIds,
+            autoModRouteDisabled: draft.autoModRouteDisabled,
+          });
+
+          await i.reply({ content: "Saved ✅", ephemeral: true });
+
+          // Reflect new saved state in UI
+          settings.managerRoleIds = draft.managerRoleIds;
+          settings.autoModRouteDisabled = draft.autoModRouteDisabled;
+
+          await msg.edit({ content: renderContent(settings), components: [buildRoleRow(guild, settings), ...buildButtons(settings)] });
+          return;
+        }
+
+        if (id === "vcsettings:sync_permissions") {
+          await i.deferReply({ ephemeral: true });
+          await updateChannelPermissionsForGuild(guildId);
+          await i.editReply("Channel permissions synced ✅");
+          return;
+        }
+
+        if (id === "vcsettings:close") {
+          await i.deferUpdate();
+          // Disable components
+          const disabledRows = msg.components.map((row) => {
+            const newRow = ActionRowBuilder.from(row);
+            newRow.components = newRow.components.map((c) => ButtonBuilder.from(c).setDisabled(true));
+            return newRow;
+          });
+          try {
+            await msg.edit({ components: disabledRows });
+          } catch { }
+          collector.stop("closed");
+          roleCollector.stop("closed");
+          return;
+        }
+      } catch (e) {
+        await logErrorToChannel(guild, e);
+        try {
+          if (!i.replied && !i.deferred) await i.reply({ content: "Something went wrong. Try again.", ephemeral: true });
+        } catch { }
+      }
+    });
+
+    const endBoth = async () => {
+      // On timeout/end, just disable components to avoid stale clicks
+      try {
+        const disabled = msg.components.map((row) => {
+          const newRow = ActionRowBuilder.from(row);
+          newRow.components = newRow.components.map((c) => {
+            const base = c.data?.type === ComponentType.StringSelect ? StringSelectMenuBuilder.from(c) : ButtonBuilder.from(c);
+            return base.setDisabled(true);
+          });
+          return newRow;
+        });
+        await msg.edit({ components: disabled });
+      } catch { }
+    };
+
+    collector.on("end", endBoth);
+    roleCollector.on("end", endBoth);
+  } catch (err) {
+    try {
+      const g = interactionOrMessage.guild ?? interactionOrMessage?.member?.guild;
+      await logErrorToChannel(g, err);
+    } catch { }
+    // Best-effort user feedback if possible
+    try {
+      await safeReply(interactionOrMessage, { content: "Error opening settings. Check logs.", components: [] }, { ephemeral: true });
+    } catch { }
   }
 }
 
 module.exports = {
   showVCSettingsUI,
-  handleVCSettingsFlow,
 };
