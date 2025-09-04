@@ -139,12 +139,16 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
 
     const components = [vcRoleDropdown, buttonsRow1, buttonsRow2];
 
+    // Component interaction → update the same message
     if (interactionOrMessage.isMessageComponent?.()) {
       return interactionOrMessage.update({
         content: contentMessage,
         components,
       });
-    } else if (interactionOrMessage.isChatInputCommand?.() || interactionOrMessage.isCommand?.()) {
+    }
+
+    // Slash command → reply or editReply
+    if (interactionOrMessage.isChatInputCommand?.() || interactionOrMessage.isCommand?.()) {
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
         return interactionOrMessage.editReply({
           content: contentMessage,
@@ -156,27 +160,18 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
         components,
         ephemeral: isEphemeral,
       });
-    } else if (interactionOrMessage instanceof Message) {
-      // De-dup: if we already posted a VC Settings panel here, edit it instead of sending another
-      try {
-        const recent = await interactionOrMessage.channel.messages.fetch({ limit: 10 });
-        const existing = recent.find(m =>
-          m.author.id === interactionOrMessage.client.user.id &&
-          m.editable &&
-          typeof m.content === "string" &&
-          m.content.startsWith("## ◈ **VC Settings**")
-        );
-        if (existing) {
-          await existing.edit({ content: contentMessage, components });
-          return;
-        }
-      } catch (_) { /* ignore fetch/edit issues */ }
+    }
 
+    // Message-based command (e.g., `>settings vc`) → ALWAYS send a NEW panel
+    if (interactionOrMessage instanceof Message) {
       return interactionOrMessage.channel.send({
         content: contentMessage,
         components,
       });
-    } else if (interactionOrMessage.isRepliable?.()) {
+    }
+
+    // Fallback for other repliable interactions
+    if (interactionOrMessage.isRepliable?.()) {
       return interactionOrMessage.reply({
         content: contentMessage,
         components,
@@ -207,10 +202,9 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
 
 async function handleVCSettingsFlow(interaction, action) {
   try {
-    const userId = interaction.user.id;
     const guild = interaction.guild;
     if (!guild) return;
-    let settings = await getSettingsForGuild(guild.id);
+    const settings = await getSettingsForGuild(guild.id);
 
     switch (action) {
       case "toggle-badword": {
@@ -264,6 +258,7 @@ async function handleVCSettingsFlow(interaction, action) {
         return;
     }
 
+    // Re-render with fresh settings (updates the SAME message for component interactions)
     await showVCSettingsUI(interaction, true);
   } catch (error) {
     console.error(`[ERROR] handleVCSettingsFlow failed: ${error.message}`);
