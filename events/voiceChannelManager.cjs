@@ -10,11 +10,10 @@ const {
   getVoiceConnection,
 } = require("@discordjs/voice");
 const { EventEmitter } = require("events");
-const { Readable, PassThrough } = require("stream");
 const { finished } = require("stream/promises");
 const prism = require("prism-media");
-const transcription = require("./transcription.cjs"); // Import transcription module
-const { interactionContexts } = require("../database/contextStore.cjs"); // Import context store
+const transcription = require("./transcription.cjs");
+const { interactionContexts } = require("../database/contextStore.cjs");
 const {
   hasUserConsented,
   grantUserConsent,
@@ -38,7 +37,7 @@ const {
 const { saveVCState, clearVCState } = require("../util/vc_state.cjs");
 
 // Supabase initialization
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require("@supabase/supabase-js");
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -57,7 +56,6 @@ const silenceDurations = new Map();
 const MAX_SILENCE_RECORDS = 10;
 const DEFAULT_SILENCE_TIMEOUT = 3000;
 
-// mod auto-route constants
 const AUTO_ROUTE_MIN_OTHER_HUMANS = 2;
 
 // Track file streams and subscriptions by user
@@ -103,7 +101,7 @@ const userWarningTimestamps = new Map(); // Tracks last warning time per user
 
 const initiateLoudnessWarning = async (
   userId,
-  audioStream,   // Opus stream
+  audioStream, // Opus stream
   guild,
   updateTimestamp
 ) => {
@@ -151,10 +149,15 @@ const initiateLoudnessWarning = async (
   };
 
   const loudnessDetector = transcription.createLoudnessDetector(
-    guild, userId, warnIfTooLoud, options
+    guild,
+    userId,
+    warnIfTooLoud,
+    options
   );
   const opusDecoderForLoudness = new prism.opus.Decoder({
-    frameSize: 960, channels: 1, rate: 48000,
+    frameSize: 960,
+    channels: 1,
+    rate: 48000,
   });
 
   // Track *activity* using source data (fixes RMS-event bug)
@@ -169,7 +172,9 @@ const initiateLoudnessWarning = async (
   const quietTimer = setInterval(() => {
     const silentDuration = Date.now() - lastActiveTime;
     if (silentDuration >= QUIET_TIMEOUT_MS) {
-      console.warn(`[QUIET FINALIZE] ${userId} silent (low activity) for ${silentDuration}ms`);
+      console.warn(
+        `[QUIET FINALIZE] ${userId} silent (low activity) for ${silentDuration}ms`
+      );
       teardown();
     }
   }, 1000);
@@ -180,10 +185,18 @@ const initiateLoudnessWarning = async (
   const teardown = () => {
     clearInterval(quietTimer);
     audioStream.off("data", onData);
-    try { opusDecoderForLoudness.unpipe(loudnessDetector); } catch { }
-    try { audioStream.unpipe(opusDecoderForLoudness); } catch { }
-    try { loudnessDetector.destroy(); } catch { }
-    try { opusDecoderForLoudness.destroy(); } catch { }
+    try {
+      opusDecoderForLoudness.unpipe(loudnessDetector);
+    } catch { }
+    try {
+      audioStream.unpipe(opusDecoderForLoudness);
+    } catch { }
+    try {
+      loudnessDetector.destroy();
+    } catch { }
+    try {
+      opusDecoderForLoudness.destroy();
+    } catch { }
   };
 
   return { loudnessDetector, opusDecoderForLoudness, quietTimer, teardown };
@@ -194,10 +207,8 @@ const initiateLoudnessWarning = async (
  ************************************************************************************************/
 function isModerator(member, settings) {
   if (!member) return false;
-  // Admin perms always count
   if (member.permissions?.has?.(PermissionsBitField.Flags.Administrator)) return true;
 
-  // Role-based flags
   const modRoles = [
     settings.vcModeratorRoleId,
     settings.moderatorRoleId,
@@ -232,7 +243,11 @@ function anyModsAnywhere(guild, settings) {
   return false;
 }
 
-function findBestAlternateChannelForAutoRoute(guild, settings, excludeChannelId) {
+function findBestAlternateChannelForAutoRoute(
+  guild,
+  settings,
+  excludeChannelId = null
+) {
   const safe = new Set(settings.safeChannels || []);
   let best = null;
   let bestCount = -1;
@@ -240,8 +255,8 @@ function findBestAlternateChannelForAutoRoute(guild, settings, excludeChannelId)
   guild.channels.cache
     .filter((c) => c.type === ChannelType.GuildVoice)
     .forEach((ch) => {
-      if (safe.has(ch.id)) return;                   // never go to SAFE
-      if (ch.id === excludeChannelId) return;        // not the current channel
+      if (safe.has(ch.id)) return; // never go to SAFE
+      if (excludeChannelId && ch.id === excludeChannelId) return;
       const { humans, mods } = channelCounts(ch, settings);
       const nonModHumans = humans - mods;
 
@@ -268,7 +283,6 @@ async function detectUserActivityChanges(oldState, newState) {
     return;
   }
 
-  // Fetch settings for logging channel
   const settings = await getSettingsForGuild(guild.id);
   if (!settings.vcLoggingEnabled || !settings.vcLoggingChannelId) return;
 
@@ -280,12 +294,10 @@ async function detectUserActivityChanges(oldState, newState) {
     return;
   }
 
-  // Prepare member info
   const topRole = member.roles.highest?.name || "No Role";
   const username = member.user.username;
   const userId = member.user.id;
 
-  // ANSI color codes
   const ansi = {
     darkGray: "\u001b[2;30m",
     white: "\u001b[2;37m",
@@ -295,32 +307,24 @@ async function detectUserActivityChanges(oldState, newState) {
     reset: "\u001b[0m",
   };
 
-  // Determine role color
   let roleColor = ansi.white;
-  if (guild.ownerId === userId) {
-    roleColor = ansi.red;
-  } else if (member.permissions.has("Administrator")) {
-    roleColor = ansi.cyan;
-  } else if (
+  if (guild.ownerId === userId) roleColor = ansi.red;
+  else if (member.permissions.has("Administrator")) roleColor = ansi.cyan;
+  else if (
     member.permissions.has("ManageGuild") ||
     member.permissions.has("KickMembers") ||
     member.permissions.has("MuteMembers") ||
     member.permissions.has("BanMembers") ||
     member.permissions.has("ManageMessages")
-  ) {
+  )
     roleColor = ansi.yellow;
-  }
 
-  // Timestamp in MM:SS format
   const now = new Date();
   const minute = now.getMinutes().toString().padStart(2, "0");
   const second = now.getSeconds().toString().padStart(2, "0");
   const timestamp = `${minute}:${second}`;
-
-  // Helper to build an ANSI-formatted code block log
-  const buildLog = (msg) => {
-    return `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
-  };
+  const buildLog = (msg) =>
+    `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
 
   // 1) Forced disconnect (VC kick)
   if (oldState.channelId && !newState.channelId) {
@@ -362,9 +366,7 @@ async function detectUserActivityChanges(oldState, newState) {
           entry.target?.id === userId &&
           entry.changes?.some((change) => change.key === "mute")
       );
-      if (auditEntry) {
-        executor = auditEntry.executor?.tag ?? "Unknown";
-      }
+      if (auditEntry) executor = auditEntry.executor?.tag ?? "Unknown";
     } catch (error) {
       console.error("[AUDIT LOG ERROR]", error);
     }
@@ -387,9 +389,7 @@ async function detectUserActivityChanges(oldState, newState) {
           entry.target?.id === userId &&
           entry.changes?.some((change) => change.key === "deaf")
       );
-      if (auditEntry) {
-        executor = auditEntry.executor?.tag ?? "Unknown";
-      }
+      if (auditEntry) executor = auditEntry.executor?.tag ?? "Unknown";
     } catch (error) {
       console.error("[AUDIT LOG ERROR]", error);
     }
@@ -431,7 +431,6 @@ let isDisconnecting = false;
 async function execute(oldState, newState, client) {
   if (newState?.member?.user?.bot) return;
 
-  // Detect mute/deafen changes safely (never crash the handler)
   try {
     await detectUserActivityChanges(oldState, newState);
   } catch (e) {
@@ -451,10 +450,8 @@ async function execute(oldState, newState, client) {
   }
   console.log(`[DEBUG] Checking voice state update for user: ${userId}`);
 
-  // Treat missing/failed settings fetch as {}
   const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
 
-  // ANSI codes for logs
   const ansi = {
     darkGray: "\u001b[2;30m",
     white: "\u001b[2;37m",
@@ -464,111 +461,32 @@ async function execute(oldState, newState, client) {
     reset: "\u001b[0m",
   };
 
-  // Get member details for logs
   let member = newState.member || guild.members.cache.get(userId);
   const topRole = member?.roles.highest?.name || "No Role";
   const username = member?.user?.username || "Unknown";
   let roleColor = ansi.white;
-  if (guild.ownerId === userId) {
-    roleColor = ansi.red;
-  } else if (member && member.permissions?.has("Administrator")) {
-    roleColor = ansi.cyan;
-  } else if (
+  if (guild.ownerId === userId) roleColor = ansi.red;
+  else if (member && member.permissions?.has("Administrator")) roleColor = ansi.cyan;
+  else if (
     member &&
     (member.permissions.has("ManageGuild") ||
       member.permissions.has("KickMembers") ||
       member.permissions.has("MuteMembers") ||
       member.permissions.has("BanMembers") ||
       member.permissions.has("ManageMessages"))
-  ) {
+  )
     roleColor = ansi.yellow;
-  }
 
-  // Helper: Build an ANSI-formatted log message
   const buildLog = (timestamp, msg) =>
     `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
-
-  /*************** AUTO-ROUTE: MOVE AWAY FROM A MOD TO AN UNSUPERVISED ROOM *************************/
-
-  async function tryAutoRoute(reason) {
-    try {
-      const s = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
-      if (!s.mod_auto_route_enabled) return false;
-
-      const connection = getVoiceConnection(guild.id);
-      if (!connection || connection.state?.status !== VoiceConnectionStatus.Ready) return false;
-
-      const currentChannelId = connection.joinConfig.channelId;
-      const currentChannel = guild.channels.cache.get(currentChannelId);
-      if (!currentChannel) return false;
-
-      // Respect SAFE channels
-      if (Array.isArray(s.safeChannels) && s.safeChannels.includes(currentChannelId)) return false;
-
-      // Only route if at least one mod is supervising somewhere (including our channel)
-      if (!anyModsAnywhere(guild, s)) return false;
-
-      // If a mod is in our current channel, we should prefer leaving to cover an unsupervised room.
-      const dest = findBestAlternateChannelForAutoRoute(guild, s, currentChannelId);
-      if (channelHasMod(currentChannel, s) && dest) {
-        console.log(`[MOD-AUTO-ROUTE] ${reason} → current has mod; moving to unsupervised ${dest.name}`);
-        await moveToChannel(dest, connection, guild, client);
-        return true;
-      }
-
-      // Otherwise, if no mod in our room but there is an unsupervised target with ≥2 humans and our room is worse, move.
-      if (!channelHasMod(currentChannel, s) && dest) {
-        const here = channelCounts(currentChannel, s);
-        const there = channelCounts(dest, s);
-        const hereNonMod = here.humans - here.mods;
-        const thereNonMod = there.humans - there.mods; // (mods=0 by construction)
-        if (thereNonMod > hereNonMod) {
-          console.log(`[MOD-AUTO-ROUTE] ${reason} → moving to better unsupervised ${dest.name}`);
-          await moveToChannel(dest, connection, guild, client);
-          return true;
-        }
-      }
-
-      return false;
-    } catch (err) {
-      console.warn(`[MOD-AUTO-ROUTE] tryAutoRoute errored (${reason}): ${err?.message || err}`);
-      return false;
-    }
-  }
-
-  // If a mod joins the same channel as the bot, immediately route out to an unsupervised room if possible.
-  async function maybeAutoRouteOnModJoin(guild, client, joiningMember) {
-    const s = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
-    if (!s.mod_auto_route_enabled) return false;
-
-    const connection = getVoiceConnection(guild.id);
-    if (!connection || connection.state?.status !== VoiceConnectionStatus.Ready) return false;
-
-    const currentChannelId = connection.joinConfig.channelId;
-    const currentChannel = guild.channels.cache.get(currentChannelId);
-    if (!currentChannel) return false;
-
-    if (Array.isArray(s.safeChannels) && s.safeChannels.includes(currentChannelId)) return false;
-
-    const memberChannelId = joiningMember?.voice?.channelId;
-    if (!memberChannelId || memberChannelId !== currentChannelId) return false;
-
-    if (!isModerator(joiningMember, s)) return false;
-
-    const dest = findBestAlternateChannelForAutoRoute(guild, s, currentChannelId);
-    if (dest) {
-      console.log("[MOD-AUTO-ROUTE] Mod joined our channel → moving to unsupervised:", dest.name);
-      await moveToChannel(dest, connection, guild, client);
-      return true;
-    }
-    return false;
-  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // Case 1: User moved channels
   // ───────────────────────────────────────────────────────────────────────────
   if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
-    console.log(`[DEBUG] User ${userId} moved from ${oldState.channelId} to ${newState.channelId}`);
+    console.log(
+      `[DEBUG] User ${userId} moved from ${oldState.channelId} to ${newState.channelId}`
+    );
 
     if (settings.vcLoggingEnabled && settings.vcLoggingChannelId) {
       const activityChannel = guild.channels.cache.get(settings.vcLoggingChannelId);
@@ -578,36 +496,28 @@ async function execute(oldState, newState, client) {
         const oldChannelName = oldChannel?.name || "Unknown Channel";
         const newChannelName = newChannel?.name || "Unknown Channel";
         const memberCount = newChannel?.members?.filter((m) => !m.user.bot).size ?? 0;
-        const timestamp = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
+        const timestamp = new Date().toLocaleTimeString("en-US", {
+          minute: "2-digit",
+          second: "2-digit",
+        });
         const logMsg =
           `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ` +
           `${roleColor}${username}${ansi.darkGray} moved from ${ansi.white}${oldChannelName}${ansi.darkGray} ` +
           `to ${ansi.white}${newChannelName}${ansi.darkGray}. Member count: ${memberCount}`;
         await activityChannel.send(buildLog(timestamp, logMsg)).catch(console.error);
       } else {
-        console.error(`[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`);
+        console.error(
+          `[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`
+        );
       }
     }
 
     const isDestSafe =
-      Array.isArray(settings.safeChannels) && settings.safeChannels.includes(newState.channelId);
+      Array.isArray(settings.safeChannels) &&
+      settings.safeChannels.includes(newState.channelId);
     if (isDestSafe) {
       console.log("[VC] Move into SAFE channel detected; skipping VC management.");
       return;
-    }
-
-    try {
-      const routed = await tryAutoRoute("member_moved");
-      if (routed) return;
-    } catch (e) {
-      console.warn(`[MOD-AUTO-ROUTE] generalized move handler errored: ${e?.message || e}`);
-    }
-
-    try {
-      const moved = await maybeAutoRouteOnModJoin(guild, client, newState.member);
-      if (moved) return;
-    } catch (e) {
-      console.warn(`[MOD-AUTO-ROUTE] move handler errored: ${e?.message || e}`);
     }
 
     await manageVoiceChannels(guild, client);
@@ -621,22 +531,12 @@ async function execute(oldState, newState, client) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
     userJoinTimes.set(userId, Date.now());
 
-    try {
-      const routed = await tryAutoRoute("member_joined");
-      if (routed) return;
-    } catch (e) {
-      console.warn(`[MOD-AUTO-ROUTE] join generalized handler errored: ${e?.message || e}`);
-    }
-
-    try {
-      const moved = await maybeAutoRouteOnModJoin(guild, client, newState.member);
-      if (moved) return;
-    } catch (e) {
-      console.warn(`[MOD-AUTO-ROUTE] join handler errored: ${e?.message || e}`);
-    }
-
-    const settings2 = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
-    if (Array.isArray(settings2.safeChannels) && settings2.safeChannels.includes(newState.channelId)) {
+    const settings2 =
+      (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    if (
+      Array.isArray(settings2.safeChannels) &&
+      settings2.safeChannels.includes(newState.channelId)
+    ) {
       console.log("[VC] User joined SAFE channel; not re-managing voice connections.");
     } else {
       await manageVoiceChannels(guild, client);
@@ -647,8 +547,8 @@ async function execute(oldState, newState, client) {
       audioListeningFunctions(connection, guild);
     }
 
-    // Consent flow (unchanged)
-    function describeConsentDest(dest, user) {
+    // Consent flow
+    function describeConsentDest(dest) {
       if (!dest || (!dest.channel && !dest.preferDM)) return "no available destination";
       if (dest.preferDM) {
         if (dest.channel) return `DM first → fallback <#${dest.channel.id}>`;
@@ -670,7 +570,9 @@ async function execute(oldState, newState, client) {
         console.error(`[ERROR] Failed to unmute user ${userId}: ${err.message}`);
       }
     } else {
-      console.log(`[DEBUG] User ${userId} has NOT consented. Sending consent request...`);
+      console.log(
+        `[DEBUG] User ${userId} has NOT consented. Sending consent request...`
+      );
 
       const consentButtons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -682,9 +584,14 @@ async function execute(oldState, newState, client) {
       interactionContexts.set(userId, { guildId: guild.id, mode: "consent" });
 
       try {
-        const previewDest = await resolveConsentDestination(guild, newState.member.user);
+        const previewDest = await resolveConsentDestination(
+          guild,
+          newState.member.user
+        );
         console.log(
-          `[CONSENT ROUTER] Target for ${userId}: ${describeConsentDest(previewDest, newState.member.user)}`
+          `[CONSENT ROUTER] Target for ${userId}: ${describeConsentDest(
+            previewDest
+          )}`
         );
       } catch (e) {
         console.warn(`[CONSENT ROUTER] Preview failed for ${userId}: ${e.message}`);
@@ -774,21 +681,19 @@ async function execute(oldState, newState, client) {
  ************************************************************************************************/
 async function manageVoiceChannels(guild, client) {
   const ansi = { darkGray: "\u001b[2;30m", white: "\u001b[2;37m", reset: "\u001b[0m" };
-
-  // Load settings and compute safe set
   const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
   const safe = new Set(settings.safeChannels || []);
 
-  // Busiest NON-SAFE channel with humans (backup strategy)
+  // Helper: find busiest non-safe VC
   const voiceChannels = guild.channels.cache.filter((c) => c.type === ChannelType.GuildVoice);
   let busiest = null;
   let busiestHumans = 0;
-  voiceChannels.forEach((channel) => {
-    if (safe.has(channel.id)) return;
-    const nonBotMembers = channel.members.filter((m) => !m.user.bot).size;
-    if (nonBotMembers > busiestHumans) {
-      busiestHumans = nonBotMembers;
-      busiest = channel;
+  voiceChannels.forEach((ch) => {
+    if (safe.has(ch.id)) return;
+    const nonBot = ch.members.filter((m) => !m.user.bot).size;
+    if (nonBot > busiestHumans) {
+      busiestHumans = nonBot;
+      busiest = ch;
     }
   });
 
@@ -797,14 +702,22 @@ async function manageVoiceChannels(guild, client) {
     ? guild.channels.cache.get(connection.joinConfig.channelId)
     : null;
 
-  // If NOT connected: join a good place
-  if (!currentChannel) {
-    // Prefer unsupervised target if mods exist anywhere
-    const unsupTarget = anyModsAnywhere(guild, settings)
-      ? findBestAlternateChannelForAutoRoute(guild, settings, null)
-      : null;
+  const featureOn = !!settings.mod_auto_route_enabled;
 
-    const target = unsupTarget || (busiestHumans > 0 ? busiest : null);
+  // If NOT connected: choose where to join
+  if (!currentChannel) {
+    let target = null;
+
+    if (featureOn) {
+      // Prefer best unsupervised (no mods) with ≥2 people
+      const bestUnsupervised = findBestAlternateChannelForAutoRoute(guild, settings, null);
+      if (bestUnsupervised) target = bestUnsupervised;
+      else if (busiest && busiestHumans > 0 && !channelHasMod(busiest, settings)) target = busiest;
+      // else: stay disconnected (no suitable non-mod activity)
+    } else {
+      if (busiest && busiestHumans > 0) target = busiest;
+    }
+
     if (target) {
       console.log(`[AUTO-VC] Joining ${target.name}`);
       const newConn = await joinChannel(client, target.id, guild);
@@ -813,50 +726,109 @@ async function manageVoiceChannels(guild, client) {
     return;
   }
 
+  // Connected:
   const currentIsSafe = safe.has(currentChannel.id);
-  const currentCounts = channelCounts(currentChannel, settings);
   const currentHumans = currentChannel.members.filter((m) => !m.user.bot).size;
 
-  // If we ended up in SAFE: move to active non-safe else disconnect
   if (currentIsSafe) {
-    if (busiest && busiestHumans > 0) {
-      const now = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-      console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Moving out of SAFE → ${busiest.name}${ansi.reset}`);
-      await moveToChannel(busiest, connection, guild, client);
-    } else if (!isDisconnecting) {
-      await disconnectAndReset(connection);
+    if (featureOn) {
+      // move to an unsupervised≥2, else busiest w/out mod, else disconnect
+      const bestUnsupervised = findBestAlternateChannelForAutoRoute(
+        guild,
+        settings,
+        currentChannel.id
+      );
+      if (bestUnsupervised) {
+        console.log(`[AUTO-VC] Leaving SAFE → ${bestUnsupervised.name}`);
+        await moveToChannel(bestUnsupervised, connection, guild, client);
+      } else if (busiest && busiestHumans > 0 && !channelHasMod(busiest, settings)) {
+        console.log(`[AUTO-VC] Leaving SAFE → busiest (no mod) ${busiest.name}`);
+        await moveToChannel(busiest, connection, guild, client);
+      } else if (!isDisconnecting) {
+        await disconnectAndReset(connection);
+      }
+    } else {
+      if (busiest && busiestHumans > 0) {
+        console.log(`[AUTO-VC] Leaving SAFE → ${busiest.name}`);
+        await moveToChannel(busiest, connection, guild, client);
+      } else if (!isDisconnecting) {
+        await disconnectAndReset(connection);
+      }
     }
     return;
   }
 
-  // If a mod is in our current channel, try to leave to an unsupervised ≥2 room.
-  if (channelHasMod(currentChannel, settings)) {
-    const dest = findBestAlternateChannelForAutoRoute(guild, settings, currentChannel.id);
-    if (dest) {
-      console.log(`[AUTO-VC] Current has mod → moving to unsupervised ${dest.name}`);
-      await moveToChannel(dest, connection, guild, client);
+  if (featureOn) {
+    const currentHasMod = channelHasMod(currentChannel, settings);
+
+    // If alone: try best unsupervised≥2; else if busiest has NO mod, move there; else disconnect
+    if (currentHumans === 0) {
+      const dest = findBestAlternateChannelForAutoRoute(guild, settings, currentChannel.id);
+      if (dest) {
+        console.log(`[AUTO-VC] Alone → moving to unsupervised ${dest.name}`);
+        await moveToChannel(dest, connection, guild, client);
+        return;
+      }
+      if (busiest && busiestHumans > 0 && !channelHasMod(busiest, settings)) {
+        console.log(`[AUTO-VC] Alone → moving to busiest (no mod) ${busiest.name}`);
+        await moveToChannel(busiest, connection, guild, client);
+        return;
+      }
+      if (!isDisconnecting) {
+        console.log("[AUTO-VC] Alone and no non-mod targets → disconnecting.");
+        await disconnectAndReset(connection);
+      }
       return;
     }
+
+    // If not alone:
+    if (currentHasMod) {
+      // Leave mods to supervise here → move to best unsupervised≥2 if any
+      const dest = findBestAlternateChannelForAutoRoute(guild, settings, currentChannel.id);
+      if (dest) {
+        console.log(
+          `[AUTO-VC] Current has mod → moving to unsupervised ${dest.name}`
+        );
+        await moveToChannel(dest, connection, guild, client);
+      }
+      // else: stay (no unsupervised≥2 target)
+      return;
+    }
+
+    // Our room has no mod; consider moving only to a bigger NO-MOD room
+    if (busiest && busiest.id !== currentChannel.id) {
+      const here = channelCounts(currentChannel, settings);
+      const there = channelCounts(busiest, settings);
+      const hereNonMod = here.humans - here.mods;
+      const thereNonMod = there.humans - there.mods;
+
+      if (!channelHasMod(busiest, settings) && thereNonMod > hereNonMod) {
+        const now = new Date().toLocaleTimeString("en-US", {
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        console.log(
+          `${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Moving to bigger no-mod VC: ${busiest.name}${ansi.reset}`
+        );
+        await moveToChannel(busiest, connection, guild, client);
+      }
+    }
+    return;
   }
 
-  // If bot is alone in a non-safe channel...
+  // Feature OFF: simple behavior — move to busiest when it’s larger; disconnect if alone & nowhere else
   if (currentHumans === 0) {
-    // Prefer moving to a busier non-safe channel if it exists
     if (busiest && busiestHumans > 0 && busiest.id !== currentChannel.id) {
-      const now = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-      console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Alone; moving to: ${busiest.name}${ansi.reset}`);
+      console.log(`[AUTO-VC] Alone → moving to busiest ${busiest.name}`);
       await moveToChannel(busiest, connection, guild, client);
     } else if (!isDisconnecting) {
-      console.log("[AUTO-VC] Alone and no better non-safe targets → disconnecting now.");
       await disconnectAndReset(connection);
     }
     return;
   }
 
-  // If there's a busier non-safe channel, move
   if (busiest && busiest.id !== currentChannel.id && busiestHumans > currentHumans) {
-    const now = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-    console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Moving to busier VC: ${busiest.name}${ansi.reset}`);
+    console.log(`[AUTO-VC] Moving to busier VC: ${busiest.name}`);
     await moveToChannel(busiest, connection, guild, client);
   }
 }
@@ -867,7 +839,7 @@ async function moveToChannel(targetChannel, connection, guild, client) {
     await disconnectAndReset(connection);
     const newConnection = await joinChannel(client, targetChannel.id, guild);
     if (newConnection) {
-      saveVCState(guild.id, targetChannel.id)
+      saveVCState(guild.id, targetChannel.id);
       audioListeningFunctions(newConnection, guild);
     }
   }
@@ -941,28 +913,44 @@ function audioListeningFunctions(connection, guild) {
     if (p) {
       const { audioStream, decoder, pcmWriter, loudnessRes } = p;
 
-      try { audioStream?.unpipe?.(decoder); } catch (_) { }
-      try { decoder?.unpipe?.(pcmWriter); } catch (_) { }
+      try {
+        audioStream?.unpipe?.(decoder);
+      } catch { }
+      try {
+        decoder?.unpipe?.(pcmWriter);
+      } catch { }
 
-      try { loudnessRes?.teardown?.(); } catch (_) { }
+      try {
+        loudnessRes?.teardown?.();
+      } catch { }
 
-      try { audioStream?.destroy?.(); } catch (_) { }
-      try { decoder?.destroy?.(); } catch (_) { }
+      try {
+        audioStream?.destroy?.();
+      } catch { }
+      try {
+        decoder?.destroy?.();
+      } catch { }
 
       if (pcmWriter && !pcmWriter.closed) {
-        try { pcmWriter.end(); } catch (_) { }
+        try {
+          pcmWriter.end();
+        } catch { }
       }
 
       pipelines.delete(userId);
     }
 
     if (userSubscriptions[userId]) {
-      try { userSubscriptions[userId].destroy?.(); } catch (_) { }
+      try {
+        userSubscriptions[userId].destroy?.();
+      } catch { }
       delete userSubscriptions[userId];
     }
 
     if (outputStreams[userId] && !outputStreams[userId].closed) {
-      try { outputStreams[userId].end(); } catch (_) { }
+      try {
+        outputStreams[userId].end();
+      } catch { }
     }
     delete outputStreams[userId];
   }
@@ -1000,7 +988,11 @@ function audioListeningFunctions(connection, guild) {
     const pcmPath = path.join(__dirname, "../../temp_audio", `${userId}-${unique}.pcm`);
     fs.mkdirSync(path.dirname(pcmPath), { recursive: true });
     const pcmWriter = fs.createWriteStream(pcmPath, { flags: "w" });
-    const decoder = new prism.opus.Decoder({ frameSize: 960, channels: 1, rate: 48000 });
+    const decoder = new prism.opus.Decoder({
+      frameSize: 960,
+      channels: 1,
+      rate: 48000,
+    });
     try {
       audioStream.pipe(decoder).pipe(pcmWriter);
     } catch (err) {
@@ -1014,7 +1006,9 @@ function audioListeningFunctions(connection, guild) {
       const threshold = getAverageSilenceDuration(userId) || DEFAULT_SILENCE_TIMEOUT;
 
       if (silenceDuration >= threshold) {
-        console.warn(`[SILENCE FINALIZE] ${userId} silent for ${silenceDuration}ms (threshold: ${threshold})`);
+        console.warn(
+          `[SILENCE FINALIZE] ${userId} silent for ${silenceDuration}ms (threshold: ${threshold})`
+        );
         clearInterval(perUserSilenceTimer[userId]);
         delete perUserSilenceTimer[userId];
 
@@ -1052,7 +1046,11 @@ function audioListeningFunctions(connection, guild) {
   connection.once(VoiceConnectionStatus.Disconnected, () => {
     receiver.speaking.removeAllListeners();
     receiver.isListening = false;
-    Object.values(perUserSilenceTimer).forEach((t) => { try { clearInterval(t); } catch { } });
+    Object.values(perUserSilenceTimer).forEach((t) => {
+      try {
+        clearInterval(t);
+      } catch { }
+    });
   });
 
   async function finalizeUserAudio(userId, guild, unique, channelId) {
@@ -1069,12 +1067,14 @@ function audioListeningFunctions(connection, guild) {
       await new Promise((resolve) => {
         writer.once("close", resolve);
         writer.end();
-      }).catch(() => { /* ignore */ });
+      }).catch(() => { });
     }
 
     const pipeObj = pipelines.get(userId);
     if (pipeObj?.decoder) {
-      try { await finished(pipeObj.decoder); } catch (_) { /* ignore */ }
+      try {
+        await finished(pipeObj.decoder);
+      } catch { }
     }
 
     try {
@@ -1100,14 +1100,28 @@ function audioListeningFunctions(connection, guild) {
   function cleanup(userId) {
     if (outputStreams[userId]) {
       const writer = outputStreams[userId];
-      try { if (!writer.destroyed) writer.end(); } catch (e) { console.warn(`[CLEANUP] end err: ${e.message}`); }
-      writer.on("error", (err) => console.warn(`[PCM WRITER ERROR] ${err.message}`));
-      try { writer.destroy(); } catch (e) { console.warn(`[CLEANUP] destroy err: ${e.message}`); }
+      try {
+        if (!writer.destroyed) writer.end();
+      } catch (e) {
+        console.warn(`[CLEANUP] end err: ${e.message}`);
+      }
+      writer.on("error", (err) =>
+        console.warn(`[PCM WRITER ERROR] ${err.message}`)
+      );
+      try {
+        writer.destroy();
+      } catch (e) {
+        console.warn(`[CLEANUP] destroy err: ${e.message}`);
+      }
       delete outputStreams[userId];
     }
 
     if (userSubscriptions[userId]) {
-      try { userSubscriptions[userId].destroy?.(); } catch (e) { console.warn(`[CLEANUP] sub err: ${e.message}`); }
+      try {
+        userSubscriptions[userId].destroy?.();
+      } catch (e) {
+        console.warn(`[CLEANUP] sub err: ${e.message}`);
+      }
       delete userSubscriptions[userId];
     }
 
@@ -1115,9 +1129,10 @@ function audioListeningFunctions(connection, guild) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Periodic VC auto-rejoin (every 15s)
-// ─────────────────────────────────────────────────────────────────────────────
+/************************************************************************************************
+ * Periodic VC auto-(re)join probe (every 15s)
+ * - Honors mod_auto_route_enabled gating for target selection
+ ************************************************************************************************/
 let vcAutoCheckInterval = null;
 const vcProbeRunning = new Set();
 
@@ -1137,36 +1152,48 @@ function startPeriodicVCCheck(client, intervalMs = 15000) {
           return;
         }
 
-        const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+        const settings =
+          (await getSettingsForGuild(guild.id).catch(() => null)) || {};
         const safe = new Set(settings.safeChannels || []);
+        const featureOn = !!settings.mod_auto_route_enabled;
 
-        const voiceChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildVoice);
-        let target = null;
-        let maxNonBot = 0;
-
+        const voiceChannels = guild.channels.cache.filter(
+          (c) => c.type === ChannelType.GuildVoice
+        );
+        let busiest = null;
+        let busiestHumans = 0;
         voiceChannels.forEach((ch) => {
           if (safe.has(ch.id)) return;
-          const nonBotCount = ch.members.filter(m => !m.user.bot).size;
-          if (nonBotCount > maxNonBot) {
-            maxNonBot = nonBotCount;
-            target = ch;
+          const nonBot = ch.members.filter((m) => !m.user.bot).size;
+          if (nonBot > busiestHumans) {
+            busiestHumans = nonBot;
+            busiest = ch;
           }
         });
 
-        if (anyModsAnywhere(guild, settings)) {
+        let target = null;
+        if (featureOn) {
           const unsup = findBestAlternateChannelForAutoRoute(guild, settings, null);
           if (unsup) target = unsup;
+          else if (busiest && busiestHumans > 0 && !channelHasMod(busiest, settings))
+            target = busiest;
+        } else {
+          if (busiest && busiestHumans > 0) target = busiest;
         }
 
-        if (target && maxNonBot > 0) {
-          console.log(`[AUTO-VC] Attempting (re)join → ${target.name} (humans: ${maxNonBot})`);
+        if (target && busiestHumans > 0) {
+          console.log(
+            `[AUTO-VC] Attempting (re)join → ${target.name} (humans: ${busiestHumans})`
+          );
           const newConn = await joinChannel(client, target.id, guild);
           if (newConn) {
             audioListeningFunctions(newConn, guild);
           }
         }
       } catch (e) {
-        console.warn(`[AUTO-VC] Guild ${guild.id} probe failed: ${e?.message || e}`);
+        console.warn(
+          `[AUTO-VC] Guild ${guild.id} probe failed: ${e?.message || e}`
+        );
       } finally {
         vcProbeRunning.delete(guild.id);
       }
