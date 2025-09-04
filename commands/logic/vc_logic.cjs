@@ -14,10 +14,6 @@ const {
 const { createRoleDropdown } = require("./helpers.cjs");
 const { logErrorToChannel } = require("./helpers.cjs");
 require("dotenv").config();
-const { createClient } = require("@supabase/supabase-js");
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const { requiredManagerPermissions } = require("./helpers.cjs");
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -58,17 +54,16 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
     const guild = interactionOrMessage.guild;
     if (!guild) return;
 
-    // Permission check (keep your helper signature)
-    if (!(await requiredManagerPermissions(interactionOrMessage))) {
+    // Permission check
+    if (
+      !interactionOrMessage.member?.permissions?.has?.(requiredManagerPermissions)
+    ) {
       const noPermissionMessage =
         "> <❇️> You do not have the required permissions to do this. (CMD_ERR_008)";
       if (interactionOrMessage instanceof Message) {
         await interactionOrMessage.channel.send(noPermissionMessage);
       } else {
-        await interactionOrMessage.reply({
-          content: noPermissionMessage,
-          ephemeral: true,
-        });
+        await interactionOrMessage.reply({ content: noPermissionMessage, ephemeral: true });
       }
       return;
     }
@@ -251,6 +246,16 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
 }
 
 async function handleVCSettingsFlow(interaction, action) {
+  // Enforce "this panel belongs to X" using the :userId suffix in customId
+  const parts = String(interaction.customId || "").split(":");
+  const intendedUserId = parts[2]; // e.g., vcsettings:toggle-badword:<userId>
+  if (intendedUserId && intendedUserId !== interaction.user.id) {
+    await interaction.reply({
+      content: "> <❇️> You cannot interact with this component. (CMD_ERR_008)",
+      ephemeral: true,
+    });
+    return;
+  }
   try {
     const guild = interaction.guild;
     if (!guild) return;

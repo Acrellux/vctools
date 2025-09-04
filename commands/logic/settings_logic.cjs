@@ -55,200 +55,160 @@ const {
 } = require("./consent_logic.cjs");
 const { showErrorLogsSettingsUI } = require("./errorlogs_logic.cjs");
 
+// ---------- helper: parse customId like "vcsettings:toggle-xyz:<userId>:..." ----------
+function parseCustomId(customId = "") {
+  const parts = String(customId).split(":");
+  return {
+    namespace: parts[0] || "",
+    action: parts[1] || "",
+    userId: parts[2] || "",
+    raw: parts,
+  };
+}
+
 async function handleSettingsFlow(interaction, mode, action) {
   try {
     const guild = interaction.guild;
-    const userId = interaction.user.id;
+    const userId = interaction.user?.id;
     if (!guild) return;
 
-    // Consent settings flow (dropdowns/buttons with customIds starting "consent:")
+    // ---------- hard-stop router for VC components (single source of truth) ----------
+    if (typeof interaction.isMessageComponent === "function" && interaction.isMessageComponent()) {
+      const { namespace, action: parsedAction } = parseCustomId(interaction.customId);
+      if (namespace === "vcsettings") {
+        await handleVCSettingsFlow(interaction, parsedAction);
+        return; // prevent any local UI from rendering a second menu
+      }
+    }
+
+    // ---------- VC page open (slash/message forwarding) ----------
+    if (mode === "vc") {
+      await showVCSettingsUI(interaction, false);
+      return;
+    }
+
+    // ---------- consent ----------
     if (mode === "consent") {
       await handleConsentSettingChange(interaction);
       return;
     }
 
-    // Prefix settings flow
+    // ---------- prefix ----------
     if (mode === "prefix") {
-      return handlePrefixSettingsFlow(interaction);
-    }
-
-    let confirmation = "";
-    let updatedUIFunction = null;
-
-    // Helper: Define VC Logging components using current settings.
-    // This creates both the vcLoggingChannelRow and the toggleVcLoggingRow.
-    const defineVcLoggingComponents = (settingsObj) => {
-      const vcLoggingChannelOptions = guild.channels.cache
-        .filter((ch) => ch.type === ChannelType.GuildText)
-        .map((ch) => ({
-          label: `#${String(ch.name).slice(0, 100)}`,
-          value: String(ch.id),
-          default: ch.id === settingsObj.vcLoggingChannelId,
-        }));
-      const vcLoggingchannelIdropdown = new StringSelectMenuBuilder()
-        .setCustomId(`bot:select-vc-logging-channel:${userId}`)
-        .setPlaceholder("Select a channel for VC Logging")
-        .setOptions(vcLoggingChannelOptions)
-        .setMinValues(1)
-        .setMaxValues(1);
-      const vcLoggingChannelRow = new ActionRowBuilder().addComponents(
-        vcLoggingchannelIdropdown
-      );
-
-      const toggleVcLoggingButton = new ButtonBuilder()
-        .setCustomId(`bot:toggle-vc-logging:${userId}`)
-        .setLabel(
-          settingsObj.vcLoggingEnabled
-            ? "Disable VC Event Logging"
-            : "Enable VC Event Logging"
-        )
-        .setStyle(
-          settingsObj.vcLoggingEnabled
-            ? ButtonStyle.Danger
-            : ButtonStyle.Success
-        );
-      const toggleVcLoggingRow = new ActionRowBuilder().addComponents(
-        toggleVcLoggingButton
-      );
-
-      return { vcLoggingChannelRow, toggleVcLoggingRow };
-    };
-
-    // (Other branches remain the same...)
-    // Transcription toggles
-    // Transcription toggles (Fixed)
-    if (action === "enable-transcription") {
-      const currentSettings = getSettingsForGuild(guild.id);
-      const updatedSettings = {
-        ...currentSettings,
-        transcriptionEnabled: true,
-      };
-      await updateSettingsForGuild(guild.id, updatedSettings, guild);
-      confirmation = "Transcription has been enabled.";
-      updatedUIFunction = showTranscriptionSettingsUI;
-      await handleTranscriptionSettingChange(interaction);
-    } else if (action === "disable-transcription") {
-      const currentSettings = getSettingsForGuild(guild.id);
-      const updatedSettings = {
-        ...currentSettings,
-        transcriptionEnabled: false,
-      };
-      await updateSettingsForGuild(guild.id, updatedSettings, guild);
-      confirmation = "Transcription has been disabled.";
-      updatedUIFunction = showTranscriptionSettingsUI;
-      await handleTranscriptionSettingChange(interaction);
-    }
-
-    // Transcription dropdowns
-    else if (action === "select-transcription-channel") {
-      const selectedChannel = interaction.values[0];
-      await updateSettingsForGuild(
-        guild.id,
-        { channelId: selectedChannel },
-        guild
-      );
-      confirmation = "Transcription channel updated.";
-      updatedUIFunction = showTranscriptionSettingsUI;
-      await handleTranscriptionSettingChange(interaction);
-    } else if (action === "select-transcription-role") {
-      const selectedRole = interaction.values[0];
-      await updateSettingsForGuild(
-        guild.id,
-        { allowedRoleId: selectedRole },
-        guild
-      );
-      confirmation = "Transcription role updated.";
-      updatedUIFunction = showTranscriptionSettingsUI;
-      await handleTranscriptionSettingChange(interaction);
-    }
-    // Error logs toggles
-    else if (action === "enable-error-logging") {
-      await updateSettingsForGuild(guild.id, { errorLogsEnabled: true }, guild);
-      confirmation = "Error logging has been enabled.";
-      updatedUIFunction = showErrorLogsSettingsUI;
-    } else if (action === "disable-error-logging") {
-      await updateSettingsForGuild(
-        guild.id,
-        { errorLogsEnabled: false },
-        guild
-      );
-      confirmation = "Error logging has been disabled.";
-      updatedUIFunction = showErrorLogsSettingsUI;
-    }
-    // Error logs dropdowns
-    else if (
-      action === "select-errorlogs-channel" ||
-      action === "select_error_logs_channel"
-    ) {
-      const selectedChannel = interaction.values[0];
-      await updateSettingsForGuild(
-        guild.id,
-        { errorLogsChannelId: selectedChannel },
-        guild
-      );
-      confirmation = "Error logs channel updated.";
-      updatedUIFunction = showErrorLogsSettingsUI;
-    } else if (
-      action === "select-errorlogs-role" ||
-      action === "select_error_logs_role"
-    ) {
-      const selectedRole = interaction.values[0];
-      await updateSettingsForGuild(
-        guild.id,
-        { errorLogsRoleId: selectedRole },
-        guild
-      );
-      confirmation = "Error logs role updated.";
-      updatedUIFunction = showErrorLogsSettingsUI;
-    }
-    // Bot-specific settings: select-admin-role
-    else if (mode === "bot" && action === "select-admin-role") {
-      const selectedRole = interaction.values[0];
-      await updateSettingsForGuild(
-        guild.id,
-        { adminRoleId: selectedRole },
-        guild
-      );
-
-      // Re-fetch updated settings to ensure fresh data
-      const updatedSettings = await getSettingsForGuild(guild.id);
-      const role = guild.roles.cache.get(updatedSettings.adminRoleId);
-
-      await interaction.deferUpdate();
-      await interaction.followUp({
-        content: `> <✅> Admin Role set to **${role ? role.name : "Unknown"}**.`,
-        ephemeral: true,
-      });
-
-      // Refresh the full UI with updated settings
-      await showBotSettingsUI(interaction, true);
+      await handlePrefixSettingsFlow(interaction);
       return;
     }
-    // Inline UI update for bot mode
-    else if (mode === "bot") {
+
+    // ---------- transcription ----------
+    if (action === "enable-transcription") {
+      const currentSettings = await getSettingsForGuild(guild.id);
+      await updateSettingsForGuild(guild.id, { ...currentSettings, transcriptionEnabled: true }, guild);
+      await handleTranscriptionSettingChange(interaction);
+      await showTranscriptionSettingsUI(interaction, false);
+      return;
+    }
+    if (action === "disable-transcription") {
+      const currentSettings = await getSettingsForGuild(guild.id);
+      await updateSettingsForGuild(guild.id, { ...currentSettings, transcriptionEnabled: false }, guild);
+      await handleTranscriptionSettingChange(interaction);
+      await showTranscriptionSettingsUI(interaction, false);
+      return;
+    }
+    if (action === "select-transcription-channel") {
+      const selectedChannel = interaction.values?.[0];
+      if (selectedChannel) {
+        await updateSettingsForGuild(guild.id, { channelId: selectedChannel }, guild);
+      }
+      await handleTranscriptionSettingChange(interaction);
+      await showTranscriptionSettingsUI(interaction, false);
+      return;
+    }
+    if (action === "select-transcription-role") {
+      const selectedRole = interaction.values?.[0];
+      if (selectedRole) {
+        await updateSettingsForGuild(guild.id, { allowedRoleId: selectedRole }, guild);
+      }
+      await handleTranscriptionSettingChange(interaction);
+      await showTranscriptionSettingsUI(interaction, false);
+      return;
+    }
+
+    // ---------- error logs ----------
+    if (action === "enable-error-logging") {
+      await updateSettingsForGuild(guild.id, { errorLogsEnabled: true }, guild);
+      await showErrorLogsSettingsUI(interaction, false);
+      return;
+    }
+    if (action === "disable-error-logging") {
+      await updateSettingsForGuild(guild.id, { errorLogsEnabled: false }, guild);
+      await showErrorLogsSettingsUI(interaction, false);
+      return;
+    }
+    if (action === "select-errorlogs-channel" || action === "select_error_logs_channel") {
+      const selectedChannel = interaction.values?.[0];
+      if (selectedChannel) {
+        await updateSettingsForGuild(guild.id, { errorLogsChannelId: selectedChannel }, guild);
+      }
+      await showErrorLogsSettingsUI(interaction, false);
+      return;
+    }
+    if (action === "select-errorlogs-role" || action === "select_error_logs_role") {
+      const selectedRole = interaction.values?.[0];
+      if (selectedRole) {
+        await updateSettingsForGuild(guild.id, { errorLogsRoleId: selectedRole }, guild);
+      }
+      await showErrorLogsSettingsUI(interaction, false);
+      return;
+    }
+
+    // ---------- bot page (kept intact, not related to VC menu) ----------
+    if (mode === "bot") {
+      // helper to build VC logging controls for the bot page
+      const defineVcLoggingComponents = (settingsObj) => {
+        const vcLoggingChannelOptions = guild.channels.cache
+          .filter((ch) => ch.type === ChannelType.GuildText)
+          .map((ch) => ({
+            label: `#${String(ch.name).slice(0, 100)}`,
+            value: String(ch.id),
+            default: ch.id === settingsObj.vcLoggingChannelId,
+          }));
+        const vcLoggingchannelIdropdown = new StringSelectMenuBuilder()
+          .setCustomId(`bot:select-vc-logging-channel:${userId}`)
+          .setPlaceholder("Select a channel for VC Logging")
+          .setOptions(vcLoggingChannelOptions)
+          .setMinValues(1)
+          .setMaxValues(1);
+        const vcLoggingChannelRow = new ActionRowBuilder().addComponents(
+          vcLoggingchannelIdropdown
+        );
+
+        const toggleVcLoggingButton = new ButtonBuilder()
+          .setCustomId(`bot:toggle-vc-logging:${userId}`)
+          .setLabel(
+            settingsObj.vcLoggingEnabled ? "Disable VC Event Logging" : "Enable VC Event Logging"
+          )
+          .setStyle(settingsObj.vcLoggingEnabled ? ButtonStyle.Danger : ButtonStyle.Success);
+        const toggleVcLoggingRow = new ActionRowBuilder().addComponents(toggleVcLoggingButton);
+
+        return { vcLoggingChannelRow, toggleVcLoggingRow };
+      };
+
       if (action === "toggle-notify-activity-reports") {
         const settings = await getSettingsForGuild(guild.id);
         const newValue = !settings.notifyActivityReports;
-        await updateSettingsForGuild(
-          guild.id,
-          { notifyActivityReports: newValue },
-          guild
-        );
+        await updateSettingsForGuild(guild.id, { notifyActivityReports: newValue }, guild);
 
         const updatedSettings = await getSettingsForGuild(guild.id);
         const contentMessage = `## **◈ Bot Settings**
   > **Admin Role:** ${updatedSettings.adminRoleId
-            ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
-            "Unknown Role"
+            ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name || "Unknown Role"
             : "Not set"
           }
   > **Moderator Role:** ${updatedSettings.moderatorRoleId
-            ? guild.roles.cache.get(updatedSettings.moderatorRoleId)?.name ||
-            "Unknown Role"
+            ? guild.roles.cache.get(updatedSettings.moderatorRoleId)?.name || "Unknown Role"
             : "Not set"
           }
-  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-          }
+  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"}
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
 
@@ -271,18 +231,10 @@ async function handleSettingsFlow(interaction, mode, action) {
               ? "Disable Notify for Activity Reports"
               : "Enable Notify for Activity Reports"
           )
-          .setStyle(
-            updatedSettings.notifyActivityReports
-              ? ButtonStyle.Danger
-              : ButtonStyle.Success
-          );
-        const toggleRow = new ActionRowBuilder().addComponents(
-          toggleActivityNotificationsButton
-        );
+          .setStyle(updatedSettings.notifyActivityReports ? ButtonStyle.Danger : ButtonStyle.Success);
+        const toggleRow = new ActionRowBuilder().addComponents(toggleActivityNotificationsButton);
 
-        // Get VC Logging components using the helper
-        const { vcLoggingChannelRow, toggleVcLoggingRow } =
-          defineVcLoggingComponents(updatedSettings);
+        const { vcLoggingChannelRow, toggleVcLoggingRow } = defineVcLoggingComponents(updatedSettings);
 
         const components = [
           adminRoleDropdown,
@@ -294,31 +246,29 @@ async function handleSettingsFlow(interaction, mode, action) {
 
         await interaction.update({ content: contentMessage, components });
         await interaction.followUp({
-          content: `> <✅> Notify for Activity Reports has been ${newValue ? "enabled" : "disabled"
-            }.`,
+          content: `> <✅> Notify for Activity Reports has been ${newValue ? "enabled" : "disabled"}.`,
           ephemeral: true,
         });
         return;
-      } else if (action === "select-admin-role") {
-        const selectedRole = interaction.values[0];
-        await updateSettingsForGuild(
-          guild.id,
-          { adminRoleId: selectedRole },
-          guild
-        );
+      }
+
+      if (action === "select-admin-role") {
+        const selectedRole = interaction.values?.[0];
+        if (selectedRole) {
+          await updateSettingsForGuild(guild.id, { adminRoleId: selectedRole }, guild);
+        }
         const updatedSettings = await getSettingsForGuild(guild.id);
         const role = guild.roles.cache.get(updatedSettings.adminRoleId);
         const contentMessage = `## **◈ Bot Settings**
   > **Admin Role:** ${role ? role.name : "Not set"}
   > **Moderator Role:** ${updatedSettings.moderatorRoleId
-            ? guild.roles.cache.get(updatedSettings.moderatorRoleId)?.name ||
-            "Unknown Role"
+            ? guild.roles.cache.get(updatedSettings.moderatorRoleId)?.name || "Unknown Role"
             : "Not set"
           }
-  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-          }
+  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"}
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
+
         const adminRoleDropdown = createRoleDropdown(
           `bot:select-admin-role:${userId}`,
           guild,
@@ -338,14 +288,8 @@ async function handleSettingsFlow(interaction, mode, action) {
               ? "Disable Notify for Activity Reports"
               : "Enable Notify for Activity Reports"
           )
-          .setStyle(
-            updatedSettings.notifyActivityReports
-              ? ButtonStyle.Danger
-              : ButtonStyle.Success
-          );
-        const toggleRow = new ActionRowBuilder().addComponents(
-          toggleActivityNotificationsButton
-        );
+          .setStyle(updatedSettings.notifyActivityReports ? ButtonStyle.Danger : ButtonStyle.Success);
+        const toggleRow = new ActionRowBuilder().addComponents(toggleActivityNotificationsButton);
         const { vcLoggingChannelRow, toggleVcLoggingRow } =
           defineVcLoggingComponents(updatedSettings);
         const components = [
@@ -358,31 +302,29 @@ async function handleSettingsFlow(interaction, mode, action) {
 
         await interaction.update({ content: contentMessage, components });
         await interaction.followUp({
-          content: `> <✅> Admin Role set to **${role ? role.name : "Unknown"
-            }**.`,
+          content: `> <✅> Admin Role set to **${role ? role.name : "Unknown"}**.`,
           ephemeral: true,
         });
         return;
-      } else if (action === "select-moderator-role") {
-        const selectedRole = interaction.values[0];
-        await updateSettingsForGuild(
-          guild.id,
-          { moderatorRoleId: selectedRole },
-          guild
-        );
+      }
+
+      if (action === "select-moderator-role") {
+        const selectedRole = interaction.values?.[0];
+        if (selectedRole) {
+          await updateSettingsForGuild(guild.id, { moderatorRoleId: selectedRole }, guild);
+        }
         const updatedSettings = await getSettingsForGuild(guild.id);
         const role = guild.roles.cache.get(updatedSettings.moderatorRoleId);
         const contentMessage = `## **◈ Bot Settings**
   > **Admin Role:** ${updatedSettings.adminRoleId
-            ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name ||
-            "Unknown Role"
+            ? guild.roles.cache.get(updatedSettings.adminRoleId)?.name || "Unknown Role"
             : "Not set"
           }
   > **Moderator Role:** ${role ? role.name : "Not set"}
-  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"
-          }
+  > **Notify for Activity Reports:** ${updatedSettings.notifyActivityReports ? "Enabled" : "Disabled"}
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
+
         const adminRoleDropdown = createRoleDropdown(
           `bot:select-admin-role:${userId}`,
           guild,
@@ -402,14 +344,8 @@ async function handleSettingsFlow(interaction, mode, action) {
               ? "Disable Notify for Activity Reports"
               : "Enable Notify for Activity Reports"
           )
-          .setStyle(
-            updatedSettings.notifyActivityReports
-              ? ButtonStyle.Danger
-              : ButtonStyle.Success
-          );
-        const toggleRow = new ActionRowBuilder().addComponents(
-          toggleActivityNotificationsButton
-        );
+          .setStyle(updatedSettings.notifyActivityReports ? ButtonStyle.Danger : ButtonStyle.Success);
+        const toggleRow = new ActionRowBuilder().addComponents(toggleActivityNotificationsButton);
         const { vcLoggingChannelRow, toggleVcLoggingRow } =
           defineVcLoggingComponents(updatedSettings);
         const components = [
@@ -422,53 +358,44 @@ async function handleSettingsFlow(interaction, mode, action) {
 
         await interaction.update({ content: contentMessage, components });
         await interaction.followUp({
-          content: `> <✅> Moderator Role set to **${role ? role.name : "Unknown"
-            }**.`,
+          content: `> <✅> Moderator Role set to **${role ? role.name : "Unknown"}**.`,
           ephemeral: true,
         });
         return;
-      } else if (mode === "bot" && action === "toggle-vc-logging") {
-        const currentSettings = getSettingsForGuild(guild.id);
+      }
+
+      if (action === "toggle-vc-logging") {
+        const currentSettings = await getSettingsForGuild(guild.id);
         const newValue = !currentSettings.vcLoggingEnabled;
-        await updateSettingsForGuild(
-          guild.id,
-          { vcLoggingEnabled: newValue },
-          guild
-        );
+        await updateSettingsForGuild(guild.id, { vcLoggingEnabled: newValue }, guild);
         await interaction.deferUpdate();
         await showBotSettingsUI(interaction, true);
         return;
       }
-      // VC Logging channel selection branch:
-      else if (mode === "bot" && action === "select-vc-logging-channel") {
-        const selectedChannel = interaction.values[0];
-        await updateSettingsForGuild(
-          guild.id,
-          { vcLoggingChannelId: selectedChannel },
-          guild
-        );
+
+      if (action === "select-vc-logging-channel") {
+        const selectedChannel = interaction.values?.[0];
+        if (selectedChannel) {
+          await updateSettingsForGuild(guild.id, { vcLoggingChannelId: selectedChannel }, guild);
+        }
         await interaction.deferUpdate();
         await showBotSettingsUI(interaction, true);
         return;
-      } else {
-        await interaction.reply({
-          content: "> <❌> Unrecognized action for Bot settings.",
-          ephemeral: true,
-        });
-        return;
       }
-    } else {
+
       await interaction.reply({
-        content: "> <❌> Unrecognized settings action.",
+        content: "> <❌> Unrecognized action for Bot settings.",
         ephemeral: true,
       });
       return;
     }
 
-    // For actions handled by updatedUIFunction (full-page refresh)
-    if (updatedUIFunction) {
-      await updatedUIFunction(interaction, false);
-    }
+    // ---------- fallback ----------
+    await interaction.reply({
+      content: "> <❌> Unrecognized settings action.",
+      ephemeral: true,
+    });
+    return;
   } catch (error) {
     console.error(`[ERROR] handleSettingsFlow failed: ${error.message}`);
     await logErrorToChannel(
@@ -510,6 +437,7 @@ async function handleSettingsMessageCommand(message, args) {
         await showErrorLogsSettingsUI(message, false);
         break;
       case "vc":
+        // single source of truth
         await showVCSettingsUI(message, false);
         break;
       case "bot":
@@ -559,7 +487,6 @@ async function handleSettingsMessageCommand(message, args) {
         await message.channel.send(toggleMessage);
         break;
       case "filter":
-        // Filter handling remains unchanged.
         if (!args[1]) {
           await showFilterSettingsUI(message, false);
           break;
@@ -577,7 +504,7 @@ async function handleSettingsMessageCommand(message, args) {
             const wordToAdd = args[2].toLowerCase();
             if (currentCustom.includes(wordToAdd)) {
               return message.channel.send(
-                "> That word is already in the filter."
+                "> <❇️> That word is already in the filter."
               );
             }
             currentCustom.push(wordToAdd);
@@ -703,6 +630,7 @@ async function handleSettingsSlashCommand(interaction) {
         await showErrorLogsSettingsUI(interaction, false);
         break;
       case "vc":
+        // single source of truth
         await showVCSettingsUI(interaction, false);
         break;
       case "bot":
@@ -770,7 +698,7 @@ async function handleSettingsSlashCommand(interaction) {
               .toLowerCase();
             if (currentCustom.includes(word)) {
               await interaction.reply({
-                content: "That word is already in the filter.",
+                content: "> <❇️> That word is already in the filter.",
                 ephemeral: true,
               });
             } else {
@@ -781,7 +709,7 @@ async function handleSettingsSlashCommand(interaction) {
                 guild
               );
               await interaction.reply({
-                content: `Added **${word}** to the filter.`,
+                content: `> <✅> Added **${word}** to the filter.`,
                 ephemeral: false,
               });
             }
@@ -794,7 +722,7 @@ async function handleSettingsSlashCommand(interaction) {
             const newCustom = currentCustom.filter((w) => w !== word);
             if (newCustom.length === currentCustom.length) {
               await interaction.reply({
-                content: "That word was not in the filter.",
+                content: "> <❇️> That word was not in the filter.",
                 ephemeral: true,
               });
             } else {
@@ -804,7 +732,7 @@ async function handleSettingsSlashCommand(interaction) {
                 guild
               );
               await interaction.reply({
-                content: `Removed **${word}** from the filter.`,
+                content: `> <✅> Removed **${word}** from the filter.`,
                 ephemeral: false,
               });
             }
@@ -816,7 +744,7 @@ async function handleSettingsSlashCommand(interaction) {
               .toLowerCase();
             if (!["moderate", "strict"].includes(level)) {
               await interaction.reply({
-                content: "Level must be `moderate` or `strict`.",
+                content: "> <❇️> Level must be `moderate` or `strict`.",
                 ephemeral: true,
               });
             } else {
@@ -826,7 +754,7 @@ async function handleSettingsSlashCommand(interaction) {
                 guild
               );
               await interaction.reply({
-                content: `Filter level set to **${level}**.`,
+                content: `> <✅> Filter level set to **${level}**.`,
                 ephemeral: false,
               });
             }
@@ -834,7 +762,7 @@ async function handleSettingsSlashCommand(interaction) {
           }
           default:
             await interaction.reply({
-              content: "Unknown filter action. Use add|remove|list|level.",
+              content: "> <❌> Unknown filter action. Use add|remove|list|level.",
               ephemeral: true,
             });
         }
