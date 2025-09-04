@@ -151,13 +151,13 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
       )
       .setStyle(settings.kickOnSoundboardSpam ? ButtonStyle.Danger : ButtonStyle.Success);
 
-    // Exact label requirement: DisableAutoModRoute / EnableAutoModRoute
+    // Exact label requirement: Disable Auto Mod Route / Enable Auto Mod Route
     const toggleModAutoRouteButton = new ButtonBuilder()
       .setCustomId(`vcsettings:toggle-mod-auto-route:${userId}`)
       .setLabel(
         settings.mod_auto_route_enabled
-          ? "DisableAutoModRoute"
-          : "EnableAutoModRoute"
+          ? "Disable Auto Mod Route"
+          : "Enable Auto Mod Route"
       )
       .setStyle(settings.mod_auto_route_enabled ? ButtonStyle.Danger : ButtonStyle.Success);
 
