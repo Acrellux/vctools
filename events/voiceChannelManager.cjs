@@ -606,13 +606,12 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
     }
 
     const currentHumans = currentChannel.members.filter((m) => !m.user.bot).size;
-    if (currentHumans < 2) { // <-- updated: not just "alone"
+    if (currentHumans < 2) {
       if (busiest && busiest.id !== currentChannel.id && busiestHumans > currentHumans && canMove) {
         guildLastMoveAt.set(guild.id, now);
         await moveToChannel(busiest, connection, guild, client);
         return;
       }
-      // If we fell to zero and there's nowhere, disconnect
       if (currentHumans === 0 && (!busiest || busiestHumans === 0) && !isDisconnecting) {
         await disconnectAndReset(connection, guild, client);
       }
@@ -634,7 +633,8 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       await moveToChannel(bestUnsupervised, connection, guild, client);
       return;
     }
-    if (busiest && busiestHumans > 0 && !channelHasMod(busiest) && canMove) {
+    // Fallback: join busiest even if a mod is there (covers "only 1 active VC")
+    if (busiest && busiestHumans > 0 && canMove) {
       guildLastMoveAt.set(guild.id, now);
       await moveToChannel(busiest, connection, guild, client);
       return;
@@ -665,13 +665,12 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       }
       // fallthrough to general reroute
     }
-
     // Mod moved OUT OF our channel → no immediate move; continue to general reroute
   }
 
   // 2) General reroute
   if (!currentChannel) {
-    // Not connected: join best unsupervised≥2, else biggest no-mod
+    // Not connected: prefer unsupervised≥2; otherwise join busiest EVEN IF it has a mod
     const bestWhenDisconnected = findBestUnsupervised2(guild, safe, null);
     if (bestWhenDisconnected) {
       console.log("[ROUTE] (disconnected) joining unsupervised≥2:", bestWhenDisconnected.name);
@@ -679,8 +678,8 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       if (newConn) audioListeningFunctions(newConn, guild);
       return;
     }
-    if (busiest && busiestHumans > 0 && !channelHasMod(busiest)) {
-      console.log("[ROUTE] (disconnected) joining busiest no-mod:", busiest.name);
+    if (busiest && busiestHumans > 0) {
+      console.log("[ROUTE] (disconnected) joining busiest (mod allowed):", busiest.name);
       const newConn = await joinChannel(client, busiest.id, guild);
       if (newConn) audioListeningFunctions(newConn, guild);
     }
@@ -691,7 +690,7 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
   const currentHumans = currentChannel.members.filter((m) => !m.user.bot).size;
 
   // If low population (<2): prefer unsupervised≥2; else move to biggest (even if it has a mod), else disconnect if 0
-  if (currentHumans < 2) { // <-- updated per your request
+  if (currentHumans < 2) {
     const dest = findBestUnsupervised2(guild, safe, currentChannel.id);
     if (dest && canMove) {
       guildLastMoveAt.set(guild.id, now);
@@ -699,10 +698,9 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       await moveToChannel(dest, connection, guild, client);
       return;
     }
-    // If no unsupervised≥2 exists, jump to the biggest room even if it has a mod
     if (busiest && busiestHumans > currentHumans && canMove) {
       guildLastMoveAt.set(guild.id, now);
-      console.log("[ROUTE] <2 humans → moving to biggest:", busiest.name);
+      console.log("[ROUTE] <2 humans → moving to busiest (mod allowed):", busiest.name);
       await moveToChannel(busiest, connection, guild, client);
       return;
     }
