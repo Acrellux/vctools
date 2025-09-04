@@ -13,8 +13,8 @@ const { EventEmitter } = require("events");
 const { Readable, PassThrough } = require("stream");
 const { finished } = require("stream/promises");
 const prism = require("prism-media");
-const transcription = require("./transcription.cjs"); // Import transcription module
-const { interactionContexts } = require("../database/contextStore.cjs"); // Import context store
+const transcription = require("./transcription.cjs");
+const { interactionContexts } = require("../database/contextStore.cjs");
 const {
   hasUserConsented,
   grantUserConsent,
@@ -64,6 +64,12 @@ const idleDisconnectTimers = new Map(); // guildId -> Timeout
 
 // mod auto-route constants
 const AUTO_ROUTE_MIN_OTHER_HUMANS = 2;
+const AUTO_ROUTE_COOLDOWN_MS = 15_000;
+
+// 🔒 Anchor lock: when a mod is in our current channel, stay put briefly
+const ANCHOR_LOCK_MS = 5_000; // 5 seconds as requested
+const anchorUntil = new Map();     // guildId -> timestamp(ms) until which we anchor
+const lastAutoRouteTS = new Map(); // guildId -> timestamp(ms) of last move
 
 // Audio-processing queue (if needed)
 let isProcessing = false;
@@ -228,6 +234,24 @@ function channelCounts(channel, settings) {
   return { humans, mods };
 }
 
+function channelHasMod(channel, settings) {
+  if (!channel) return false;
+  const { mods } = channelCounts(channel, settings);
+  return mods > 0;
+}
+
+function hasAnySupervisingModElsewhere(guild, settings, excludeChannelId) {
+  const safe = new Set(settings.safeChannels || []);
+  for (const [, ch] of guild.channels.cache) {
+    if (ch.type !== ChannelType.GuildVoice) continue;
+    if (safe.has(ch.id)) continue;
+    if (ch.id === excludeChannelId) continue;
+    const { humans, mods } = channelCounts(ch, settings);
+    if (mods > 0 && humans > 0) return true;
+  }
+  return false;
+}
+
 function findBestAlternateChannelForAutoRoute(guild, settings, excludeChannelId) {
   const safe = new Set(settings.safeChannels || []);
   let best = null;
@@ -251,41 +275,6 @@ function findBestAlternateChannelForAutoRoute(guild, settings, excludeChannelId)
     });
 
   return best; // may be null
-}
-
-async function maybeAutoRouteOnModJoin(guild, client, joiningMember) {
-  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
-  if (!settings.mod_auto_route_enabled) return false;
-
-  const connection = getVoiceConnection(guild.id);
-  if (!connection || connection.state?.status !== VoiceConnectionStatus.Ready) return false;
-
-  const currentChannelId = connection.joinConfig.channelId;
-  const currentChannel = guild.channels.cache.get(currentChannelId);
-  if (!currentChannel) return false;
-
-  // Don't do anything if the bot is (somehow) in a SAFE channel
-  if (Array.isArray(settings.safeChannels) && settings.safeChannels.includes(currentChannelId)) {
-    return false;
-  }
-
-  // Only trigger if the mod joined the SAME channel the bot is in
-  const memberChannelId = joiningMember?.voice?.channelId;
-  if (!memberChannelId || memberChannelId !== currentChannelId) return false;
-
-  // Confirm the joining member is a moderator
-  if (!isModerator(joiningMember, settings)) return false;
-
-  // Find a valid destination. Must be non-safe, contain >=2 non-mod humans, and contain NO moderators.
-  const dest = findBestAlternateChannelForAutoRoute(guild, settings, currentChannelId);
-  if (!dest) {
-    console.log("[MOD-AUTO-ROUTE] No suitable destination (needs ≥2 non-mod humans & no mods). Staying put.");
-    return false;
-  }
-
-  console.log(`[MOD-AUTO-ROUTE] Moderator joined current VC. Moving to: ${dest.name}`);
-  await moveToChannel(dest, connection, guild, client);
-  return true;
 }
 
 /************************************************************************************************
@@ -577,11 +566,14 @@ async function execute(oldState, newState, client) {
   const buildLog = (timestamp, msg) =>
     `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Aggressive auto-route helper
-  // ───────────────────────────────────────────────────────────────────────────
-  if (!execute._lastAutoRoute) execute._lastAutoRoute = new Map(); // persist across calls
-  const AUTO_ROUTE_COOLDOWN_MS = 15_000;
+  /*************** AUTO-ROUTE (ANCHOR + UNSUPERVISED TARGET) *************************/
+
+  function isAnchored(gid) {
+    return (anchorUntil.get(gid) || 0) > Date.now();
+  }
+  function setAnchor(gid, ms = ANCHOR_LOCK_MS) {
+    anchorUntil.set(gid, Date.now() + ms);
+  }
 
   async function tryAutoRoute(triggerMember, reason) {
     try {
@@ -595,20 +587,27 @@ async function execute(oldState, newState, client) {
       const currentChannel = guild.channels.cache.get(currentChannelId);
       if (!currentChannel) return false;
 
-      // Don't auto-route if bot is in SAFE
+      // Respect SAFE channels
       if (Array.isArray(s.safeChannels) && s.safeChannels.includes(currentChannelId)) return false;
 
-      // Cooldown to avoid rapid flip-flop between channels
-      const last = execute._lastAutoRoute.get(guild.id) || 0;
-      if (Date.now() - last < AUTO_ROUTE_COOLDOWN_MS) {
-        // recent auto-route — skip
+      // Anchor window active? stay put
+      if (isAnchored(guild.id)) return false;
+
+      // If a mod is currently in our channel, anchor and do not leave
+      if (channelHasMod(currentChannel, s)) {
+        setAnchor(guild.id);
         return false;
       }
 
-      // NOTE: previously we required the triggerMember to be in the bot's channel.
-      // For aggressive routing we allow triggers from joins/moves anywhere: we'll use
-      // findBestAlternateChannelForAutoRoute to pick a destination that has NO mods
-      // and at least AUTO_ROUTE_MIN_OTHER_HUMANS non-mod humans.
+      // Only route if a mod is supervising elsewhere (not in our channel)
+      const supervisedElsewhere = hasAnySupervisingModElsewhere(guild, s, currentChannelId);
+      if (!supervisedElsewhere) return false;
+
+      // Cooldown guard
+      const last = lastAutoRouteTS.get(guild.id) || 0;
+      if (Date.now() - last < AUTO_ROUTE_COOLDOWN_MS) return false;
+
+      // Pick unsupervised (no mods) room with >=2 non-mod humans
       const dest = findBestAlternateChannelForAutoRoute(guild, s, currentChannelId);
       if (!dest) {
         console.log(`[MOD-AUTO-ROUTE] No suitable destination (${reason}). Staying put.`);
@@ -617,13 +616,38 @@ async function execute(oldState, newState, client) {
 
       console.log(`[MOD-AUTO-ROUTE] ${reason} → moving from ${currentChannel?.name || currentChannelId} to ${dest.name}`);
       await moveToChannel(dest, connection, guild, client);
-
-      execute._lastAutoRoute.set(guild.id, Date.now());
+      lastAutoRouteTS.set(guild.id, Date.now());
       return true;
     } catch (err) {
       console.warn(`[MOD-AUTO-ROUTE] tryAutoRoute errored (${reason}): ${err?.message || err}`);
       return false;
     }
+  }
+
+  // If a mod joins the same channel as the bot, **anchor** instead of fleeing.
+  async function maybeAutoRouteOnModJoin(guild, client, joiningMember) {
+    const s = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    if (!s.mod_auto_route_enabled) return false;
+
+    const connection = getVoiceConnection(guild.id);
+    if (!connection || connection.state?.status !== VoiceConnectionStatus.Ready) return false;
+
+    const currentChannelId = connection.joinConfig.channelId;
+    const currentChannel = guild.channels.cache.get(currentChannelId);
+    if (!currentChannel) return false;
+
+    // Respect SAFE channels
+    if (Array.isArray(s.safeChannels) && s.safeChannels.includes(currentChannelId)) return false;
+
+    const memberChannelId = joiningMember?.voice?.channelId;
+    if (!memberChannelId || memberChannelId !== currentChannelId) return false;
+
+    if (!isModerator(joiningMember, s)) return false;
+
+    // A mod joined our channel: set anchor and stay
+    setAnchor(guild.id);
+    console.log("[MOD-AUTO-ROUTE] Mod joined our channel → anchoring (stay put).");
+    return false; // do not move
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -659,7 +683,7 @@ async function execute(oldState, newState, client) {
       return;
     }
 
-    // Try aggressive auto-route first (covers most join/move cases)
+    // Try anchor-aware routing first
     try {
       const routed = await tryAutoRoute(newState.member, "member_moved");
       if (routed) return;
@@ -667,10 +691,10 @@ async function execute(oldState, newState, client) {
       console.warn(`[MOD-AUTO-ROUTE] generalized move handler errored: ${e?.message || e}`);
     }
 
-    // Keep your mod-specific fallback as a secondary attempt
+    // Mod joined our channel? anchor
     try {
       const moved = await maybeAutoRouteOnModJoin(guild, client, newState.member);
-      if (moved) return; // already handled
+      if (moved) return; // (we never move here, but keep shape consistent)
     } catch (e) {
       console.warn(`[MOD-AUTO-ROUTE] move handler errored: ${e?.message || e}`);
     }
@@ -687,7 +711,7 @@ async function execute(oldState, newState, client) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
     userJoinTimes.set(userId, Date.now());
 
-    // Aggressive auto-route for most joins
+    // Anchor-aware auto-route for most joins
     try {
       const routed = await tryAutoRoute(newState.member, "member_joined");
       if (routed) return; // handled, don't run generic manager or consent flow
@@ -695,10 +719,9 @@ async function execute(oldState, newState, client) {
       console.warn(`[MOD-AUTO-ROUTE] join generalized handler errored: ${e?.message || e}`);
     }
 
-    // Mod-specific fallback
+    // If a mod joined our channel, anchor (no move)
     try {
-      const moved = await maybeAutoRouteOnModJoin(guild, client, newState.member);
-      if (moved) return; // handled, don't run generic manager
+      await maybeAutoRouteOnModJoin(guild, client, newState.member);
     } catch (e) {
       console.warn(`[MOD-AUTO-ROUTE] join handler errored: ${e?.message || e}`);
     }
@@ -890,11 +913,17 @@ async function manageVoiceChannels(guild, client) {
     clearIdleTimer(guild.id);
     if (targetChannel && maxHumans > 0) {
       const now = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-      console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Moving out of SAFE → ${ansi.white}${targetChannel.name}${ansi.reset}`);
+      console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Moving out of SAFE → ${targetChannel.name}${ansi.reset}`);
       await moveToChannel(targetChannel, connection, guild, client);
     } else if (!isDisconnecting) {
       await disconnectAndReset(connection);
     }
+    return;
+  }
+
+  // 🔒 If a mod is in our current channel, don't move (anchor behavior)
+  if (channelHasMod(currentChannel, settings)) {
+    clearIdleTimer(guild.id);
     return;
   }
 
@@ -904,10 +933,11 @@ async function manageVoiceChannels(guild, client) {
     if (targetChannel && maxHumans > 0 && targetChannel.id !== currentChannel.id) {
       clearIdleTimer(guild.id);
       const now = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-      console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Alone; moving to: ${ansi.white}${targetChannel.name}${ansi.reset}`);
+      console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Alone; moving to: ${targetChannel.name}${ansi.reset}`);
       await moveToChannel(targetChannel, connection, guild, client);
     } else {
-      await disconnectAndReset(connection);
+      // Linger instead of instant disconnect
+      await scheduleIdleDisconnect(guild, connection, "channel_empty");
     }
     return;
   }
@@ -918,7 +948,7 @@ async function manageVoiceChannels(guild, client) {
   // If there's a busier non-safe channel, move
   if (targetChannel && targetChannel.id !== currentChannel.id && maxHumans > currentHumans) {
     const now = new Date().toLocaleTimeString("en-US", { minute: "2-digit", second: "2-digit" });
-    console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Moving to busier VC: ${ansi.white}${targetChannel.name}${ansi.reset}`);
+    console.log(`${ansi.darkGray}[${ansi.white}${now}${ansi.darkGray}] Moving to busier VC: ${targetChannel.name}${ansi.reset}`);
     await moveToChannel(targetChannel, connection, guild, client);
   }
 }
