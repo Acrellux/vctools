@@ -456,7 +456,7 @@ async function execute(oldState, newState, client) {
   const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
   const safe = new Set(settings.safeChannels || []);
 
-  // Build move context for trading logic
+  // Build move context for trading/mod logic
   const actorMember = newState.member || guild.members.cache.get(userId);
   const actorIsMod = isModerator(actorMember);
   const moveContext = {
@@ -466,32 +466,23 @@ async function execute(oldState, newState, client) {
     destId: newState?.channelId || null,
   };
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Case 1: User moved channels
-  // ───────────────────────────────────────────────────────────────────────────
+  // Always recompute on every relevant event
+
+  // 1) User moved channels
   if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
     console.log(`[DEBUG] User ${userId} moved from ${oldState.channelId} to ${newState.channelId}`);
-
-    const isDestSafe = safe.has(newState.channelId);
-    if (isDestSafe) {
-      console.log("[VC] Move into SAFE channel detected; skipping VC management.");
-      return;
+    if (!safe.has(newState.channelId)) {
+      await manageVoiceChannels(guild, client, moveContext);
     }
-
-    // Always recompute on every member move
-    await manageVoiceChannels(guild, client, moveContext);
     return;
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Case 2: User joined a channel
-  // ───────────────────────────────────────────────────────────────────────────
+  // 2) User joined a channel
   if (!oldState.channelId && newState.channelId) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
     userJoinTimes.set(userId, Date.now());
 
-    const isJoinSafe = safe.has(newState.channelId);
-    if (!isJoinSafe) {
+    if (!safe.has(newState.channelId)) {
       await manageVoiceChannels(guild, client, moveContext);
     }
 
@@ -549,9 +540,7 @@ async function execute(oldState, newState, client) {
     return;
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Case 3: User left a channel
-  // ───────────────────────────────────────────────────────────────────────────
+  // 3) User left a channel
   if (oldState.channelId && !newState.channelId) {
     console.log(`[DEBUG] User ${userId} left channel: ${oldState.channelId}`);
 
@@ -595,6 +584,14 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
   const last = guildLastMoveAt.get(guild.id) || 0;
   const canMove = now - last >= guildMoveCooldownMs;
 
+  // Helper: viable coverage = no mod & >=2 humans
+  const isViableCoverage = (ch) => {
+    if (!ch) return false;
+    if (safe.has(ch.id)) return false;
+    const { humans, mods } = channelCounts(ch);
+    return mods === 0 && humans >= AUTO_ROUTE_MIN_OTHER_HUMANS;
+  };
+
   // If feature is OFF, simple behavior
   if (!featureOn) {
     if (!currentChannel) {
@@ -611,7 +608,7 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
         guildLastMoveAt.set(guild.id, now);
         await moveToChannel(busiest, connection, guild, client);
       } else if (!isDisconnecting) {
-        await disconnectAndReset(connection);
+        await disconnectAndReset(connection, guild, client);
       }
       return;
     }
@@ -631,13 +628,13 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       await moveToChannel(bestUnsupervised, connection, guild, client);
       return;
     }
-    if (busiest && busiestHumans > 0 && !channelHasMod(busiest) && canMove) {
+    if (busiest && busiestHumans > 0 && canMove) {
       guildLastMoveAt.set(guild.id, now);
       await moveToChannel(busiest, connection, guild, client);
       return;
     }
     if (!isDisconnecting) {
-      await disconnectAndReset(connection);
+      await disconnectAndReset(connection, guild, client);
     }
     return;
   }
@@ -653,8 +650,7 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
 
     // Mod moved INTO our channel → swap to origin if it's valid (no SAFE, no mod, ≥2)
     if (dest && dest.id === currentChannel.id && origin && !safe.has(origin.id)) {
-      const { humans, mods } = channelCounts(origin);
-      if (mods === 0 && humans >= AUTO_ROUTE_MIN_OTHER_HUMANS) {
+      if (isViableCoverage(origin)) {
         console.log("[ROUTE] Mod entered our room → trading places to origin:", origin.name);
         guildLastMoveAt.set(guild.id, now);
         await moveToChannel(origin, connection, guild, client);
@@ -662,22 +658,19 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       }
       // fallthrough to general reroute
     }
-
-    // Mod moved OUT OF our channel → no immediate move; continue to general reroute
+    // Mod moved OUT OF our channel → allow general reroute to evaluate
   }
 
   // 2) General reroute
   if (!currentChannel) {
-    // Not connected: join best unsupervised≥2, else biggest no-mod
+    // Not connected: join best unsupervised≥2, else biggest (even if mod)
     const bestWhenDisconnected = findBestUnsupervised2(guild, safe, null);
     if (bestWhenDisconnected) {
-      console.log("[ROUTE] (disconnected) joining unsupervised≥2:", bestWhenDisconnected.name);
       const newConn = await joinChannel(client, bestWhenDisconnected.id, guild);
       if (newConn) audioListeningFunctions(newConn, guild);
       return;
     }
-    if (busiest && busiestHumans > 0 && !channelHasMod(busiest)) {
-      console.log("[ROUTE] (disconnected) joining busiest no-mod:", busiest.name);
+    if (busiest && busiestHumans > 0) {
       const newConn = await joinChannel(client, busiest.id, guild);
       if (newConn) audioListeningFunctions(newConn, guild);
     }
@@ -685,49 +678,36 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
   }
 
   // Connected:
-  const currentHumans = currentChannel.members.filter((m) => !m.user.bot).size;
+  const hereHumans = currentChannel.members.filter((m) => !m.user.bot).size;
+  const hereHasMod = channelHasMod(currentChannel);
+  const hereViable = isViableCoverage(currentChannel);
 
-  // If alone: prefer unsupervised≥2, else busiest no-mod, else disconnect
-  if (currentHumans === 0) {
-    const dest = findBestUnsupervised2(guild, safe, currentChannel.id);
-    if (dest && canMove) {
+  // NEW: Treat "< 2 humans" OR "has mod" as NON-VIABLE and reroute immediately
+  if (!hereViable) {
+    if (bestUnsupervised && bestUnsupervised.id !== currentChannel.id && canMove) {
       guildLastMoveAt.set(guild.id, now);
-      console.log("[ROUTE] Alone → moving to unsupervised≥2:", dest.name);
-      await moveToChannel(dest, connection, guild, client);
+      console.log("[ROUTE] Non-viable room → moving to unsupervised≥2:", bestUnsupervised.name);
+      await moveToChannel(bestUnsupervised, connection, guild, client);
       return;
     }
-    if (busiest && busiestHumans > 0 && !channelHasMod(busiest) && canMove) {
+    if (busiest && busiestHumans > 0 && busiest.id !== currentChannel.id && canMove) {
       guildLastMoveAt.set(guild.id, now);
-      console.log("[ROUTE] Alone → moving to busiest no-mod:", busiest.name);
+      console.log("[ROUTE] Non-viable room → moving to biggest:", busiest.name);
       await moveToChannel(busiest, connection, guild, client);
       return;
     }
+    // If nothing better, disconnect (then we immediately recalc on disconnect handler)
     if (!isDisconnecting) {
-      console.log("[ROUTE] Alone with no valid target → disconnect.");
-      await disconnectAndReset(connection);
+      console.log("[ROUTE] Non-viable and no targets → disconnect & recalc.");
+      await disconnectAndReset(connection, guild, client);
     }
     return;
   }
 
-  // Not alone:
-  const currentHasMod = channelHasMod(currentChannel);
-
-  if (currentHasMod) {
-    // Leave mods to supervise here → move to best unsupervised≥2 if any
-    const dest = findBestUnsupervised2(guild, safe, currentChannel.id);
-    if (dest && canMove) {
-      guildLastMoveAt.set(guild.id, now);
-      console.log("[ROUTE] Mod present → moving to unsupervised≥2:", dest.name);
-      await moveToChannel(dest, connection, guild, client);
-    }
-    return;
-  }
-
-  // Our room has no mod; consider moving only to a bigger NO-MOD room
+  // If viable (no mod & >=2), consider upgrading to a bigger NO-MOD room only
   if (busiest && busiest.id !== currentChannel.id && !channelHasMod(busiest)) {
-    const here = channelCounts(currentChannel);
     const there = channelCounts(busiest);
-    if (there.humans > here.humans && canMove) {
+    if (there.humans > hereHumans && canMove) {
       guildLastMoveAt.set(guild.id, now);
       console.log("[ROUTE] Upgrading to bigger no-mod VC:", busiest.name);
       await moveToChannel(busiest, connection, guild, client);
@@ -738,7 +718,7 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
 async function moveToChannel(targetChannel, connection, guild, client) {
   if (connection) {
     console.log(`[INFO] Leaving and joining: ${targetChannel.name}`);
-    await disconnectAndReset(connection);
+    await disconnectAndReset(connection, guild, client, /*skipRecalc*/ true); // we'll join immediately below
     const newConnection = await joinChannel(client, targetChannel.id, guild);
     if (newConnection) {
       saveVCState(guild.id, targetChannel.id);
@@ -787,7 +767,8 @@ async function joinChannel(client, channelId, guild) {
   }
 }
 
-async function disconnectAndReset(connection) {
+// Enhanced: after disconnect we immediately recompute (so the bot doesn't "die")
+async function disconnectAndReset(connection, guild, client, skipRecalc = false) {
   if (!isDisconnecting) {
     isDisconnecting = true;
     try {
@@ -799,6 +780,9 @@ async function disconnectAndReset(connection) {
       console.error(`[ERROR] During disconnect: ${error.message}`);
     } finally {
       isDisconnecting = false;
+      if (!skipRecalc && guild && client) {
+        try { await manageVoiceChannels(guild, client, null); } catch { }
+      }
     }
   }
 }
