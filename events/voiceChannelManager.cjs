@@ -63,7 +63,7 @@ const IDLE_LINGER_MS = 60_000; // 60s; adjust if you want longer/shorter
 const idleDisconnectTimers = new Map(); // guildId -> Timeout
 
 // mod auto-route constants
-const AUTO_ROUTE_MIN_OTHER_HUMANS = 1;
+const AUTO_ROUTE_MIN_OTHER_HUMANS = 2;
 
 // Audio-processing queue (if needed)
 let isProcessing = false;
@@ -580,8 +580,6 @@ async function execute(oldState, newState, client) {
   // ───────────────────────────────────────────────────────────────────────────
   // Aggressive auto-route helper
   // ───────────────────────────────────────────────────────────────────────────
-  // NOTE: findBestAlternateChannelForAutoRoute comment still says "2" (you asked to leave it),
-  // but AUTO_ROUTE_MIN_OTHER_HUMANS remains whatever you set (1 for testing).
   if (!execute._lastAutoRoute) execute._lastAutoRoute = new Map(); // persist across calls
   const AUTO_ROUTE_COOLDOWN_MS = 15_000;
 
