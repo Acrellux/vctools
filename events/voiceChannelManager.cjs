@@ -58,12 +58,12 @@ const MAX_SILENCE_RECORDS = 10;
 const DEFAULT_SILENCE_TIMEOUT = 3000;
 const finalizationTimers = {};
 
-// NEW: idle linger so bot doesn't leave immediately when users go to SAFE channels
+// idle linger so bot doesn't leave immediately when users go to SAFE channels
 const IDLE_LINGER_MS = 60_000; // 60s; adjust if you want longer/shorter
 const idleDisconnectTimers = new Map(); // guildId -> Timeout
 
-// NEW: mod auto-route constants
-const AUTO_ROUTE_MIN_OTHER_HUMANS = 2;
+// mod auto-route constants
+const AUTO_ROUTE_MIN_OTHER_HUMANS = 1;
 
 // Audio-processing queue (if needed)
 let isProcessing = false;

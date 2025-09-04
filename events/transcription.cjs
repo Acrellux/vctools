@@ -805,7 +805,7 @@ module.exports = {
   cleanupFiles,
   ensureDirectoryExistence,
   createLoudnessDetector,
-  forceCleanNow, // (new) manual sweeper trigger
+  forceCleanNow,
   // Profanity & Flagging Functions
   updateProfanityFilter,
   containsProfanity,
