@@ -577,11 +577,14 @@ async function execute(oldState, newState, client) {
   const buildLog = (timestamp, msg) =>
     `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
 
-  // --------------------------------------------------------------------------
-  // Generalized tryAutoRoute: attempt to find a safe non-mod destination and move
-  // This makes auto-routing more aggressive for join/move cases (respects SAFE
-  // channels and your findBestAlternateChannelForAutoRoute constraints).
-  // --------------------------------------------------------------------------
+  // ───────────────────────────────────────────────────────────────────────────
+  // Aggressive auto-route helper
+  // ───────────────────────────────────────────────────────────────────────────
+  // NOTE: findBestAlternateChannelForAutoRoute comment still says "2" (you asked to leave it),
+  // but AUTO_ROUTE_MIN_OTHER_HUMANS remains whatever you set (1 for testing).
+  if (!execute._lastAutoRoute) execute._lastAutoRoute = new Map(); // persist across calls
+  const AUTO_ROUTE_COOLDOWN_MS = 15_000;
+
   async function tryAutoRoute(triggerMember, reason) {
     try {
       const s = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
@@ -597,19 +600,17 @@ async function execute(oldState, newState, client) {
       // Don't auto-route if bot is in SAFE
       if (Array.isArray(s.safeChannels) && s.safeChannels.includes(currentChannelId)) return false;
 
-      // If triggerMember provided and they did not join/move into the bot's channel,
-      // we can still allow routing in some cases — but keep it conservative: require the
-      // event to be related to the bot's channel.
-      if (triggerMember) {
-        const memberChannelId = triggerMember?.voice?.channelId;
-        if (!memberChannelId || memberChannelId !== currentChannelId) {
-          // Not related to bot's channel — skip general auto-route
-          return false;
-        }
+      // Cooldown to avoid rapid flip-flop between channels
+      const last = execute._lastAutoRoute.get(guild.id) || 0;
+      if (Date.now() - last < AUTO_ROUTE_COOLDOWN_MS) {
+        // recent auto-route — skip
+        return false;
       }
 
-      // Use your existing helper to find a destination that has NO mods and at least
-      // AUTO_ROUTE_MIN_OTHER_HUMANS non-mod humans (helper's comment still says "2" by you).
+      // NOTE: previously we required the triggerMember to be in the bot's channel.
+      // For aggressive routing we allow triggers from joins/moves anywhere: we'll use
+      // findBestAlternateChannelForAutoRoute to pick a destination that has NO mods
+      // and at least AUTO_ROUTE_MIN_OTHER_HUMANS non-mod humans.
       const dest = findBestAlternateChannelForAutoRoute(guild, s, currentChannelId);
       if (!dest) {
         console.log(`[MOD-AUTO-ROUTE] No suitable destination (${reason}). Staying put.`);
@@ -618,6 +619,8 @@ async function execute(oldState, newState, client) {
 
       console.log(`[MOD-AUTO-ROUTE] ${reason} → moving from ${currentChannel?.name || currentChannelId} to ${dest.name}`);
       await moveToChannel(dest, connection, guild, client);
+
+      execute._lastAutoRoute.set(guild.id, Date.now());
       return true;
     } catch (err) {
       console.warn(`[MOD-AUTO-ROUTE] tryAutoRoute errored (${reason}): ${err?.message || err}`);
@@ -658,7 +661,7 @@ async function execute(oldState, newState, client) {
       return;
     }
 
-    // First try the generalized auto-route (covers most join/move cases for testing)
+    // Try aggressive auto-route first (covers most join/move cases)
     try {
       const routed = await tryAutoRoute(newState.member, "member_moved");
       if (routed) return;
@@ -666,7 +669,7 @@ async function execute(oldState, newState, client) {
       console.warn(`[MOD-AUTO-ROUTE] generalized move handler errored: ${e?.message || e}`);
     }
 
-    // If generalized didn't move, keep your mod-specific fallback (existing logic)
+    // Keep your mod-specific fallback as a secondary attempt
     try {
       const moved = await maybeAutoRouteOnModJoin(guild, client, newState.member);
       if (moved) return; // already handled
@@ -686,7 +689,7 @@ async function execute(oldState, newState, client) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
     userJoinTimes.set(userId, Date.now());
 
-    // Try general auto-route first (aggressive routing for testing)
+    // Aggressive auto-route for most joins
     try {
       const routed = await tryAutoRoute(newState.member, "member_joined");
       if (routed) return; // handled, don't run generic manager or consent flow
@@ -694,7 +697,7 @@ async function execute(oldState, newState, client) {
       console.warn(`[MOD-AUTO-ROUTE] join generalized handler errored: ${e?.message || e}`);
     }
 
-    // ▶️ Mod auto-route: if a moderator joined the bot's current VC, try to route away *before* general management
+    // Mod-specific fallback
     try {
       const moved = await maybeAutoRouteOnModJoin(guild, client, newState.member);
       if (moved) return; // handled, don't run generic manager
@@ -837,7 +840,6 @@ async function execute(oldState, newState, client) {
     }
 
     // Re-evaluate where the bot should be (no unconditional disconnect; linger applies)
-    // If someone left and the bot is now in a place that would prefer to move, manageVoiceChannels will handle it.
     await manageVoiceChannels(guild, client);
     return;
   }
