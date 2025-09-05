@@ -166,8 +166,8 @@ async function onMessageCreate(message) {
     const prefixes = settings.prefixes ?? { slash: true, greater: true, exclamation: true };
 
     let used = null;
-    if (message.content.startsWith(">")) used = "greater";
-    else if (message.content.startsWith("!")) used = "exclamation";
+    if (message.content.startsWith(">") && prefixes.greater) used = "greater";
+    else if (message.content.startsWith("!") && prefixes.exclamation) used = "exclamation";
     if (!used) return;
 
     const args = message.content.slice(1).trim().split(/\s+/);
