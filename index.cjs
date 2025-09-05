@@ -60,9 +60,8 @@ const transcription = require("./events/transcription.cjs");
 const {
   getSettingsForGuild,
   updateSettingsForGuild,
-  hasUserConsented, // ← CONSENT
+  hasUserConsented,
 } = require("./commands/settings.cjs");
-
 // CONSENT: add prompt sender
 const { sendConsentPrompt } = require("./commands/logic/consent_logic.cjs");
 
@@ -125,12 +124,13 @@ const loadEventHandlers = async () => {
       const { execute } = require(`./events/${file}`);
       if (typeof execute === "function") {
         const eventName = file.replace(".cjs", "");
-        client.on(eventName, (...args) => execute(...args, client));
+        client.on(eventName, (...args) => {
+          // one wrapper guards ALL your custom event files
+          withRescue(() => execute(...args, client), `event:${eventName}`);
+        });
         console.log(`[INFO] Event handler loaded: ${eventName}`);
       } else {
-        console.error(
-          `The file ${file} does not export a function named 'execute'.`
-        );
+        console.error(`The file ${file} does not export a function named 'execute'.`);
       }
     } catch (error) {
       console.error(`Failed to load event handler ${file}:`, error);
@@ -186,6 +186,31 @@ client.once("ready", async () => {
     } default soundboard sounds.`
   );
 });
+
+// ── Universal rescue + transient filter ───────────────
+function isTransientError(err) {
+  const msg = (err && (err.stack || err.message)) || String(err || "");
+  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|fetch failed|discord\.media/i.test(msg);
+}
+
+/**
+ * Wrap any sync/async fn so it never crashes the process.
+ * - Logs full error
+ * - Suppresses transient network/DNS hiccups to WARN
+ * - Optionally returns a fallback value
+ */
+async function withRescue(fn, context = "unknown", fallbackValue = undefined) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isTransientError(err)) {
+      console.warn(`[WARN][RESCUE:${context}] transient issue suppressed:`, err?.message || err);
+      return fallbackValue;
+    }
+    console.error(`[ERROR][RESCUE:${context}]`, err?.stack || err);
+    return fallbackValue;
+  }
+}
 
 // Ensure transcription channel function
 const ensureTranscriptionChannel = async (guild) => {
@@ -550,6 +575,19 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   }
 });
 
+client.on("messageCreate", (message) =>
+  withRescue(() => commands.onMessageCreate(message), "messageCreate")
+);
+
+client.on("interactionCreate", (interaction) =>
+  withRescue(() => commands.onInteractionCreate(interaction), "interactionCreate")
+);
+
+client.on("messageReactionAdd", (reaction, user) =>
+  withRescue(() => handleReaction(reaction, user), "messageReactionAdd")
+);
+
+
 // Handle guild create event
 client.on(Events.GuildCreate, async (guild) => {
   try {
@@ -885,31 +923,26 @@ async function logGlobalError(client, error, context = "Unknown") {
   }
 }
 
-process.on("unhandledRejection", async (reason, promise) => {
-  const errorText =
-    reason instanceof Error
-      ? reason.stack || reason.message
-      : typeof reason === "object"
-        ? JSON.stringify(reason, null, 2)
-        : String(reason);
-
-  console.error("[UNHANDLED REJECTION]", errorText);
-
-  await logGlobalError(
-    client,
-    `Unhandled Rejection:\n${errorText}`,
-    "process.on('unhandledRejection')"
+process.on("unhandledRejection", async (reason) => {
+  const err = reason instanceof Error ? reason : new Error(
+    typeof reason === "object" ? JSON.stringify(reason) : String(reason)
   );
+
+  if (isTransientError(err)) {
+    console.warn("[WARN] Transient unhandledRejection suppressed:", err.message);
+    return;
+  }
+  console.error("[UNHANDLED REJECTION]", err.stack || err.message);
+  await logGlobalError(client, `Unhandled Rejection:\n${err.stack || err.message}`, "process.on('unhandledRejection')");
 });
 
 process.on("uncaughtException", async (error) => {
+  if (isTransientError(error)) {
+    console.warn("[WARN] Transient uncaughtException suppressed:", error.message);
+    return;
+  }
   console.error("[UNCAUGHT EXCEPTION]", error.stack || error.message);
-
-  await logGlobalError(
-    client,
-    `Uncaught Exception:\n${error.stack || error.message}`,
-    "process.on('uncaughtException')"
-  );
+  await logGlobalError(client, `Uncaught Exception:\n${error.stack || error.message}`, "process.on('uncaughtException')");
 });
 
 // at bot bootstrap
