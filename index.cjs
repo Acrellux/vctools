@@ -575,19 +575,6 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   }
 });
 
-client.on("messageCreate", (message) =>
-  withRescue(() => commands.onMessageCreate(message), "messageCreate")
-);
-
-client.on("interactionCreate", (interaction) =>
-  withRescue(() => commands.onInteractionCreate(interaction), "interactionCreate")
-);
-
-client.on("messageReactionAdd", (reaction, user) =>
-  withRescue(() => handleReaction(reaction, user), "messageReactionAdd")
-);
-
-
 // Handle guild create event
 client.on(Events.GuildCreate, async (guild) => {
   try {
