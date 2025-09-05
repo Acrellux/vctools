@@ -5,7 +5,7 @@ Copyright © 2025 Acrellux. All rights reserved.
 
 You are granted the right to **view and use the VC Tools source code** at any time solely for **personal, internal non-commercial, or educational** purposes.
 You are **not** granted the right to, unless otherwise stated by the copyright holder:
-- Redistribute, republish, or sublicense code found inside this GitHub repository
+- Fork, redistribute, republish, or sublicense code found inside this GitHub repository
 - Create modifications or adaptations to code found inside this GitHub repository
 - Use the code to create or distribute competing software
 - Use the code for any commercial purposes, including paid services, hosting, and resale
