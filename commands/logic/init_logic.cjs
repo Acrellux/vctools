@@ -261,7 +261,7 @@ async function handleInitializeFlow(interaction, mode, action) {
   > Which channel should transcription logs be saved in?
 
 -# *Unable to find a specific channel? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
-        components: [createchannelIdropdown("init", guild, userId, null)],
+        components: [createchannelIdropdown("init:select_logging_channel", guild, userId)],
       });
       return;
     }
@@ -306,7 +306,7 @@ async function handleInitializeFlow(interaction, mode, action) {
 > Select a role:
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
-          components: [createRoleDropdown("init", guild, userId, null)],
+          components: [createRoleDropdown("init:select_log_viewers", guild, userId)],
         });
         return;
       }
@@ -322,7 +322,7 @@ async function handleInitializeFlow(interaction, mode, action) {
   > Select a role:
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
-        components: [createRoleDropdown("init", guild, userId, null)],
+        components: [createRoleDropdown("init:select_log_viewers", guild, userId)],
       });
       return;
     }
@@ -421,15 +421,13 @@ async function handleInitializeFlow(interaction, mode, action) {
       await interaction.update({
         content: `## **<2.2> Choose an error logs channel**
   > Which channel should errors be logged in?`,
-        components: [
-          createErrorLogchannelIdropdown("init", guild, userId, null),
-        ],
+        components: [createErrorLogchannelIdropdown("init:select_error_logs_channel", guild, userId)],
       });
       return;
     }
     if (action === "setup_error_logs_no") {
       await interaction.update({
-        content: `<❇️> **Error logging is currently disabled.** You can enable it later using \`settings transcription\`.
+        content: `<❇️> **Error logging is currently disabled.** You can enable it later using \`settings errorlogs\`.
       
   ## **<3.1> Synchronize Roles**
   > Let **VC Tools** know which roles are part of your staff. Would you like to do this now?`,
@@ -468,7 +466,7 @@ async function handleInitializeFlow(interaction, mode, action) {
   > Select the role that can view error logs:
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
-          components: [createErrorLogRoleDropdown("init", guild, userId, null)],
+          components: [createErrorLogRoleDropdown("init:select_error_logs_role", guild, userId)],
         });
         return;
       }
@@ -484,7 +482,7 @@ async function handleInitializeFlow(interaction, mode, action) {
   > Select the role that can view error logs:
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
-        components: [createErrorLogRoleDropdown("init", guild, userId, null)],
+        components: [createErrorLogRoleDropdown("init:select_error_logs_role", guild, userId)],
       });
       return;
     }
@@ -545,7 +543,7 @@ async function handleInitializeFlow(interaction, mode, action) {
     }
     if (action === "enable_error_logging_no") {
       await interaction.update({
-        content: `<❇️> **Error logging is currently disabled.** You can enable it later using \`settings transcription\`.
+        content: `<❇️> **Error logging is currently disabled.** You can enable it later using \`settings errorlogs\`.
       
   ## **<3.1> Synchronize Roles**
   > Let **VC Tools** know which roles are part of your staff. Would you like to do this now?`,
