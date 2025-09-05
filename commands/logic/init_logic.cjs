@@ -576,7 +576,7 @@ async function handleInitializeFlow(interaction, mode, action) {
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
         components: [
-          createRoleDropdown("init_admin_role", guild, userId, null),
+          createRoleDropdown("init_admin_role:select_log_viewers", guild, userId),
         ],
       });
       return;
@@ -608,7 +608,7 @@ async function handleInitializeFlow(interaction, mode, action) {
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
         components: [
-          createRoleDropdown("init_moderator_role", guild, userId, null),
+          createRoleDropdown("init_moderator_role:select_log_viewers", guild, userId),
         ],
       });
       return;
