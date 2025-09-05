@@ -155,7 +155,7 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
     if (vcLoggingChannelOptionBuilders.length > 0) {
       const vcLoggingChannelDropdown = new StringSelectMenuBuilder()
         .setCustomId(`bot:select-vc-logging-channel:${userId}`)
-        .setPlaceholder("Select a channel for VC Logging")
+        .setPlaceholder("Select a channel for VC Event Logging")
         .addOptions(vcLoggingChannelOptionBuilders)
         .setMinValues(1)
         .setMaxValues(1);

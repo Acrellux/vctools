@@ -102,7 +102,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
 > **Soundboard Logging:** ${settings.soundboardLogging ? "Enabled" : "Disabled"}
 > **Kick on Soundboard Spam:** ${settings.kickOnSoundboardSpam ? "Enabled" : "Disabled"}
 > **Move to Other Voice Calls when Moderators Join (Mod Auto-Route):** ${settings.mod_auto_route_enabled ? "Enabled" : "Disabled"}
-> **VC Logging:** ${settings.vcLoggingEnabled ? "Enabled" : "Disabled"}
+> **VC Event Logging:** ${settings.vcLoggingEnabled ? "Enabled" : "Disabled"}
 
 -# *Unable to find a specific channel/role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`;
 
@@ -174,7 +174,7 @@ async function showVCSettingsUI(interactionOrMessage, isEphemeral = false) {
     const toggleVCLoggingButton = new ButtonBuilder()
       .setCustomId(`vcsettings:toggle-vc-logging:${userId}`)
       .setLabel(
-        settings.vcLoggingEnabled ? "Disable VC Logging" : "Enable VC Logging"
+        settings.vcLoggingEnabled ? "Disable VC Event Logging" : "Enable VC Event Logging"
       )
       .setStyle(settings.vcLoggingEnabled ? ButtonStyle.Danger : ButtonStyle.Success);
 
