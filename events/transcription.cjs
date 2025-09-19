@@ -44,6 +44,7 @@ const {
   getSettingsForGuild,
   updateSettingsForGuild,
 } = require("../commands/settings.cjs");
+const { forceDelete } = require("../repo/force_delete.cjs");
 
 // =========================================
 // TEMP FILE SAFETY CONFIG (env → inline defaults)
@@ -790,6 +791,114 @@ process.on("beforeExit", _finalCleanup);
 process.on("SIGINT", async () => { await _finalCleanup(); process.exit(0); });
 process.on("SIGTERM", async () => { await _finalCleanup(); process.exit(0); });
 
+// ─────────────────────────────────────────────────────────────────────────
+// HARD DELETE (bypass inUse guard; close & nuke stubborn Windows locks)
+// ─────────────────────────────────────────────────────────────────────────
+const { spawn } = require("child_process");
+
+function _toLongPath(p) {
+  const win = path.resolve(p).replace(/\//g, "\\");
+  return win.startsWith("\\\\?\\") ? win : "\\\\?\\" + win;
+}
+function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function _run(cmd, args) {
+  return new Promise((resolve) => {
+    const c = spawn(cmd, args, { windowsHide: true, stdio: "ignore" });
+    c.on("exit", (code) => resolve(code === 0));
+    c.on("error", () => resolve(false));
+  });
+}
+
+/**
+ * Forcefully unmark and delete a file even if our process *thinks* it is in use.
+ * Steps:
+ *  1) Best-effort: drop from inUsePaths (if present).
+ *  2) try fs.unlink; if locked, rename -> tombstone in same dir.
+ *  3) hammer with: attrib -r -s -h, del /f /q, PowerShell Remove-Item -Force.
+ *  4) retries with backoff; returns boolean.
+ */
+async function hardDeleteFile(filePath, {
+  retries = 12,
+  baseDelayMs = 120,
+} = {}) {
+  if (!filePath) return false;
+  const full = path.resolve(filePath);
+
+  // 1) Unmark "in use" if stale
+  try { inUsePaths.delete(full); } catch { }
+
+  // 2) Try fast unlink
+  try {
+    await fs.promises.unlink(full);
+    await tryRemoveEmptyParents(full).catch(() => { });
+    return true;
+  } catch (e) {
+    if (e.code === "ENOENT") return true;
+  }
+
+  // 3) Try rename to tombstone (often succeeds even if current name is "busy")
+  let tomb = full;
+  try {
+    const base = path.basename(full);
+    tomb = path.join(path.dirname(full), `.__tomb.${process.pid}.${Date.now()}.${base}`);
+    await fs.promises.rename(full, tomb);
+  } catch {
+    tomb = full;
+  }
+
+  // 4) Repeated hammer with shell fallbacks
+  for (let i = 0; i <= retries; i++) {
+    // normalize attributes
+    await _run("cmd.exe", ["/d", "/s", "/c", `attrib -r -s -h "${tomb}"`]);
+
+    // local unlink
+    try {
+      await fs.promises.unlink(tomb);
+      await tryRemoveEmptyParents(tomb).catch(() => { });
+      return true;
+    } catch (e) {
+      if (e.code === "ENOENT") return true;
+    }
+
+    // CMD del
+    const delOk = await _run("cmd.exe", ["/d", "/s", "/c", `del /f /q "${_toLongPath(tomb)}"`]);
+    if (delOk) {
+      try { await fs.promises.access(tomb); } catch { return true; }
+    }
+
+    // PowerShell remove
+    const psOk = await _run("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `Remove-Item -LiteralPath '${_toLongPath(tomb).replace(/'/g, "''")}' -Force -ErrorAction SilentlyContinue`,
+    ]);
+    if (psOk) {
+      try { await fs.promises.access(tomb); } catch { return true; }
+    }
+
+    await _sleep(Math.min(baseDelayMs * Math.pow(1.6, i), 1500));
+  }
+
+  // still here → give up
+  return false;
+}
+
+/**
+ * Convenience: final-phase hard delete for multiple paths.
+ */
+async function hardFinalizeDelete(paths = []) {
+  let allOk = true;
+  for (const p of paths) {
+    try {
+      const ok = await hardDeleteFile(p, { retries: 14, baseDelayMs: 140 });
+      if (!ok) allOk = false;
+    } catch {
+      allOk = false;
+    }
+  }
+  return allOk;
+}
+
 // =========================================
 /** EXPORTS */
 // =========================================
@@ -806,6 +915,8 @@ module.exports = {
   ensureDirectoryExistence,
   createLoudnessDetector,
   forceCleanNow,
+  hardDeleteFile,
+  hardFinalizeDelete,
   // Profanity & Flagging Functions
   updateProfanityFilter,
   containsProfanity,

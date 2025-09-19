@@ -985,8 +985,35 @@ function audioListeningFunctions(connection, guild) {
     } catch (err) {
       console.error(`[FINALIZE] user=${userId} ➜ ${err.message}`);
     } finally {
-      await transcription.safeDeleteFile(pcm);
-      await transcription.safeDeleteFile(wav);
+      // Make absolutely sure pipeline objects are torn down before delete
+      try {
+        const p = pipelines.get(userId);
+        if (p) {
+          try { p.audioStream?.unpipe?.(p.decoder); } catch { }
+          try { p.decoder?.unpipe?.(p.pcmWriter); } catch { }
+          try { p.pcmWriter?.end?.(); } catch { }
+          try { p.pcmWriter?.destroy?.(); } catch { }
+          try { p.loudnessRes?.teardown?.(); } catch { }
+          try { p.decoder?.destroy?.(); } catch { }
+          try { p.audioStream?.destroy?.(); } catch { }
+        }
+      } catch { }
+
+      // Give Windows a brief moment to flush close events
+      await new Promise(r => setTimeout(r, 40));
+
+      // First try the normal safe path (cheap when free)
+      try { await transcription.safeDeleteFile(pcm); } catch { }
+      try { await transcription.safeDeleteFile(wav); } catch { }
+
+      // Then escalate: bypass stale "in use" guard and hammer the lock
+      try {
+        const ok = await transcription.hardFinalizeDelete([pcm, wav]);
+        if (!ok) console.warn(`[HARD-DEL] Not fully removed: ${pcm} / ${wav}`);
+      } catch (e) {
+        console.warn(`[HARD-DEL] error: ${e?.message || e}`);
+      }
+
       cleanup(userId);
       finalizingKeys.delete(key);
     }
