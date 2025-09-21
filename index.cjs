@@ -117,7 +117,7 @@ const loadEventHandlers = async () => {
   const eventsPath = path.join(__dirname, "events");
   const eventFiles = fs
     .readdirSync(eventsPath)
-    .filter((file) => file.endsWith(".cjs"));
+    .filter((file) => file.endsWith(".cjs") && file !== "transcription.cjs");
 
   for (const file of eventFiles) {
     try {
@@ -179,7 +179,7 @@ async function getUserStatus(userId, guildId) {
 }
 
 let DEFAULT_SOUNDS = {};
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   DEFAULT_SOUNDS = await fetchDefaultSoundboardSounds(client);
   console.log(
     `[INFO] Loaded ${Object.keys(DEFAULT_SOUNDS).length
