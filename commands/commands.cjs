@@ -187,38 +187,6 @@ async function onMessageCreate(message) {
       return;
     }
 
-    // 🚧 DM guard (interactions)
-    if (!interaction.inGuild()) {
-      try {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present.",
-            ephemeral: true,
-          });
-        } else {
-          await interaction.followUp({
-            content: "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present.",
-            ephemeral: true,
-          });
-        }
-      } catch (err) {
-        if (err.code === 50007) return; // DMs off — ignore
-        logErrorToChannel(
-          null,
-          `[DM_GUARD] Failed to send DM notice to ${interaction.user.tag}: ${err.stack || err}`,
-          interaction.client,
-          "onInteractionCreate"
-        );
-      }
-      logErrorToChannel(
-        null,
-        `[DM_GUARD] ${interaction.user.tag} tried to use an interaction in DMs.`,
-        interaction.client,
-        "onInteractionCreate"
-      );
-      return;
-    }
-
     const settings = (await getSettingsForGuild(message.guild.id)) || {};
     const prefixes = settings.prefixes ?? { slash: true, greater: true, exclamation: true };
 
@@ -311,6 +279,38 @@ async function onInteractionCreate(interaction) {
             ephemeral: false,
           });
         }
+        return;
+      }
+
+      // 🚧 DM guard (interactions)
+      if (!interaction.inGuild()) {
+        try {
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+              content: "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present.",
+              ephemeral: true,
+            });
+          } else {
+            await interaction.followUp({
+              content: "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present.",
+              ephemeral: true,
+            });
+          }
+        } catch (err) {
+          if (err.code === 50007) return; // DMs off — ignore
+          logErrorToChannel(
+            null,
+            `[DM_GUARD] Failed to send DM notice to ${interaction.user.tag}: ${err.stack || err}`,
+            interaction.client,
+            "onInteractionCreate"
+          );
+        }
+        logErrorToChannel(
+          null,
+          `[DM_GUARD] ${interaction.user.tag} tried to use an interaction in DMs.`,
+          interaction.client,
+          "onInteractionCreate"
+        );
         return;
       }
 
