@@ -45,6 +45,37 @@ const {
   updateSettingsForGuild,
 } = require("../commands/settings.cjs");
 
+const finalizingUsers = new Set();
+const FINALIZE_COOLDOWN_MS = 1500;
+const lastFinalizeAt = new Map();
+
+perUserSilenceTimer[userId] = setInterval(async () => {
+  const silenceDuration = Date.now() - (userLastSpokeTime[userId] || 0);
+  const threshold = getAverageSilenceDuration(userId) || DEFAULT_SILENCE_TIMEOUT;
+  if (silenceDuration < threshold) return;
+
+  const now = Date.now();
+  if (now - (lastFinalizeAt.get(userId) || 0) < FINALIZE_COOLDOWN_MS) return;
+  if (finalizingUsers.has(userId)) return;
+
+  clearInterval(perUserSilenceTimer[userId]);
+  delete perUserSilenceTimer[userId];
+
+  if (!currentlySpeaking.has(userId)) return;
+  currentlySpeaking.delete(userId);
+
+  finalizingUsers.add(userId);
+  lastFinalizeAt.set(userId, now);
+  try {
+    await stopUserPipeline(userId);                 // ⬅️ important
+    await finalizeUserAudio(userId, guild, unique, chanId);
+  } catch (e) {
+    console.error(`[SILENCE FINALIZE] ${userId}: ${e.message}`);
+  } finally {
+    finalizingUsers.delete(userId);
+  }
+}, 1000);
+
 // =========================================
 // TEMP FILE SAFETY CONFIG (env → inline defaults)
 // =========================================

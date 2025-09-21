@@ -10,7 +10,7 @@ const {
   getVoiceConnection,
 } = require("@discordjs/voice");
 const { EventEmitter } = require("events");
-const { finished } = require("stream/promises");
+const { finished } = require("stream");
 const prism = require("prism-media");
 const transcription = require("./transcription.cjs");
 const { interactionContexts } = require("../database/contextStore.cjs");
@@ -825,31 +825,44 @@ function audioListeningFunctions(connection, guild) {
   const userLastSpokeTime = {};
   const perUserSilenceTimer = {};
 
-  function stopUserPipeline(userId) {
+  async function stopUserPipeline(userId) {
     const p = pipelines.get(userId);
-    if (p) {
-      const { audioStream, decoder, pcmWriter, loudnessRes } = p;
+    if (!p) return;
 
+    const { audioStream, decoder, pcmWriter, loudnessRes } = p;
+    pipelines.delete(userId);
+
+    try {
+      // 1) Stop new data
       try { audioStream?.unpipe?.(decoder); } catch { }
       try { decoder?.unpipe?.(pcmWriter); } catch { }
+      try { audioStream?.pause?.(); } catch { }
 
+      // 2) Clean up loudness detector
       try { loudnessRes?.teardown?.(); } catch { }
 
-      try { audioStream?.destroy?.(); } catch { }
-      try { decoder?.destroy?.(); } catch { }
-
+      // 3) Finish writer safely
       if (pcmWriter && !pcmWriter.closed) {
+        pcmWriter.on("error", () => { }); // swallow harmless late errors
         try { pcmWriter.end(); } catch { }
+        await new Promise((res) => {
+          try { finished(pcmWriter, res); } catch { res(); }
+          setTimeout(res, 2000); // safety timeout
+        });
       }
 
-      pipelines.delete(userId);
+      // 4) Destroy remaining objects
+      try { decoder?.destroy?.(); } catch { }
+      try { audioStream?.destroy?.(); } catch { }
+    } catch (e) {
+      console.warn(`[PIPELINE STOP] user=${userId} ➜ ${e.message}`);
     }
 
+    // subscriptions + outputStreams cleanup
     if (userSubscriptions[userId]) {
       try { userSubscriptions[userId].destroy?.(); } catch { }
       delete userSubscriptions[userId];
     }
-
     if (outputStreams[userId] && !outputStreams[userId].closed) {
       try { outputStreams[userId].end(); } catch { }
     }
