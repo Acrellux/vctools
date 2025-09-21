@@ -48,6 +48,10 @@ const userJoinTimes = new Map();
 
 EventEmitter.defaultMaxListeners = 50;
 
+const finalizingUsers = new Set();                // users currently finalizing
+const lastFinalizeAt = new Map();                 // userId → timestamp
+const FINALIZE_COOLDOWN_MS = 1500;                // prevents rapid re-finalize spam
+
 /************************************************************************************************
  * GLOBALS & CONSTANTS
  ************************************************************************************************/
@@ -898,21 +902,34 @@ function audioListeningFunctions(connection, guild) {
     pipelines.set(userId, { audioStream, decoder, pcmWriter, loudnessRes });
     outputStreams[userId] = pcmWriter;
 
-    perUserSilenceTimer[userId] = setInterval(() => {
+    perUserSilenceTimer[userId] = setInterval(async () => {
       const silenceDuration = Date.now() - (userLastSpokeTime[userId] || 0);
       const threshold = getAverageSilenceDuration(userId) || DEFAULT_SILENCE_TIMEOUT;
 
       if (silenceDuration >= threshold) {
-        console.warn(
-          `[SILENCE FINALIZE] ${userId} silent for ${silenceDuration}ms (threshold: ${threshold})`
-        );
+        const now = Date.now();
+        const last = lastFinalizeAt.get(userId) || 0;
+        if (now - last < FINALIZE_COOLDOWN_MS) return;
+        if (finalizingUsers.has(userId)) return;
+
+        console.warn(`[SILENCE FINALIZE] ${userId} silent for ${silenceDuration}ms (threshold: ${threshold})`);
         clearInterval(perUserSilenceTimer[userId]);
         delete perUserSilenceTimer[userId];
 
         if (currentlySpeaking.has(userId)) {
           currentlySpeaking.delete(userId);
-          stopUserPipeline(userId);
-          finalizeUserAudio(userId, guild, unique, chanId);
+          finalizingUsers.add(userId);
+          lastFinalizeAt.set(userId, now);
+
+          try {
+            await stopUserPipeline(userId);                 // ✅ now allowed
+            await finalizeUserAudio(userId, guild, unique, chanId);
+          } catch (e) {
+            console.error(`[SILENCE FINALIZE] finalize failed for ${userId}: ${e.message}`);
+          } finally {
+            finalizingUsers.delete(userId);
+            await new Promise(r => setTimeout(r, 250));     // small grace on Windows
+          }
         }
       }
     }, 1000);
