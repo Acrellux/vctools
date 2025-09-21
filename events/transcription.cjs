@@ -44,7 +44,6 @@ const {
   getSettingsForGuild,
   updateSettingsForGuild,
 } = require("../commands/settings.cjs");
-const { forceDelete } = require("../repo/force_delete.cjs");
 
 // =========================================
 // TEMP FILE SAFETY CONFIG (env → inline defaults)
