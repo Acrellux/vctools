@@ -162,6 +162,56 @@ async function onMessageCreate(message) {
   try {
     if (message.author.bot) return;
 
+    // 🚧 DM guard
+    if (!message.guild || message.channel?.type === ChannelType.DM) {
+      try {
+        await message.channel.send(
+          "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present."
+        );
+      } catch (err) {
+        if (err.code === 50007) {
+          // user has DMs off — just ignore
+          return;
+        }
+        logErrorToChannel(
+          null,
+          `[DM_GUARD] Failed to send DM notice to ${message.author.tag}: ${err.stack || err}`,
+          message.client,
+          "onMessageCreate"
+        );
+      }
+      return;
+    }
+
+    // 🚧 DM guard (interactions)
+    if (!interaction.guild) {
+      try {
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present.",
+            ephemeral: true,
+          });
+        } else {
+          await interaction.followUp({
+            content: "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present.",
+            ephemeral: true,
+          });
+        }
+      } catch (err) {
+        if (err.code === 50007) {
+          // user has DMs off — just ignore
+          return;
+        }
+        logErrorToChannel(
+          null,
+          `[DM_GUARD] Failed to send DM notice to ${interaction.user.tag}: ${err.stack || err}`,
+          interaction.client,
+          "onInteractionCreate"
+        );
+      }
+      return;
+    }
+
     const settings = (await getSettingsForGuild(message.guild.id)) || {};
     const prefixes = settings.prefixes ?? { slash: true, greater: true, exclamation: true };
 
@@ -312,7 +362,7 @@ async function onInteractionCreate(interaction) {
         const action = parts[1];
         return handleVCSettingsFlow(interaction, action);
       }
-      
+
       if (interaction.customId.startsWith("help:")) return;
 
       // report + activity buttons → open the modal
