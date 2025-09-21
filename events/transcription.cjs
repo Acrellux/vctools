@@ -371,14 +371,14 @@ async function processQueue() {
     );
     resolve(transcriptionText);
     // Always attempt to delete the WAV after processing (success case)
-    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 500);
+    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 5000);
   } catch (err) {
     console.error(
       `[QUEUE] Error processing audio for user ${userId}: ${err.message}`
     );
     reject(err);
     // Also try to delete the WAV even if transcription failed
-    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 500);
+    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 5000);
   } finally {
     inUsePaths.delete(path.resolve(wavFilePath));
     isProcessing = false;
@@ -586,7 +586,7 @@ async function convertOpusToWav(pcmPath, wavFilePath) {
           inUsePaths.delete(path.resolve(pcmPath));
           // Release WAV lock here; processQueue re-adds it when used via that flow
           inUsePaths.delete(path.resolve(wavFilePath));
-        }, 500);
+        }, 5000);
         resolve();
       })
       .on("error", (error) => {
@@ -596,7 +596,7 @@ async function convertOpusToWav(pcmPath, wavFilePath) {
           safeDeleteFile(pcmPath).catch(() => { });
           inUsePaths.delete(path.resolve(pcmPath));
           inUsePaths.delete(path.resolve(wavFilePath));
-        }, 500);
+        }, 5000);
         reject(error);
       });
   });
