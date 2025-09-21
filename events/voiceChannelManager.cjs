@@ -51,7 +51,6 @@ EventEmitter.defaultMaxListeners = 50;
 const finalizingUsers = new Set();                // users currently finalizing
 const lastFinalizeAt = new Map();                 // userId → timestamp
 const FINALIZE_COOLDOWN_MS = 1500;                // prevents rapid re-finalize spam
-const perUserSilenceTimer = {};
 
 /************************************************************************************************
  * GLOBALS & CONSTANTS

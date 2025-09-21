@@ -48,6 +48,7 @@ const {
 const finalizingUsers = new Set();
 const FINALIZE_COOLDOWN_MS = 1500;
 const lastFinalizeAt = new Map();
+const perUserSilenceTimer = {};
 
 perUserSilenceTimer[userId] = setInterval(async () => {
   const silenceDuration = Date.now() - (userLastSpokeTime[userId] || 0);
