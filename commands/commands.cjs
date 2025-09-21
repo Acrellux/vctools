@@ -4,6 +4,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelType,
   Message,
   Interaction,
   ComponentType,
@@ -162,17 +163,14 @@ async function onMessageCreate(message) {
   try {
     if (message.author.bot) return;
 
-    // 🚧 DM guard
-    if (!message.guild || message.channel?.type === ChannelType.DM) {
+    // 🚧 DM guard (messages)
+    if (!message.inGuild()) {
       try {
         await message.channel.send(
           "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present."
         );
       } catch (err) {
-        if (err.code === 50007) {
-          // user has DMs off — just ignore
-          return;
-        }
+        if (err.code === 50007) return; // DMs off — ignore
         logErrorToChannel(
           null,
           `[DM_GUARD] Failed to send DM notice to ${message.author.tag}: ${err.stack || err}`,
@@ -180,11 +178,17 @@ async function onMessageCreate(message) {
           "onMessageCreate"
         );
       }
+      logErrorToChannel(
+        null,
+        `[DM_GUARD] ${message.author.tag} tried to use a command in DMs: "${message.content}"`,
+        message.client,
+        "onMessageCreate"
+      );
       return;
     }
 
     // 🚧 DM guard (interactions)
-    if (!interaction.guild) {
+    if (!interaction.inGuild()) {
       try {
         if (!interaction.replied && !interaction.deferred) {
           await interaction.reply({
@@ -198,10 +202,7 @@ async function onMessageCreate(message) {
           });
         }
       } catch (err) {
-        if (err.code === 50007) {
-          // user has DMs off — just ignore
-          return;
-        }
+        if (err.code === 50007) return; // DMs off — ignore
         logErrorToChannel(
           null,
           `[DM_GUARD] Failed to send DM notice to ${interaction.user.tag}: ${err.stack || err}`,
@@ -209,6 +210,12 @@ async function onMessageCreate(message) {
           "onInteractionCreate"
         );
       }
+      logErrorToChannel(
+        null,
+        `[DM_GUARD] ${interaction.user.tag} tried to use an interaction in DMs.`,
+        interaction.client,
+        "onInteractionCreate"
+      );
       return;
     }
 
