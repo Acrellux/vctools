@@ -165,25 +165,6 @@ async function onMessageCreate(message) {
 
     // 🚧 DM guard (messages)
     if (!message.inGuild()) {
-      try {
-        await message.channel.send(
-          "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present."
-        );
-      } catch (err) {
-        if (err.code === 50007) return; // DMs off — ignore
-        logErrorToChannel(
-          null,
-          `[DM_GUARD] Failed to send DM notice to ${message.author.tag}: ${err.stack || err}`,
-          message.client,
-          "onMessageCreate"
-        );
-      }
-      logErrorToChannel(
-        null,
-        `[DM_GUARD] ${message.author.tag} tried to use a command in DMs: "${message.content}"`,
-        message.client,
-        "onMessageCreate"
-      );
       return;
     }
 
@@ -284,33 +265,6 @@ async function onInteractionCreate(interaction) {
 
       // 🚧 DM guard (interactions)
       if (!interaction.inGuild()) {
-        try {
-          if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({
-              content: "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present.",
-              ephemeral: true,
-            });
-          } else {
-            await interaction.followUp({
-              content: "> <❇️> You’re in DMs. VC Tools commands only work in servers.\n-# > Please run this in a server channel where VC Tools is present.",
-              ephemeral: true,
-            });
-          }
-        } catch (err) {
-          if (err.code === 50007) return; // DMs off — ignore
-          logErrorToChannel(
-            null,
-            `[DM_GUARD] Failed to send DM notice to ${interaction.user.tag}: ${err.stack || err}`,
-            interaction.client,
-            "onInteractionCreate"
-          );
-        }
-        logErrorToChannel(
-          null,
-          `[DM_GUARD] ${interaction.user.tag} tried to use an interaction in DMs.`,
-          interaction.client,
-          "onInteractionCreate"
-        );
         return;
       }
 
