@@ -751,7 +751,7 @@ client.on(Events.GuildCreate, async (guild) => {
   }
 });
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`[INFO] Successfully logged in as ${client.user.tag}`);
   client.user.setPresence({ status: "idle" });
   console.log("Presence set to idle.");

@@ -18,7 +18,7 @@ if (!userId) {
   process.exit(1);
 }
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   
   try {
