@@ -167,6 +167,20 @@ const initiateLoudnessWarning = async (
     rate: 48000,
   });
 
+  opusDecoderForLoudness.on("error", (err) => {
+    console.warn(`[LOUDNESS] decoder error for ${userId}: ${err.message} (tearing down loudness branch)`);
+    try { audioStream.unpipe(opusDecoderForLoudness); } catch { }
+    try { loudnessDetector.destroy(); } catch { }
+    try { opusDecoderForLoudness.destroy(); } catch { }
+  });
+
+  audioStream.on("error", (err) => {
+    console.warn(`[LOUDNESS] source stream error for ${userId}: ${err.message}`);
+    try { audioStream.unpipe(opusDecoderForLoudness); } catch { }
+    try { loudnessDetector.destroy(); } catch { }
+    try { opusDecoderForLoudness.destroy(); } catch { }
+  });
+
   // Track *activity* using source data (fixes RMS-event bug)
   let lastActiveTime = Date.now();
   const onData = () => {
@@ -907,11 +921,44 @@ function audioListeningFunctions(connection, guild) {
       channels: 1,
       rate: 48000,
     });
+
+    // guard everything with local helpers
+    const closePipeline = async (reason) => {
+      console.warn(`[DECODE GUARD] user=${userId} closing pipeline: ${reason}`);
+      try { audioStream?.unpipe?.(decoder); } catch { }
+      try { decoder?.unpipe?.(pcmWriter); } catch { }
+      try { pcmWriter?.end?.(); } catch { }
+      try { pcmWriter?.destroy?.(); } catch { }
+      try { decoder?.destroy?.(); } catch { }
+      try { audioStream?.destroy?.(); } catch { }
+    };
+
+    decoder.on("error", async (err) => {
+      // swallow common Opus corruption from the network and finalize safely
+      console.warn(`[OPUS] decoder error for ${userId}: ${err.message}`);
+      await closePipeline("decoder_error");
+      // best-effort finalize whatever we captured so far
+      const member = guild.members.cache.get(userId);
+      const chanId = member?.voice?.channel?.id || null;
+      try { await finalizeUserAudio?.(userId, guild, unique, chanId); } catch { }
+    });
+
+    audioStream.on("error", async (err) => {
+      console.warn(`[STREAM] audio stream error for ${userId}: ${err.message}`);
+      await closePipeline("stream_error");
+    });
+
+    pcmWriter.on("error", (err) => {
+      // write errors should never crash the process
+      console.warn(`[PCM WRITE] ${userId}: ${err.message}`);
+    });
+
     try {
       audioStream.pipe(decoder).pipe(pcmWriter);
     } catch (err) {
       console.warn(`[PIPE ERROR] ${err.message}`);
     }
+
     pipelines.set(userId, { audioStream, decoder, pcmWriter, loudnessRes });
     outputStreams[userId] = pcmWriter;
 

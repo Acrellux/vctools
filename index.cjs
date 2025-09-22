@@ -35,6 +35,12 @@ try {
   process.on("SIGINT", () => { cleanup(); process.exit(); });
   process.on("SIGTERM", () => { cleanup(); process.exit(); });
   process.on("uncaughtException", (err) => {
+    const msg = (err && (err.stack || err.message)) || String(err || "");
+    if (/compressed data.*corrupted|opus.*corrupt/i.test(msg)) {
+      console.warn("[LOCK] Swallowed Opus corruption during lock phase:", msg);
+      // IMPORTANT: do NOT cleanup+exit here; allow the process to continue.
+      return;
+    }
     console.error("[LOCK] Uncaught exception:", err?.stack || err);
     cleanup();
     process.exit(1);
@@ -191,6 +197,11 @@ client.once("clientReady", async () => {
 function isTransientError(err) {
   const msg = (err && (err.stack || err.message)) || String(err || "");
   return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|fetch failed|discord\.media/i.test(msg);
+}
+
+function isOpusCorruption(err) {
+  const msg = (err && (err.stack || err.message)) || String(err || "");
+  return /compressed data.*corrupted|opus.*corrupt/i.test(msg);
 }
 
 /**
@@ -924,6 +935,10 @@ process.on("unhandledRejection", async (reason) => {
 });
 
 process.on("uncaughtException", async (error) => {
+  if (isOpusCorruption(error)) {
+    console.warn("[GLOBAL] Swallowed Opus corruption crash:", error.message || error);
+    return; // prevent process exit for this known transient
+  }
   if (isTransientError(error)) {
     console.warn("[WARN] Transient uncaughtException suppressed:", error.message);
     return;
