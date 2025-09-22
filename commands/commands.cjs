@@ -156,6 +156,38 @@ async function safeChannelNotify(interaction, content) {
   } catch (_) { }
 }
 
+/** Send with graceful fallback when missing perms */
+async function safeSend(channel, payload) {
+  // Normalize and strip non-Discord fields before sending
+  const isString = typeof payload === "string";
+  const { interaction, ...messageOptions } =
+    isString ? { content: payload } : (payload || {});
+
+  try {
+    return await channel.send(messageOptions);
+  } catch (err) {
+    if (err?.code === 50013) { // Missing Permissions
+      try {
+        if (interaction) {
+          if (!interaction.deferred && !interaction.replied) {
+            await interaction.reply({
+              content: "> <❌> Missing permissions. Extra permissions are required.",
+              ephemeral: true,
+            });
+          } else {
+            await interaction.followUp({
+              content: "> <❌> Missing permissions. Extra permissions are required.",
+              ephemeral: true,
+            });
+          }
+        }
+      } catch (_) { /* noop */ }
+      return null;
+    }
+    throw err;
+  }
+}
+
 /* =============================
    MESSAGE-BASED COMMAND ROUTING
 ============================= */
@@ -233,9 +265,7 @@ async function onMessageCreate(message) {
       message.client,
       "onMessageCreate"
     );
-    await message.channel.send(
-      "> <❌> An unexpected error occurred processing your message."
-    );
+    await safeSend(message.channel, "> <❌> An unexpected error occurred processing your message.");
   }
 }
 
