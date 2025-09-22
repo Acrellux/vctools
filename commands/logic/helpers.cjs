@@ -13,8 +13,8 @@ const { getSettingsForGuild } = require("../settings.cjs");
  * Use anywhere that used `requiredManagerPermissions`.
  */
 async function requiredManagerPermissions(interactionOrMessage) {
-  const guild = interactionOrMessage.guild;
-  const member = interactionOrMessage.member;
+  const guild = interactionOrMessage?.guild;
+  const member = interactionOrMessage?.member;
   if (!guild || !member) return false;
 
   const settings = (await getSettingsForGuild(guild.id)) || {};
@@ -23,63 +23,106 @@ async function requiredManagerPermissions(interactionOrMessage) {
   return (
     guild.ownerId === member.id ||
     member.permissions?.has?.(PermissionsBitField.Flags.Administrator) ||
-    (adminRoleId ? member.roles.cache.has(adminRoleId) : false)
+    (adminRoleId ? member.roles?.cache?.has?.(adminRoleId) : false)
   );
 }
 
 /**
- * Logs an error message to the configured error logs channel.
- * @param {string} guildId - The guild ID.
- * @param {string} errorMessage - The error message or stack trace.
- * @param {import("discord.js").Client} client - The Discord client.
- * @param {string} [context="General"] - Optional context.
+ * Robust error logger that will never crash your app.
+ * - Pre-checks perms on the log channel
+ * - Falls back to the invoking context (message/interaction) ephemerally
+ * - Censors local Windows paths for safety
+ *
+ * @param {string} guildId
+ * @param {string|Error} errorMessage
+ * @param {import('discord.js').Client} client
+ * @param {string} [context="General"]
+ * @param {import('discord.js').Message|import('discord.js').Interaction} [ctx]
  */
-function logErrorToChannel(guildId, errorMessage, client, context = "General") {
-  if (!guildId || !client) {
-    console.error("[ERROR] Missing guildId or client.");
-    return;
+async function logErrorToChannel(guildId, errorMessage, client, context = "General", ctx) {
+  try {
+    if (!guildId || !client) {
+      console.error("[ERROR] Missing guildId or client.");
+      return;
+    }
+
+    const settings = (await getSettingsForGuild(guildId)) || {};
+    const channelId = settings.errorLogsChannelId;
+    if (!channelId) {
+      console.error(`[ERROR] ${context}: ${String(errorMessage)}`);
+      return;
+    }
+
+    const guild =
+      client.guilds.cache.get(guildId) || (await client.guilds.fetch(guildId).catch(() => null));
+    if (!guild) {
+      console.error("[ERROR] Guild not found.");
+      return;
+    }
+
+    const channel =
+      guild.channels.cache.get(channelId) || (await guild.channels.fetch(channelId).catch(() => null));
+    if (!channel) {
+      console.error("[ERROR] Error logs channel not found in guild.");
+      return;
+    }
+
+    // Pre-check permissions to avoid 50013 spam
+    const mePerms = channel.permissionsFor?.(guild.members.me);
+    const canSend =
+      !!mePerms &&
+      mePerms.has(PermissionsBitField.Flags.ViewChannel) &&
+      mePerms.has(PermissionsBitField.Flags.SendMessages);
+
+    // SAFELY replace only the path root(s)
+    const raw = String(errorMessage?.stack || errorMessage || "");
+    const censoredErrorMessage = raw.replaceAll(/C:\\Users\\[^\\]+\\/g, "C:\\Users\\Server\\");
+    let content = `> **Error in ${context}:**\n\`\`\`\n${censoredErrorMessage}\n\`\`\``;
+
+    if (content.length > 1900) {
+      const shortError = censoredErrorMessage.split("\n").slice(0, 40).join("\n");
+      content = `> **Error in ${context} (truncated):**\n\`\`\`\n${shortError}\n...\n\`\`\``;
+    }
+
+    if (canSend && channel.type === ChannelType.GuildText) {
+      await channel.send({ content }).catch(() => { });
+      return;
+    }
+
+    // Fallback: inform the invoker ephemerally if we can
+    if (ctx) {
+      try {
+        // Message context
+        if ("reply" in ctx && ctx.reply) {
+          await ctx.reply({
+            content:
+              "> <❌> I can’t write to the configured error-log channel. Ask an admin to grant me **View Channel** and **Send Messages**.",
+            allowedMentions: { parse: [] },
+          }).catch(() => { });
+        } else {
+          // Interaction context
+          if (!ctx.replied && !ctx.deferred) {
+            await ctx.reply({
+              content:
+                "> <❌> I can’t write to the configured error-log channel. Ask an admin to grant me **View Channel** and **Send Messages**.",
+              ephemeral: true,
+            }).catch(() => { });
+          } else {
+            await ctx.followUp({
+              content:
+                "> <❌> I can’t write to the configured error-log channel. Ask an admin to grant me **View Channel** and **Send Messages**.",
+              ephemeral: true,
+            }).catch(() => { });
+          }
+        }
+      } catch { }
+    }
+
+    // Always leave a breadcrumb in console
+    console.warn(`[LOG ERROR] Missing perms to post in ${channelId} (${context})`);
+  } catch (e) {
+    console.warn(`[LOG ERROR] ${e.message}`);
   }
-
-  getSettingsForGuild(guildId)
-    .then(async (settings) => {
-      if (!settings || !settings.errorLogsChannelId) {
-        console.error(`[ERROR] ${context}: ${errorMessage}`);
-        return;
-      }
-
-      const guild = client.guilds.cache.get(guildId);
-      if (!guild) {
-        console.error("[ERROR] Guild not found.");
-        return;
-      }
-
-      const channel = guild.channels.cache.get(settings.errorLogsChannelId);
-      if (!channel) {
-        console.error("[ERROR] Error logs channel not found in guild.");
-        return;
-      }
-
-      // SAFELY replace only the path root
-      const censoredErrorMessage = String(errorMessage).replaceAll(
-        /C:\\Users\\[^\\]+\\/g,
-        "C:\\Users\\Server\\"
-      );
-
-      const formattedError = `> **Error in ${context}:**\n\`\`\`\n${censoredErrorMessage}\n\`\`\``;
-
-      // If error is too big (Discord limit 2000 characters), shorten it
-      if (formattedError.length > 1900) {
-        const shortError = censoredErrorMessage.split("\n").slice(0, 10).join("\n");
-        await channel
-          .send(`> **Error in ${context} (truncated):**\n\`\`\`\n${shortError}\n...\n\`\`\``)
-          .catch(console.error);
-      } else {
-        await channel.send(formattedError).catch(console.error);
-      }
-    })
-    .catch((err) => {
-      console.error(`[ERROR] Failed to retrieve settings for logging:`, err);
-    });
 }
 
 /** Utility: clamp 1..25 for select menus */
@@ -158,9 +201,6 @@ function createErrorLogchannelIdropdown(mode, guild, userId, currentchannelId) {
 /**
  * Role dropdown used by multiple flows.
  * @param {string} customId - MUST be unique within the message (e.g., "bot:select-admin-role:<userId>")
- * @param {import('discord.js').Guild} guild
- * @param {string} userId
- * @param {string|null} currentRoleId
  */
 function createRoleDropdown(customId, guild, userId, currentRoleId) {
   const options = guild.roles.cache
@@ -180,7 +220,7 @@ function createRoleDropdown(customId, guild, userId, currentRoleId) {
 
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId(String(customId)) // <-- use the provided ID
+      .setCustomId(String(customId))
       .setPlaceholder("Select a role…")
       .setMinValues(1)
       .setMaxValues(max)
