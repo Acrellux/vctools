@@ -121,6 +121,87 @@ const {
 
 const inflightConsent = new Set();
 
+/* =============================
+    ERROR FLOOD GUARD
+   - Per-channel cooldown: at most 1 public error notice every COOL_DOWN_MS
+   - Global circuit breaker: if too many errors quickly, mute ALL public notices
+     and only log to the error-logs channel with a summary.
+============================= */
+
+const ERROR_GUARD = {
+  // Tunables (adjust as needed)
+  COOL_DOWN_MS: 3 * 60 * 1000,     // one public notice per channel every 3 minutes
+  GLOBAL_WINDOW_MS: 30 * 1000,     // consider errors over a 30s window
+  GLOBAL_TRIP_THRESHOLD: 15,       // >=15 errors in window → trip breaker
+  GLOBAL_MUTE_MS: 15 * 60 * 1000,  // mute public notices for 15 minutes
+
+  perChannelNextAllowed: new Map(), // channelId -> timestamp (ms)
+  globalWindow: { start: Date.now(), count: 0 },
+  globalMuteUntil: 0,
+  trippedOnceThisMute: false,
+
+  _now() { return Date.now(); },
+
+  _refillGlobalWindow() {
+    const now = this._now();
+    if (now - this.globalWindow.start > this.GLOBAL_WINDOW_MS) {
+      this.globalWindow.start = now;
+      this.globalWindow.count = 0;
+      this.trippedOnceThisMute = false;
+    }
+  },
+
+  _maybeTrip(messageOrInteraction, client, guildId, contextLabel, errStackForLog) {
+    this._refillGlobalWindow();
+    this.globalWindow.count += 1;
+
+    if (this.globalWindow.count >= this.GLOBAL_TRIP_THRESHOLD && this._now() > this.globalMuteUntil) {
+      // Trip the breaker
+      this.globalMuteUntil = this._now() + this.GLOBAL_MUTE_MS;
+      this.trippedOnceThisMute = false; // allow one summary log
+
+      // Best-effort summary to error logs channel
+      try {
+        const details = [
+          `Circuit breaker TRIPPED in ${contextLabel}`,
+          `Errors in last ${Math.round(this.GLOBAL_WINDOW_MS / 1000)}s: ${this.globalWindow.count}`,
+          `Muting public error notices for ${Math.round(this.GLOBAL_MUTE_MS / 60000)} minutes.`,
+          errStackForLog ? `Last error:\n${String(errStackForLog).slice(0, 1200)}` : null,
+        ].filter(Boolean).join("\n");
+        logErrorToChannel(guildId, details, client, "ERROR_FLOOD_GUARD");
+      } catch (_) { /* noop */ }
+    }
+  },
+
+  canNotifyPublic(channelId) {
+    const now = this._now();
+    if (now < this.globalMuteUntil) return false; // globally muted
+
+    const nextAllowed = this.perChannelNextAllowed.get(channelId) || 0;
+    if (now < nextAllowed) return false;
+
+    this.perChannelNextAllowed.set(channelId, now + this.COOL_DOWN_MS);
+    return true;
+  },
+
+  recordError({ messageOrInteraction, client, contextLabel, err }) {
+    const guildId = messageOrInteraction.guild?.id ?? null;
+    this._maybeTrip(messageOrInteraction, client, guildId, contextLabel, err?.stack || String(err));
+
+    // If globally muted and we haven't emitted a summary during this mute, emit once.
+    if (this._now() < this.globalMuteUntil && !this.trippedOnceThisMute) {
+      this.trippedOnceThisMute = true;
+      try {
+        const details = [
+          `Public error notices are currently MUTED by circuit breaker (${contextLabel}).`,
+          `They will resume around <t:${Math.floor(this.globalMuteUntil / 1000)}:t>.`,
+        ].join("\n");
+        logErrorToChannel(guildId, details, client, "ERROR_FLOOD_GUARD");
+      } catch (_) { /* noop */ }
+    }
+  }
+};
+
 /** Replace only the consent:grant button in the given message's components */
 function replaceConsentButton(msgLike, transformFn) {
   const rows = msgLike.components ?? [];
@@ -158,7 +239,6 @@ async function safeChannelNotify(interaction, content) {
 
 /** Send with graceful fallback when missing perms */
 async function safeSend(channel, payload) {
-  // Normalize and strip non-Discord fields before sending
   const isString = typeof payload === "string";
   const { interaction, ...messageOptions } =
     isString ? { content: payload } : (payload || {});
@@ -186,6 +266,19 @@ async function safeSend(channel, payload) {
     }
     throw err;
   }
+}
+
+/** Public error notice that is fully guarded against spam */
+async function guardedPublicErrorNotice(message, content) {
+  try {
+    if (!message?.channel) return;
+    if (!ERROR_GUARD.canNotifyPublic(message.channel.id)) return;
+
+    // Optionally auto-delete shortly after:
+    // const sent = await safeSend(message.channel, content);
+    // setTimeout(() => sent?.delete().catch(()=>{}), 10_000);
+    await safeSend(message.channel, content);
+  } catch (_) { /* never throw from guard */ }
 }
 
 /* =============================
@@ -265,7 +358,19 @@ async function onMessageCreate(message) {
       message.client,
       "onMessageCreate"
     );
-    await safeSend(message.channel, "> <❌> An unexpected error occurred processing your message.");
+
+    // Count toward guard and rate-limit any public notice
+    ERROR_GUARD.recordError({
+      messageOrInteraction: message,
+      client: message.client,
+      contextLabel: "onMessageCreate",
+      err: error
+    });
+
+    await guardedPublicErrorNotice(
+      message,
+      "> <❌> An unexpected error occurred. The team has been notified."
+    );
   }
 }
 
@@ -349,7 +454,6 @@ async function onInteractionCreate(interaction) {
       // VC settings UI (buttons + role select)
       if (interaction.customId.startsWith("vcsettings:")) {
         const parts = interaction.customId.split(":");
-        // e.g. "vcsettings:toggle-mod-auto-route:<userId>"
         const action = parts[1];
         return handleVCSettingsFlow(interaction, action);
       }
@@ -409,9 +513,7 @@ async function onInteractionCreate(interaction) {
             btn => btn.setLabel("Processing…").setStyle(ButtonStyle.Secondary).setDisabled(true)
           );
 
-          // For component interactions, editReply() edits the original message
           await interaction.editReply({ components: processingRows }).catch(async (err) => {
-            // Fallback to message.edit if token is in a weird state
             if (interaction.message?.editable) {
               await interaction.message.edit({ components: processingRows }).catch(() => { });
             } else {
@@ -445,7 +547,6 @@ async function onInteractionCreate(interaction) {
 
         } catch (err) {
           const msg = String(err?.message || err);
-          // If the token was somehow invalid/late, fall back to a channel notice
           if (msg.includes("Unknown interaction") || msg.includes("already been acknowledged")) {
             await safeChannelNotify(interaction, "> That button expired or was already used. Try again.");
           } else {
@@ -494,8 +595,7 @@ async function onInteractionCreate(interaction) {
         return showNotifyList(interaction);
       }
 
-      // init flows (routes any init mode; protects by owner; seeds context if missing)
-      // watchdog auto-acks slow handlers to avoid the "This interaction failed" toast
+      // init flows
       if (interaction.customId.startsWith("init:")) {
         const parts = interaction.customId.split(":"); // e.g. ["init","setup_transcription_yes","1234567890"]
         const action = parts[1];
@@ -567,6 +667,15 @@ async function onInteractionCreate(interaction) {
       interaction.client,
       "onInteractionCreate"
     );
+
+    // Count toward breaker; interactions never post public errors
+    ERROR_GUARD.recordError({
+      messageOrInteraction: interaction,
+      client: interaction.client,
+      contextLabel: "onInteractionCreate",
+      err: error
+    });
+
     if (!interaction.replied) {
       await interaction.reply({
         content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
