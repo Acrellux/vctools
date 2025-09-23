@@ -504,6 +504,9 @@ async function execute(oldState, newState, client) {
   // ───────────────────────────────────────────────────────────────────────────
   // Case 2: User joined a channel
   // ───────────────────────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  // Case 2: User joined a channel
+  // ───────────────────────────────────────────────────────────────────────────
   if (!oldState.channelId && newState.channelId) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
     userJoinTimes.set(userId, Date.now());
@@ -516,6 +519,19 @@ async function execute(oldState, newState, client) {
     let connection = getVoiceConnection(guild.id);
     if (connection) {
       audioListeningFunctions(connection, guild);
+    }
+
+    // ✅ Safe user bypass (skip consent prompt & skip auto-muting)
+    if (settings.safeUsers?.includes(userId)) {
+      console.log(`[CONSENT] ${userId} is a safe user; skipping consent & muting.`);
+      try {
+        if (newState.serverMute) {
+          await newState.setMute(false, "Safe user bypasses consent.");
+        }
+      } catch (err) {
+        console.error(`[ERROR] Failed to unmute safe user ${userId}: ${err.message}`);
+      }
+      return;
     }
 
     // Consent flow
