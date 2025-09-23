@@ -113,8 +113,9 @@ const initiateLoudnessWarning = async (
   guild,
   updateTimestamp
 ) => {
-  const settings = await getSettingsForGuild(guild.id);
-  if (settings.safeUsers && settings.safeUsers.includes(userId)) {
+  // ✅ Null-safe settings
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  if (settings.safeUsers?.includes?.(userId)) {
     console.log(`[INFO] User ${userId} is a safe user. Skipping loudness detection.`);
     return null;
   }
@@ -136,7 +137,7 @@ const initiateLoudnessWarning = async (
 
     console.log(`*** WARNING: User ${uid} is too loud (RMS: ${rms}) ***`);
 
-    const s = await getSettingsForGuild(guild.id);
+    const s = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
     const roleId = s.notifyLoudUser ? s.voiceCallPingRoleId : null;
 
     try {
@@ -193,9 +194,7 @@ const initiateLoudnessWarning = async (
   const quietTimer = setInterval(() => {
     const silentDuration = Date.now() - lastActiveTime;
     if (silentDuration >= QUIET_TIMEOUT_MS) {
-      console.warn(
-        `[QUIET FINALIZE] ${userId} silent (low activity) for ${silentDuration}ms`
-      );
+      console.warn(`[QUIET FINALIZE] ${userId} silent (low activity) for ${silentDuration}ms`);
       teardown();
     }
   }, 1000);
@@ -784,7 +783,7 @@ async function moveToChannel(targetChannel, connection, guild, client) {
 }
 
 async function joinChannel(client, channelId, guild) {
-  const settings = await getSettingsForGuild(guild.id);
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
   if ((settings.safeChannels || []).includes(channelId)) {
     console.log(`[INFO] Channel ${channelId} is in safeChannels. Not joining.`);
     return null;
@@ -903,9 +902,11 @@ function audioListeningFunctions(connection, guild) {
   receiver.speaking.on("start", async (userId) => {
     if (currentlySpeaking.has(userId)) return;
 
-    const settings = await getSettingsForGuild(guild.id);
+    // ✅ Null-safe settings
+    const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
     if (!settings.transcriptionEnabled) return;
-    if (settings.safeUsers?.includes(userId)) return;
+    if (settings.safeUsers?.includes?.(userId)) return;
+
     const member = guild.members.cache.get(userId);
     const chanId = member?.voice?.channel?.id;
     if ((settings.safeChannels || []).includes(chanId)) return;
