@@ -375,14 +375,14 @@ async function processQueue() {
     );
     resolve(transcriptionText);
     // Always attempt to delete the WAV after processing (success case)
-    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 5000);
+    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 10000);
   } catch (err) {
     console.error(
       `[QUEUE] Error processing audio for user ${userId}: ${err.message}`
     );
     reject(err);
     // Also try to delete the WAV even if transcription failed
-    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 5000);
+    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 10000);
   } finally {
     inUsePaths.delete(path.resolve(wavFilePath));
     isProcessing = false;

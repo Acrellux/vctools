@@ -4,7 +4,7 @@
   "Comments": {
     "Why does this file exist?": "This list is for words that do not need to be censored when servers enable the \"moderate\" filter.",
 
-    "What's below": "This extra  are words that don't need to be censored when using the \"moderate\" filter, but should be censored when using the \"strict\" filter.",
+    "What's below": "Below are words that will not be censored when using the \"moderate\" filter, but will be censored when using the \"strict\" filter.",
 
     " ''Nipple'', ''nipples'' ": "While nipple can be used in a sexual way, it's a body term that can become a false positive when the conversation is about body parts.",
     " ''Piss'', ''pissing'' ": "While piss is known as a vulgar term, it doesn't need to be in the moderate list.",
@@ -18,6 +18,7 @@
     "bitch",
     "bitches",
     "bullshit",
+    "busty",
     "butt",
     "buttocks",
     "damn",
@@ -29,6 +30,7 @@
     "nipples",
     "piss",
     "pissing",
+    "playboy",
     "sexy",
     "shit",
     "shitty",
