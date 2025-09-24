@@ -503,9 +503,6 @@ async function execute(oldState, newState, client) {
   // ───────────────────────────────────────────────────────────────────────────
   // Case 2: User joined a channel
   // ───────────────────────────────────────────────────────────────────────────
-  // ───────────────────────────────────────────────────────────────────────────
-  // Case 2: User joined a channel
-  // ───────────────────────────────────────────────────────────────────────────
   if (!oldState.channelId && newState.channelId) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
     userJoinTimes.set(userId, Date.now());
@@ -520,8 +517,17 @@ async function execute(oldState, newState, client) {
       audioListeningFunctions(connection, guild);
     }
 
-    // ✅ Safe user bypass (skip consent prompt & skip auto-muting)
-    if (settings.safeUsers?.includes(userId)) {
+    // ---- Fresh settings just before consent logic (null-safe) ----
+    const freshSettings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+
+    // Normalize safeUsers to string IDs (defensive)
+    const safeUsersArr = Array.isArray(freshSettings.safeUsers)
+      ? freshSettings.safeUsers.map((x) => String(x))
+      : [];
+    const isSafeUser = safeUsersArr.includes(String(userId));
+
+    // ✅ Safe user bypass (skip consent & muting)
+    if (isSafeUser) {
       console.log(`[CONSENT] ${userId} is a safe user; skipping consent & muting.`);
       try {
         if (newState.serverMute) {
@@ -533,8 +539,15 @@ async function execute(oldState, newState, client) {
       return;
     }
 
-    // Consent flow
-    const hasConsent = await hasUserConsented(userId);
+    // ---- Consent flow (treat errors as no-consent) ----
+    let hasConsent = false;
+    try {
+      hasConsent = !!(await hasUserConsented(userId));
+    } catch (e) {
+      console.warn(`[CONSENT] hasUserConsented failed for ${userId}: ${e?.message || e}`);
+      hasConsent = false; // default to requiring consent
+    }
+
     if (hasConsent) {
       try {
         if (newState.serverMute) {
@@ -553,7 +566,6 @@ async function execute(oldState, newState, client) {
 
       interactionContexts.set(userId, { guildId: guild.id, mode: "consent" });
 
-      const freshSettings = await getSettingsForGuild(guild.id);
       const member = newState.member;
       const dest = await resolveConsentDestination(guild, member, freshSettings);
 
@@ -576,7 +588,8 @@ async function execute(oldState, newState, client) {
       try {
         await newState.setMute(true, "Awaiting transcription consent.");
       } catch (err) {
-        console.error(`[ERROR] Failed to mute user ${userId}: ${err.message}`);
+        // If the bot lacks permission, log loudly so you catch it
+        console.error(`[ERROR] Failed to mute user ${userId} (no consent): ${err.message}`);
       }
     }
     return;
