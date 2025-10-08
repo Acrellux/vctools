@@ -346,35 +346,60 @@ async function detectUserActivityChanges(oldState, newState) {
   const buildLog = (msg) =>
     `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
 
-  // 1) Forced disconnect (VC kick)
-  if (oldState.channelId && !newState.channelId) {
-    let forciblyDisconnected = false;
-    let executor = "Unknown";
-    try {
-      const fetchedLogs = await guild.fetchAuditLogs({
-        limit: 1,
-        type: AuditLogEvent.GuildMemberDisconnect,
-      });
-      const auditEntry = fetchedLogs.entries.first();
-      if (
-        auditEntry?.target?.id === userId &&
-        Date.now() - auditEntry.createdTimestamp < 5000
-      ) {
-        forciblyDisconnected = true;
-        executor = auditEntry.executor?.tag ?? "Unknown";
-      }
-    } catch (error) {
-      console.error("[AUDIT LOG ERROR]", error);
-    }
-    if (forciblyDisconnected) {
-      const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} was disconnected by ${ansi.white}${executor}${ansi.darkGray}.`;
+  // ---- NEW: Join / Move / Leave logs (normal cases) ----
+  const oldChan = oldState.channelId ? guild.channels.cache.get(oldState.channelId) : null;
+  const newChan = newState.channelId ? guild.channels.cache.get(newState.channelId) : null;
+  const oldId = oldChan?.id || null;
+  const newId = newChan?.id || null;
+
+  // only log when the channel actually changed (including joins/leaves)
+  if (oldId !== newId) {
+    if (oldChan && newChan) {
+      // moved channels
+      const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} moved from ${ansi.white}#${oldChan.name}${ansi.darkGray} to ${ansi.white}#${newChan.name}${ansi.darkGray}.`;
       await activityChannel.send(buildLog(logMsg)).catch(console.error);
+      // continue to other activity checks after this (no return)
+    } else if (!oldChan && newChan) {
+      // joined a channel
+      const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} joined ${ansi.white}#${newChan.name}${ansi.darkGray}.`;
+      await activityChannel.send(buildLog(logMsg)).catch(console.error);
+      // continue (no return)
+    } else if (oldChan && !newChan) {
+      // left a channel (may be forced — we’ll prefer the forced-disconnect message if we detect it)
+      let forciblyDisconnected = false;
+      let executor = "Unknown";
+      try {
+        const fetchedLogs = await guild.fetchAuditLogs({
+          limit: 1,
+          type: AuditLogEvent.GuildMemberDisconnect,
+        });
+        const auditEntry = fetchedLogs.entries.first();
+        if (
+          auditEntry?.target?.id === userId &&
+          Date.now() - auditEntry.createdTimestamp < 5000
+        ) {
+          forciblyDisconnected = true;
+          executor = auditEntry.executor?.tag ?? "Unknown";
+        }
+      } catch (error) {
+        console.error("[AUDIT LOG ERROR]", error);
+      }
+
+      if (forciblyDisconnected) {
+        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}FORCED${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} was disconnected from ${ansi.white}#${oldChan.name}${ansi.darkGray} by ${ansi.white}${executor}${ansi.darkGray}.`;
+        await activityChannel.send(buildLog(logMsg)).catch(console.error);
+      } else {
+        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} left ${ansi.white}#${oldChan.name}${ansi.darkGray}.`;
+        await activityChannel.send(buildLog(logMsg)).catch(console.error);
+      }
+      // we handled the leave fully; we can safely return to avoid duplicate messages
+      return;
     }
   }
 
+  // ---- Existing logs you already had (kept) ----
   // 2) Server mute/unmute
   if (oldState.serverMute !== newState.serverMute) {
-    const action = newState.serverMute ? "was server muted" : "was server unmuted";
     let executor = "Unknown";
     try {
       const fetchedLogs = await guild.fetchAuditLogs({
@@ -391,13 +416,13 @@ async function detectUserActivityChanges(oldState, newState) {
       console.error("[AUDIT LOG ERROR]", error);
     }
     if (!newState.serverMute && executor === "Unknown") return;
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action} by ${ansi.white}${executor}${ansi.darkGray}.`;
+    const action = newState.serverMute ? "server-muted" : "server-unmuted";
+    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action} by ${ansi.white}${executor}${ansi.darkGray}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
-  // 3) Server deafen/undeafen
+  // 3) Server deaf/undeaf
   if (oldState.serverDeaf !== newState.serverDeaf) {
-    const action = newState.serverDeaf ? "was server deafened" : "was server undeafened";
     let executor = "Unknown";
     try {
       const fetchedLogs = await guild.fetchAuditLogs({
@@ -414,28 +439,29 @@ async function detectUserActivityChanges(oldState, newState) {
       console.error("[AUDIT LOG ERROR]", error);
     }
     if (!newState.serverDeaf && executor === "Unknown") return;
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action} by ${ansi.white}${executor}${ansi.darkGray}.`;
+    const action = newState.serverDeaf ? "server-deafened" : "server-undeafened";
+    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action} by ${ansi.white}${executor}${ansi.darkGray}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
   // 4) Self mute/unmute
   if (oldState.selfMute !== newState.selfMute) {
     const action = newState.selfMute ? "self-muted" : "self-unmuted";
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
+    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
-  // 5) Self deafen/undeafen
+  // 5) Self deaf/undeaf
   if (oldState.selfDeaf !== newState.selfDeaf) {
     const action = newState.selfDeaf ? "self-deafened" : "self-undeafened";
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
+    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
   // 6) Screen share start/stop
   if (oldState.streaming !== newState.streaming) {
     const action = newState.streaming ? "started screen sharing" : "stopped screen sharing";
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}${userId}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
+    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 }
