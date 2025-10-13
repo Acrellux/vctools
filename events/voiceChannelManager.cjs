@@ -84,6 +84,15 @@ const {
 } = transcription;
 
 /************************************************************************************************
+ * TIMER HELPERS
+ ************************************************************************************************/
+function safeClearTimer(t) {
+  if (!t) return;
+  try { clearTimeout(t); } catch {}
+  try { clearInterval(t); } catch {}
+}
+
+/************************************************************************************************
  * SILENCE DETECTION HELPERS
  ************************************************************************************************/
 function updateSilenceDuration(userId, duration) {
@@ -168,20 +177,6 @@ const initiateLoudnessWarning = async (
     rate: 48000,
   });
 
-  opusDecoderForLoudness.on("error", (err) => {
-    console.warn(`[LOUDNESS] decoder error for ${userId}: ${err.message} (tearing down loudness branch)`);
-    try { audioStream.unpipe(opusDecoderForLoudness); } catch { }
-    try { loudnessDetector.destroy(); } catch { }
-    try { opusDecoderForLoudness.destroy(); } catch { }
-  });
-
-  audioStream.on("error", (err) => {
-    console.warn(`[LOUDNESS] source stream error for ${userId}: ${err.message}`);
-    try { audioStream.unpipe(opusDecoderForLoudness); } catch { }
-    try { loudnessDetector.destroy(); } catch { }
-    try { opusDecoderForLoudness.destroy(); } catch { }
-  });
-
   // Track *activity* using source data (fixes RMS-event bug)
   let lastActiveTime = Date.now();
   const onData = () => {
@@ -199,17 +194,27 @@ const initiateLoudnessWarning = async (
     }
   }, 1000);
 
+  const teardown = () => {
+    safeClearTimer(quietTimer);
+    try { audioStream.off("data", onData); } catch {}
+    try { opusDecoderForLoudness.unpipe?.(loudnessDetector); } catch {}
+    try { audioStream.unpipe?.(opusDecoderForLoudness); } catch {}
+    try { loudnessDetector.destroy?.(); } catch {}
+    try { opusDecoderForLoudness.destroy?.(); } catch {}
+  };
+
+  opusDecoderForLoudness.on("error", (err) => {
+    console.warn(`[LOUDNESS] decoder error for ${userId}: ${err.message} (tearing down loudness branch)`);
+    teardown();
+  });
+
+  audioStream.on("error", (err) => {
+    console.warn(`[LOUDNESS] source stream error for ${userId}: ${err.message}`);
+    teardown();
+  });
+
   // Wire the branch
   audioStream.pipe(opusDecoderForLoudness).pipe(loudnessDetector);
-
-  const teardown = () => {
-    clearInterval(quietTimer);
-    audioStream.off("data", onData);
-    try { opusDecoderForLoudness.unpipe(loudnessDetector); } catch { }
-    try { audioStream.unpipe(opusDecoderForLoudness); } catch { }
-    try { loudnessDetector.destroy(); } catch { }
-    try { opusDecoderForLoudness.destroy(); } catch { }
-  };
 
   return { loudnessDetector, opusDecoderForLoudness, quietTimer, teardown };
 };
@@ -901,40 +906,40 @@ function audioListeningFunctions(connection, guild) {
     pipelines.delete(userId);
 
     try {
-      // 1) Stop new data
-      try { audioStream?.unpipe?.(decoder); } catch { }
-      try { decoder?.unpipe?.(pcmWriter); } catch { }
-      try { audioStream?.pause?.(); } catch { }
+      // loudness
+      try { loudnessRes?.teardown?.(); } catch {}
 
-      // 2) Clean up loudness detector
-      try { loudnessRes?.teardown?.(); } catch { }
+      // stop flow of new data
+      try { audioStream?.unpipe?.(decoder); } catch {}
+      try { decoder?.unpipe?.(pcmWriter); } catch {}
+      try { audioStream?.pause?.(); } catch {}
 
-      // 3) Finish writer safely
+      // finish writer safely
       if (pcmWriter && !pcmWriter.closed) {
-        pcmWriter.on("error", () => { }); // swallow harmless late errors
-        try { pcmWriter.end(); } catch { }
+        pcmWriter.on("error", () => {}); // swallow harmless late errors
+        try { pcmWriter.end(); } catch {}
         await new Promise((res) => {
           try { finished(pcmWriter, res); } catch { res(); }
-          setTimeout(res, 2000); // safety timeout
+          setTimeout(res, 1500); // safety timeout
         });
       }
-
-      // 4) Destroy remaining objects
-      try { decoder?.destroy?.(); } catch { }
-      try { audioStream?.destroy?.(); } catch { }
     } catch (e) {
       console.warn(`[PIPELINE STOP] user=${userId} ➜ ${e.message}`);
-    }
+    } finally {
+      // Destroy remnants
+      try { decoder?.destroy?.(); } catch {}
+      try { audioStream?.destroy?.(); } catch {}
 
-    // subscriptions + outputStreams cleanup
-    if (userSubscriptions[userId]) {
-      try { userSubscriptions[userId].destroy?.(); } catch { }
-      delete userSubscriptions[userId];
+      // subscriptions + outputStreams cleanup
+      if (userSubscriptions[userId]) {
+        try { userSubscriptions[userId].destroy?.(); } catch {}
+        delete userSubscriptions[userId];
+      }
+      if (outputStreams[userId] && !outputStreams[userId].closed) {
+        try { outputStreams[userId].end(); } catch {}
+      }
+      delete outputStreams[userId];
     }
-    if (outputStreams[userId] && !outputStreams[userId].closed) {
-      try { outputStreams[userId].end(); } catch { }
-    }
-    delete outputStreams[userId];
   }
 
   receiver.speaking.setMaxListeners(100);
@@ -957,7 +962,7 @@ function audioListeningFunctions(connection, guild) {
     userLastSpokeTime[userId] = Date.now();
 
     if (perUserSilenceTimer[userId]) {
-      clearTimeout(perUserSilenceTimer[userId]);
+      safeClearTimer(perUserSilenceTimer[userId]);
       delete perUserSilenceTimer[userId];
     }
 
@@ -1029,23 +1034,25 @@ function audioListeningFunctions(connection, guild) {
         if (finalizingUsers.has(userId)) return;
 
         console.warn(`[SILENCE FINALIZE] ${userId} silent for ${silenceDuration}ms (threshold: ${threshold})`);
-        clearInterval(perUserSilenceTimer[userId]);
+
+        // stop the interval first, regardless of speaking state
+        safeClearTimer(perUserSilenceTimer[userId]);
         delete perUserSilenceTimer[userId];
 
-        if (currentlySpeaking.has(userId)) {
-          currentlySpeaking.delete(userId);
-          finalizingUsers.add(userId);
-          lastFinalizeAt.set(userId, now);
+        finalizingUsers.add(userId);
+        lastFinalizeAt.set(userId, now);
 
-          try {
-            await stopUserPipeline(userId);                 // ✅ now allowed
-            await finalizeUserAudio(userId, guild, unique, chanId);
-          } catch (e) {
-            console.error(`[SILENCE FINALIZE] finalize failed for ${userId}: ${e.message}`);
-          } finally {
-            finalizingUsers.delete(userId);
-            await new Promise(r => setTimeout(r, 250));     // small grace on Windows
-          }
+        // Always stop the pipeline (idempotent) and then finalize whatever we have
+        try {
+          await stopUserPipeline(userId);
+          const member = guild.members.cache.get(userId);
+          const chanIdNow = member?.voice?.channel?.id || null;
+          await finalizeUserAudio(userId, guild, unique, chanIdNow);
+        } catch (e) {
+          console.error(`[SILENCE FINALIZE] finalize failed for ${userId}: ${e.message}`);
+        } finally {
+          finalizingUsers.delete(userId);
+          await new Promise(r => setTimeout(r, 250));     // small grace on Windows
         }
       }
     }, 1000);
@@ -1068,7 +1075,7 @@ function audioListeningFunctions(connection, guild) {
       if (!currentlySpeaking.has(userId)) {
         finalizeUserAudio(userId, guild, unique, chanId);
       }
-      clearTimeout(perUserSilenceTimer[userId]);
+      safeClearTimer(perUserSilenceTimer[userId]);
       delete perUserSilenceTimer[userId];
     }, wait > 0 ? wait : 0);
   });
@@ -1077,9 +1084,7 @@ function audioListeningFunctions(connection, guild) {
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     receiver.speaking.removeAllListeners();
     receiver.isListening = false;
-    Object.values(perUserSilenceTimer).forEach((t) => {
-      try { clearInterval(t); } catch { }
-    });
+    Object.values(perUserSilenceTimer).forEach((t) => safeClearTimer(t));
     try { await manageVoiceChannels(guild, guild.client, null); } catch { }
   });
 
@@ -1096,7 +1101,7 @@ function audioListeningFunctions(connection, guild) {
     if (writer && !writer.closed) {
       await new Promise((resolve) => {
         writer.once("close", resolve);
-        writer.end();
+        try { writer.end(); } catch { resolve(); }
       }).catch(() => { });
     }
 
@@ -1118,6 +1123,10 @@ function audioListeningFunctions(connection, guild) {
     } catch (err) {
       console.error(`[FINALIZE] user=${userId} ➜ ${err.message}`);
     } finally {
+      // Kill any leftover timers for this user (defensive)
+      safeClearTimer(perUserSilenceTimer[userId]);
+      delete perUserSilenceTimer[userId];
+
       // Make absolutely sure pipeline objects are torn down before delete
       try {
         const p = pipelines.get(userId);
