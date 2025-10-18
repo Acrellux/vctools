@@ -106,6 +106,9 @@ async function handleAllInteractions(interaction) {
     if (inflightInteractions.has(interaction.id)) return;
     _markInflight(interaction.id);
 
+    // Skip handling for Mod History pagination buttons
+    if (interaction.customId?.startsWith("modhist:")) return;
+
     const parsed = parseCustomId(interaction.customId);
     if (!parsed) {
       console.warn(`[WARNING] Invalid customId format: ${interaction.customId}`);

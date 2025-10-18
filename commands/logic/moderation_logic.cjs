@@ -152,22 +152,22 @@ async function sendPaginatedHistory(ctx, chan, tag, recs, authId) {
   const controls = () =>
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId("first")
+        .setCustomId(`modhist:first:${authId}`)
         .setLabel("⇤")
         .setStyle(ButtonStyle.Primary)
         .setDisabled(page === 0),
       new ButtonBuilder()
-        .setCustomId("prev")
+        .setCustomId(`modhist:prev:${authId}`)
         .setLabel("◄")
         .setStyle(ButtonStyle.Primary)
         .setDisabled(page === 0),
       new ButtonBuilder()
-        .setCustomId("next")
+        .setCustomId(`modhist:next:${authId}`)
         .setLabel("►")
         .setStyle(ButtonStyle.Primary)
         .setDisabled(page === last),
       new ButtonBuilder()
-        .setCustomId("last")
+        .setCustomId(`modhist:last:${authId}`)
         .setLabel("⇥")
         .setStyle(ButtonStyle.Primary)
         .setDisabled(page === last)
@@ -182,19 +182,17 @@ async function sendPaginatedHistory(ctx, chan, tag, recs, authId) {
 
   const msg = await chan.send({ content: makeContent(), components: [controls()] });
   const coll = msg.createMessageComponentCollector({
-    filter: (i) => i.user.id === authId,
+    filter: (i) => i.user.id === authId && i.customId.startsWith("modhist:"),
     time: 60000,
   });
 
   coll.on("collect", async (i) => {
+    const [, which] = i.customId.split(":"); // modhist:<which>:<authId>
     page =
-      i.customId === "first"
-        ? 0
-        : i.customId === "prev"
-          ? Math.max(page - 1, 0)
-          : i.customId === "next"
-            ? Math.min(page + 1, last)
-            : last;
+      which === "first" ? 0 :
+        which === "prev" ? Math.max(page - 1, 0) :
+          which === "next" ? Math.min(page + 1, last) :
+            last;
     await i.update({ content: makeContent(), components: [controls()] });
   });
   coll.on("end", () => msg.edit({ components: [] }).catch(() => { }));
