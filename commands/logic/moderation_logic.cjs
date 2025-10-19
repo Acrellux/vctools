@@ -19,7 +19,7 @@ const MAX_TIMEOUT_MS = 28 * 24 * 60 * 60 * 1000; // 28 days
 const HISTORY_FETCH_LIMIT = 10;
 const HISTORY_PAGE_SIZE = 5;
 const STARTING_ACTION_ID = 100_000;
-const MAX_REASON_WORDS = 50;
+const MAX_REASON_WORDS = 500;
 
 /* ─────── DB HELPERS ─────── */
 async function getNextActionId() {
@@ -229,7 +229,7 @@ function buildSingleActionView(rec, userTag, modTag) {
     header,
     header.replace(/[^|]/g, "-"),
     row,
-    "",
+    "✦",
     `Reason | ${reason}`,
     "```",
   ];
