@@ -198,6 +198,42 @@ async function sendPaginatedHistory(ctx, chan, tag, recs, authId) {
   coll.on("end", () => msg.edit({ components: [] }).catch(() => { }));
 }
 
+/* ─────── SINGLE ACTION VIEW RENDER ─────── */
+function buildSingleActionView(rec, userTag, modTag) {
+  const idW = Math.max(String(rec.id).length, 2);
+  const userW = 20, modW = 20, tsW = 19, typeW = 8;
+
+  const header =
+    `${"ID".padEnd(idW)} | ` +
+    `User`.padEnd(userW) +
+    ` | ` +
+    `Moderator`.padEnd(modW) +
+    ` | ` +
+    `Timestamp`.padEnd(tsW) +
+    ` | ` +
+    `Type`.padEnd(typeW);
+
+  const row = [
+    String(rec.id).padEnd(idW),
+    (userTag || rec.userId).padEnd(userW),
+    (modTag || rec.moderatorId).padEnd(modW),
+    new Date(rec.timestamp).toISOString().replace("T", " ").slice(0, 19).padEnd(tsW),
+    (rec.actionType || "").padEnd(typeW),
+  ].join(" | ");
+
+  const reason = rec.reason || "";
+  const lines = [
+    "```",
+    header,
+    header.replace(/[^|]/g, "-"),
+    row,
+    "",
+    `Reason | ${reason}`,
+    "```",
+  ];
+  return lines.join("\n");
+}
+
 /* ─────── SHARED ACTION EXECUTOR (ALL BUT UNMUTE) ─────── */
 async function performAndLog({
   member,
@@ -253,6 +289,7 @@ async function handleModMessageCommand(msg, args) {
       "unban",
       "history",
       "delete",
+      "view",
     ];
     if (!valid.includes(sub))
       return msg.channel.send(
@@ -269,6 +306,35 @@ async function handleModMessageCommand(msg, args) {
           ? `> <🗑️> Deleted mod action **${id}**.`
           : `> <❇️> No entry with ID **${id}** found.`
       );
+    }
+
+    /* view */
+    if (sub === "view") {
+      const id = Number(args[1]);
+      if (!id) return msg.channel.send("> <❌> Usage: `>tc view <id>`");
+      const { data, error } = await supabase
+        .from("mod_actions")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (error || !data) {
+        return msg.channel.send(`> <❇️> No entry with ID **${id}** found.`);
+      }
+
+      // Resolve tags for user & moderator
+      let userTag = null, modTag = null;
+      try {
+        const u = await msg.client.users.fetch(data.userId).catch(() => null);
+        if (u) userTag = u.tag;
+      } catch (_) {}
+      try {
+        const m = await msg.client.users.fetch(data.moderatorId).catch(() => null);
+        if (m) modTag = m.tag;
+      } catch (_) {}
+
+      const content = buildSingleActionView(data, userTag, modTag);
+      return msg.channel.send(content);
     }
 
     /* resolve targets */
@@ -423,6 +489,7 @@ async function handleModMessageCommand(msg, args) {
       ban: "> <❌> Usage: `>tc ban <user> [reason]`",
       unban: "> <❌> Usage: `>tc unban <user ID> [reason]`",
       unmute: "> <❌> Usage: `>tc unmute <user> [reason]`",
+      view: "> <❌> Usage: `>tc view <id>`",
     }[sub] || "> <❌> Something went wrong.";
 
     return msg.channel.send(result);
@@ -461,6 +528,37 @@ async function handleModSlashCommand(inter) {
           ? `> <🗑️> Deleted mod action **${id}**.`
           : `> <❇️> No entry with ID **${id}** found.`,
       });
+    }
+
+    /* (optional) view via slash if you register it */
+    if (sub === "view") {
+      const id = inter.options.getInteger("id");
+      if (!id) {
+        return inter.reply({ content: "> <❌> Provide an `id`.", ephemeral: true });
+      }
+      const { data, error } = await supabase
+        .from("mod_actions")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (error || !data) {
+        return inter.reply({ content: `> <❇️> No entry with ID **${id}** found.` });
+      }
+
+      // Resolve tags
+      let userTag = null, modTag = null;
+      try {
+        const u = await inter.client.users.fetch(data.userId).catch(() => null);
+        if (u) userTag = u.tag;
+      } catch (_) {}
+      try {
+        const m = await inter.client.users.fetch(data.moderatorId).catch(() => null);
+        if (m) modTag = m.tag;
+      } catch (_) {}
+
+      const content = buildSingleActionView(data, userTag, modTag);
+      return inter.reply({ content });
     }
 
     /* history */
@@ -609,6 +707,7 @@ async function handleModSlashCommand(inter) {
       ban: "> <❌> Usage: `/tc ban user:<@user> reason:<text>`",
       unban: "> <❌> Usage: `/tc unban user:<user ID> reason:<text>`",
       unmute: "> <❌> Usage: `/tc unmute user:<@user> reason:<text>`",
+      view: "> <❌> Usage: `/tc view id:<number>`",
     }[sub] || "> <❌> Something went wrong.";
 
     return inter.reply({ content: result, ephemeral: false });

@@ -192,6 +192,7 @@ Of course, there are also privacy settings to control who can see your activity 
 - \`tc ban <user> <reason>\` — Ban a user from the server.
 - \`tc warn <user> <reason>\` — Warn a user in the server.
 - \`tc history <user>\` — View a user's moderation history.
+- \`tc view <action id>\` — View a specific action from a user's moderation history.
 - \`tc delete <action id>\` — Delete a specific action from a user's moderation history.
 > **Notes:**
 - Duration formats: \`10m\`, \`2h\`, \`1d\` (minutes, hours, days supported).
