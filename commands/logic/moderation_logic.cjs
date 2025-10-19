@@ -1,4 +1,4 @@
-// moderation.js
+// moderation_logic.cjs
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 const supabase = createClient(
@@ -50,11 +50,13 @@ async function recordModerationAction(payload) {
   return id;
 }
 
-async function deleteModerationAction(id) {
+// Harden deletion: require guildId in the where clause
+async function deleteModerationAction(id, guildId) {
   const { error, count } = await supabase
     .from("mod_actions")
     .delete({ count: "exact" })
-    .eq("id", id);
+    .eq("id", id)
+    .eq("guildId", guildId);
   if (error) console.error("[MOD_ACTION] delete failed:", error);
   return count > 0;
 }
@@ -91,7 +93,7 @@ const display = {
   unban: { emoji: "🔓", label: "Unbanned", verb: "unbanned" },
 };
 
-/* ─────── HISTORY RENDERING (unchanged) ─────── */
+/* ─────── HISTORY RENDERING ─────── */
 function buildHistoryPage(records, page, map) {
   const start = page * HISTORY_PAGE_SIZE;
   const slice = records.slice(start, start + HISTORY_PAGE_SIZE);
@@ -190,12 +192,12 @@ async function sendPaginatedHistory(ctx, chan, tag, recs, authId) {
     const [, which] = i.customId.split(":"); // modhist:<which>:<authId>
     page =
       which === "first" ? 0 :
-        which === "prev" ? Math.max(page - 1, 0) :
-          which === "next" ? Math.min(page + 1, last) :
-            last;
+      which === "prev" ? Math.max(page - 1, 0) :
+      which === "next" ? Math.min(page + 1, last) :
+      last;
     await i.update({ content: makeContent(), components: [controls()] });
   });
-  coll.on("end", () => msg.edit({ components: [] }).catch(() => { }));
+  coll.on("end", () => msg.edit({ components: [] }).catch(() => {}));
 }
 
 /* ─────── SINGLE ACTION VIEW RENDER ─────── */
@@ -259,13 +261,12 @@ async function performAndLog({
     `> Action ID: ${fmtId(id)}`,
   ];
 
-  /* ─── NEW ORDER: DM first for kick/ban ─── */
+  // DM first for kick/ban so they actually see it
   if (type === "kick" || type === "ban") {
     await safeDM(member.user, dmLines);
     if (type === "kick") await member.kick(reason);
     else await member.ban({ reason });
   } else {
-    /* mute / warn */
     if (type === "mute") await member.timeout(durationMs, reason);
     await safeDM(member.user, dmLines);
   }
@@ -273,7 +274,7 @@ async function performAndLog({
   return id;
 }
 
-/* ─────── MESSAGE COMMAND (>mod …) ─────── */
+/* ─────── MESSAGE COMMAND (>tc …) ─────── */
 async function handleModMessageCommand(msg, args) {
   try {
     if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers))
@@ -300,7 +301,19 @@ async function handleModMessageCommand(msg, args) {
     if (sub === "delete") {
       const id = Number(args[1]);
       if (!id) return msg.channel.send("> <❌> Usage: `>tc delete <id>`");
-      const ok = await deleteModerationAction(id);
+
+      // Verify record belongs to this guild, then delete with guild guard
+      const { data: found, error: fErr } = await supabase
+        .from("mod_actions")
+        .select("id,guildId")
+        .eq("id", id)
+        .eq("guildId", msg.guild.id)
+        .single();
+
+      if (fErr || !found)
+        return msg.channel.send("> <❇️> No entry with that ID in **this server**.");
+
+      const ok = await deleteModerationAction(id, msg.guild.id);
       return msg.channel.send(
         ok
           ? `> <🗑️> Deleted mod action **${id}**.`
@@ -316,10 +329,11 @@ async function handleModMessageCommand(msg, args) {
         .from("mod_actions")
         .select("*")
         .eq("id", id)
+        .eq("guildId", msg.guild.id) // SCOPE TO GUILD
         .single();
 
       if (error || !data) {
-        return msg.channel.send(`> <❇️> No entry with ID **${id}** found.`);
+        return msg.channel.send(`> <❇️> No entry with that ID in **this server**.`);
       }
 
       // Resolve tags for user & moderator
@@ -362,12 +376,13 @@ async function handleModMessageCommand(msg, args) {
       const { data, error } = await supabase
         .from("mod_actions")
         .select("*")
+        .eq("guildId", msg.guild.id) // SCOPE TO GUILD
         .or(`userId.eq.${member.id},moderatorId.eq.${member.id}`)
         .order("timestamp", { ascending: false })
         .limit(HISTORY_FETCH_LIMIT);
       if (error) return msg.channel.send("> <❌> Error fetching history.");
       if (!data.length)
-        return msg.channel.send(`> <❇️> No history for ${member.user.tag}.`);
+        return msg.channel.send(`> <❇️> No history for ${member.user.tag} in this server.`);
       return sendPaginatedHistory(
         msg,
         msg.channel,
@@ -505,7 +520,7 @@ async function handleModMessageCommand(msg, args) {
   }
 }
 
-/* ─────── SLASH COMMAND (/mod …) ─────── */
+/* ─────── SLASH COMMAND (/tc …) ─────── */
 async function handleModSlashCommand(inter) {
   try {
     if (
@@ -522,7 +537,22 @@ async function handleModSlashCommand(inter) {
     /* delete */
     if (sub === "delete") {
       const id = inter.options.getInteger("id");
-      const ok = await deleteModerationAction(id);
+
+      // Verify ownership then delete with guild guard
+      const { data: found, error: fErr } = await supabase
+        .from("mod_actions")
+        .select("id,guildId")
+        .eq("id", id)
+        .eq("guildId", inter.guild.id)
+        .single();
+
+      if (fErr || !found) {
+        return inter.reply({
+          content: "> <❇️> No entry with that ID in **this server**.",
+        });
+      }
+
+      const ok = await deleteModerationAction(id, inter.guild.id);
       return inter.reply({
         content: ok
           ? `> <🗑️> Deleted mod action **${id}**.`
@@ -540,10 +570,11 @@ async function handleModSlashCommand(inter) {
         .from("mod_actions")
         .select("*")
         .eq("id", id)
+        .eq("guildId", inter.guild.id) // SCOPE TO GUILD
         .single();
 
       if (error || !data) {
-        return inter.reply({ content: `> <❇️> No entry with ID **${id}** found.` });
+        return inter.reply({ content: `> <❇️> No entry with that ID in **this server**.` });
       }
 
       // Resolve tags
@@ -567,6 +598,7 @@ async function handleModSlashCommand(inter) {
       const { data, error } = await supabase
         .from("mod_actions")
         .select("*")
+        .eq("guildId", inter.guild.id) // SCOPE TO GUILD
         .or(`userId.eq.${tgt.id},moderatorId.eq.${tgt.id}`)
         .order("timestamp", { ascending: false })
         .limit(HISTORY_FETCH_LIMIT);
@@ -576,7 +608,7 @@ async function handleModSlashCommand(inter) {
         });
       if (!data.length)
         return inter.reply({
-          content: `> <❇️> No history for ${tgt.tag}.`,
+          content: `> <❇️> No history for ${tgt.tag} in this server.`,
         });
       const reply = await inter.reply({ content: "Loading…", fetchReply: true });
       return sendPaginatedHistory(
@@ -606,10 +638,9 @@ async function handleModSlashCommand(inter) {
     /* ───── duration parsing ───── */
     let durMs, durSec;
     if (sub === "mute") {
-      const durStr = inter.options.getString("duration");  // may be null
+      const durStr = inter.options.getString("duration"); // may be null
       if (!durStr) {
-        // no duration supplied → default 1 h
-        durMs = 3_600_000;
+        durMs = 3_600_000; // default 1h
       } else {
         durMs = ms(durStr);
         if (!durMs) {
