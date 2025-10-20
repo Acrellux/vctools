@@ -852,6 +852,7 @@ async function joinChannel(client, channelId, guild) {
       console.log(`[INFO] Connected to ${channel.name}`);
       saveVCState(guild.id, channel.id);
       try { await manageVoiceChannels(guild, guild.client || client, null); } catch { }
+      audioListeningFunctions(connection, guild);
     });
 
     // ALSO recompute on disconnects
@@ -1048,6 +1049,7 @@ function audioListeningFunctions(connection, guild) {
           const member = guild.members.cache.get(userId);
           const chanIdNow = member?.voice?.channel?.id || null;
           await finalizeUserAudio(userId, guild, unique, chanIdNow);
+          currentlySpeaking.delete(userId);
         } catch (e) {
           console.error(`[SILENCE FINALIZE] finalize failed for ${userId}: ${e.message}`);
         } finally {
