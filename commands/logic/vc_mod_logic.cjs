@@ -116,11 +116,46 @@ async function handleVCMessageCommand(message, args = []) {
       return message.reply(`> <🕳️> Drained ${channel.name}.`);
     }
 
+    // ─── Resolve targets: mentions, IDs, or names ───
     const ids = [];
-    if (message.mentions.members.size) ids.push(...message.mentions.members.keys());
-    else if (args[1]) ids.push(...args[1].split(/[,\s]+/).filter(id => /^\d{17,19}$/.test(id)));
+    const rawArg = args[1];
+
+    if (message.mentions.members.size) {
+      ids.push(...message.mentions.members.keys());
+    } else if (rawArg) {
+      // Split comma/space-separated entries
+      for (const part of rawArg.split(/[,\s]+/)) {
+        if (!part) continue;
+        let id = null;
+
+        // Case 1: pure numeric ID
+        if (/^\d{17,19}$/.test(part)) {
+          id = part;
+        }
+
+        // Case 2: <@1234> mention
+        else {
+          const mentionMatch = part.match(/^<@!?(\d{17,19})>$/);
+          if (mentionMatch) id = mentionMatch[1];
+        }
+
+        // Case 3: username or nickname
+        if (!id) {
+          const name = part.toLowerCase();
+          const found = message.guild.members.cache.find(
+            m =>
+              m.user.username.toLowerCase() === name ||
+              m.displayName.toLowerCase() === name
+          );
+          if (found) id = found.id;
+        }
+
+        if (id && !ids.includes(id)) ids.push(id);
+      }
+    }
+
     if (!ids.length) {
-      return message.reply("> <❌> No valid users.");
+      return message.reply("> <❌> No valid users found.");
     }
 
     const results = [];
