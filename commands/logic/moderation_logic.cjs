@@ -192,12 +192,12 @@ async function sendPaginatedHistory(ctx, chan, tag, recs, authId) {
     const [, which] = i.customId.split(":"); // modhist:<which>:<authId>
     page =
       which === "first" ? 0 :
-      which === "prev" ? Math.max(page - 1, 0) :
-      which === "next" ? Math.min(page + 1, last) :
-      last;
+        which === "prev" ? Math.max(page - 1, 0) :
+          which === "next" ? Math.min(page + 1, last) :
+            last;
     await i.update({ content: makeContent(), components: [controls()] });
   });
-  coll.on("end", () => msg.edit({ components: [] }).catch(() => {}));
+  coll.on("end", () => msg.edit({ components: [] }).catch(() => { }));
 }
 
 /* ─────── SINGLE ACTION VIEW RENDER ─────── */
@@ -341,28 +341,55 @@ async function handleModMessageCommand(msg, args) {
       try {
         const u = await msg.client.users.fetch(data.userId).catch(() => null);
         if (u) userTag = u.tag;
-      } catch (_) {}
+      } catch (_) { }
       try {
         const m = await msg.client.users.fetch(data.moderatorId).catch(() => null);
         if (m) modTag = m.tag;
-      } catch (_) {}
+      } catch (_) { }
 
       const content = buildSingleActionView(data, userTag, modTag);
       return msg.channel.send(content);
     }
 
-    /* resolve targets */
+    /* ─── resolve targets ─── */
     let targets = msg.mentions.members;
-    if ((!targets || !targets.size) && sub !== "unban" && args[1]) {
-      const name = args[1].toLowerCase();
-      const found = msg.guild.members.cache.find(
-        (m) =>
-          m.user.username.toLowerCase() === name ||
-          m.displayName.toLowerCase() === name
-      );
-      if (found) targets = new Map([[found.id, found]]);
-      else return msg.channel.send(`> <❌> Could not find user: ${args[1]}`);
+
+    // Try to resolve user by ID, mention, or name
+    const rawArg = args[1];
+    if ((!targets || !targets.size) && sub !== "unban" && rawArg) {
+      let member = null;
+
+      // Case 1: pure numeric ID
+      if (/^\d{17,19}$/.test(rawArg)) {
+        member = await msg.guild.members.fetch(rawArg).catch(() => null);
+      }
+
+      // Case 2: <@id> mention (not detected by mentions.members due to message parsing quirks)
+      if (!member) {
+        const mentionMatch = rawArg.match(/^<@!?(\d{17,19})>$/);
+        if (mentionMatch) {
+          member = await msg.guild.members.fetch(mentionMatch[1]).catch(() => null);
+        }
+      }
+
+      // Case 3: by username or display name (fallback)
+      if (!member) {
+        const name = rawArg.toLowerCase();
+        member = msg.guild.members.cache.find(
+          (m) =>
+            m.user.username.toLowerCase() === name ||
+            m.displayName.toLowerCase() === name
+        );
+      }
+
+      if (member) {
+        targets = new Map([[member.id, member]]);
+      } else {
+        return msg.channel.send(`> <❌> Could not find user: ${rawArg}`);
+      }
     }
+
+    // Unban uses raw ID (no member object)
     if (sub === "unban") {
       const raw = args[1];
       if (!raw || !/^\d{17,19}$/.test(raw))
@@ -582,11 +609,11 @@ async function handleModSlashCommand(inter) {
       try {
         const u = await inter.client.users.fetch(data.userId).catch(() => null);
         if (u) userTag = u.tag;
-      } catch (_) {}
+      } catch (_) { }
       try {
         const m = await inter.client.users.fetch(data.moderatorId).catch(() => null);
         if (m) modTag = m.tag;
-      } catch (_) {}
+      } catch (_) { }
 
       const content = buildSingleActionView(data, userTag, modTag);
       return inter.reply({ content });

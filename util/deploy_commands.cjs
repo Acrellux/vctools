@@ -325,6 +325,18 @@ const commands = [
             .setRequired(true)
         )
     )
+    // view
+    .addSubcommand(sub =>
+      sub
+        .setName("view")
+        .setDescription("View details for a specific moderation action.")
+        .addIntegerOption(opt =>
+          opt
+            .setName("id")
+            .setDescription("The moderation action ID to view.")
+            .setRequired(true)
+        )
+    )
     // unban
     .addSubcommand(sub =>
       sub
