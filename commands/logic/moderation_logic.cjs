@@ -297,6 +297,68 @@ async function handleModMessageCommand(msg, args) {
         `> <❌> Unknown subcommand. Use: ${valid.map((s) => `\`${s}\``).join(", ")}`
       );
 
+    /* ────────────────────────────────────────────────────────────────
+       HISTORY: allow users not in guild, but restrict to THIS guild
+       ──────────────────────────────────────────────────────────────── */
+    if (sub === "history") {
+      const rawArg = args[1];
+      if (!rawArg)
+        return msg.channel.send("> <❌> Usage: `>tc history <@user | userID | name>`");
+
+      // 1) Mention shortcut
+      let targetId = msg.mentions.users.first()?.id || null;
+      let displayTag = msg.mentions.users.first()?.tag || null;
+
+      // 2) Raw ID or <@id>
+      if (!targetId) {
+        const m = rawArg.match(/^<@!?(\d{17,19})>$|^(\d{17,19})$/);
+        if (m) targetId = m[1] || m[2];
+      }
+
+      // 3) Try by name if still in guild (only to discover ID)
+      if (!targetId) {
+        const name = rawArg.toLowerCase();
+        const memberByName = msg.guild.members.cache.find(
+          (m) =>
+            m.user.username.toLowerCase() === name ||
+            m.displayName.toLowerCase() === name
+        );
+        if (memberByName) {
+          targetId = memberByName.id;
+          displayTag = memberByName.user.tag;
+        }
+      }
+
+      if (!targetId)
+        return msg.channel.send(`> <❌> Could not find user: ${rawArg}`);
+
+      // Try to fetch a global tag even if they left the guild
+      if (!displayTag) {
+        const u = await msg.client.users.fetch(targetId).catch(() => null);
+        if (u) displayTag = u.tag;
+      }
+
+      const { data, error } = await supabase
+        .from("mod_actions")
+        .select("*")
+        .eq("guildId", msg.guild.id) // restrict to THIS server
+        .or(`userId.eq.${targetId},moderatorId.eq.${targetId}`)
+        .order("timestamp", { ascending: false })
+        .limit(HISTORY_FETCH_LIMIT);
+
+      if (error) return msg.channel.send("> <❌> Error fetching history.");
+      if (!data.length)
+        return msg.channel.send(`> <❇️> No history for ${displayTag || targetId} in this server.`);
+
+      return sendPaginatedHistory(
+        msg,
+        msg.channel,
+        displayTag || targetId,
+        data,
+        msg.author.id
+      );
+    }
+
     /* delete */
     if (sub === "delete") {
       const id = Number(args[1]);
@@ -351,7 +413,7 @@ async function handleModMessageCommand(msg, args) {
       return msg.channel.send(content);
     }
 
-    /* ─── resolve targets ─── */
+    /* ─── resolve targets for action commands ─── */
     let targets = msg.mentions.members;
 
     // Try to resolve user by ID, mention, or name
@@ -395,28 +457,6 @@ async function handleModMessageCommand(msg, args) {
       if (!raw || !/^\d{17,19}$/.test(raw))
         return msg.channel.send("> <❌> Usage: `>tc unban <id>`");
       targets = new Map([[raw, { id: raw }]]);
-    }
-
-    /* history */
-    if (sub === "history") {
-      const member = targets.first();
-      const { data, error } = await supabase
-        .from("mod_actions")
-        .select("*")
-        .eq("guildId", msg.guild.id) // SCOPE TO GUILD
-        .or(`userId.eq.${member.id},moderatorId.eq.${member.id}`)
-        .order("timestamp", { ascending: false })
-        .limit(HISTORY_FETCH_LIMIT);
-      if (error) return msg.channel.send("> <❌> Error fetching history.");
-      if (!data.length)
-        return msg.channel.send(`> <❇️> No history for ${member.user.tag} in this server.`);
-      return sendPaginatedHistory(
-        msg,
-        msg.channel,
-        member.user.tag,
-        data,
-        msg.author.id
-      );
     }
 
     /* reason & duration */
@@ -587,7 +627,7 @@ async function handleModSlashCommand(inter) {
       });
     }
 
-    /* (optional) view via slash if you register it */
+    /* (optional) view via slash if you register it) */
     if (sub === "view") {
       const id = inter.options.getInteger("id");
       if (!id) {
@@ -619,29 +659,51 @@ async function handleModSlashCommand(inter) {
       return inter.reply({ content });
     }
 
-    /* history */
+    /* ────────────────────────────────────────────────────────────────
+       HISTORY: allow users not in guild, but restrict to THIS guild
+       Accepts either `user` (USER option) or `user_id` (STRING option).
+       ──────────────────────────────────────────────────────────────── */
     if (sub === "history") {
-      const tgt = inter.options.getUser("user");
+      const userOpt = inter.options.getUser("user");          // optional USER
+      const idOpt = inter.options.getString("user_id");     // optional STRING (raw ID)
+
+      let targetId = userOpt?.id || null;
+      let displayTag = userOpt?.tag || null;
+
+      if (!targetId && idOpt && /^\d{17,19}$/.test(idOpt)) targetId = idOpt;
+
+      if (!targetId)
+        return inter.reply({
+          content: "> <❌> Provide `user` or `user_id`.",
+          ephemeral: true,
+        });
+
+      if (!displayTag) {
+        const u = await inter.client.users.fetch(targetId).catch(() => null);
+        if (u) displayTag = u.tag;
+      }
+
       const { data, error } = await supabase
         .from("mod_actions")
         .select("*")
-        .eq("guildId", inter.guild.id) // SCOPE TO GUILD
-        .or(`userId.eq.${tgt.id},moderatorId.eq.${tgt.id}`)
+        .eq("guildId", inter.guild.id) // restrict to THIS server
+        .or(`userId.eq.${targetId},moderatorId.eq.${targetId}`)
         .order("timestamp", { ascending: false })
         .limit(HISTORY_FETCH_LIMIT);
+
       if (error)
-        return inter.reply({
-          content: "> <❌> Error fetching history.",
-        });
+        return inter.reply({ content: "> <❌> Error fetching history." });
+
       if (!data.length)
         return inter.reply({
-          content: `> <❇️> No history for ${tgt.tag} in this server.`,
+          content: `> <❇️> No history for ${displayTag || targetId} in this server.`,
         });
+
       const reply = await inter.reply({ content: "Loading…", fetchReply: true });
       return sendPaginatedHistory(
         inter,
         reply.channel,
-        tgt.tag,
+        displayTag || targetId,
         data,
         inter.user.id
       );
