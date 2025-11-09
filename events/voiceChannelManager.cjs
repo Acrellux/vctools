@@ -8,6 +8,7 @@ const {
   VoiceConnectionStatus,
   joinVoiceChannel,
   getVoiceConnection,
+  EndBehaviorType,
 } = require("@discordjs/voice");
 const { EventEmitter } = require("events");
 const { finished } = require("stream");
@@ -74,6 +75,22 @@ const pipelines = new Map(); // userId -> { audioStream, decoder, pcmWriter, lou
 const finalizingKeys = new Set();
 
 /************************************************************************************************
+ * SMALL UTILS
+ ************************************************************************************************/
+function safeClearTimer(t) {
+  if (!t) return;
+  try { clearTimeout(t); } catch { }
+  try { clearInterval(t); } catch { }
+}
+
+function waitForFinished(streamLike) {
+  return new Promise((resolve) => {
+    try { finished(streamLike, () => resolve()); }
+    catch { resolve(); }
+  });
+}
+
+/************************************************************************************************
  * REUSABLE TRANSCRIPTION FUNCTIONS
  ************************************************************************************************/
 const {
@@ -84,23 +101,12 @@ const {
 } = transcription;
 
 /************************************************************************************************
- * TIMER HELPERS
- ************************************************************************************************/
-function safeClearTimer(t) {
-  if (!t) return;
-  try { clearTimeout(t); } catch {}
-  try { clearInterval(t); } catch {}
-}
-
-/************************************************************************************************
  * SILENCE DETECTION HELPERS
  ************************************************************************************************/
 function updateSilenceDuration(userId, duration) {
   const durations = silenceDurations.get(userId) || [];
   durations.push(duration);
-  if (durations.length > MAX_SILENCE_RECORDS) {
-    durations.shift();
-  }
+  if (durations.length > MAX_SILENCE_RECORDS) durations.shift();
   silenceDurations.set(userId, durations);
 }
 
@@ -196,11 +202,11 @@ const initiateLoudnessWarning = async (
 
   const teardown = () => {
     safeClearTimer(quietTimer);
-    try { audioStream.off("data", onData); } catch {}
-    try { opusDecoderForLoudness.unpipe?.(loudnessDetector); } catch {}
-    try { audioStream.unpipe?.(opusDecoderForLoudness); } catch {}
-    try { loudnessDetector.destroy?.(); } catch {}
-    try { opusDecoderForLoudness.destroy?.(); } catch {}
+    try { audioStream.off("data", onData); } catch { }
+    try { opusDecoderForLoudness.unpipe?.(loudnessDetector); } catch { }
+    try { audioStream.unpipe?.(opusDecoderForLoudness); } catch { }
+    try { loudnessDetector.destroy?.(); } catch { }
+    try { opusDecoderForLoudness.destroy?.(); } catch { }
   };
 
   opusDecoderForLoudness.on("error", (err) => {
@@ -908,36 +914,33 @@ function audioListeningFunctions(connection, guild) {
 
     try {
       // loudness
-      try { loudnessRes?.teardown?.(); } catch {}
+      try { loudnessRes?.teardown?.(); } catch { }
 
       // stop flow of new data
-      try { audioStream?.unpipe?.(decoder); } catch {}
-      try { decoder?.unpipe?.(pcmWriter); } catch {}
-      try { audioStream?.pause?.(); } catch {}
+      try { audioStream?.unpipe?.(decoder); } catch { }
+      try { decoder?.unpipe?.(pcmWriter); } catch { }
+      try { audioStream?.pause?.(); } catch { }
 
       // finish writer safely
       if (pcmWriter && !pcmWriter.closed) {
-        pcmWriter.on("error", () => {}); // swallow harmless late errors
-        try { pcmWriter.end(); } catch {}
-        await new Promise((res) => {
-          try { finished(pcmWriter, res); } catch { res(); }
-          setTimeout(res, 1500); // safety timeout
-        });
+        pcmWriter.on("error", () => { }); // swallow harmless late errors
+        try { pcmWriter.end(); } catch { }
+        await waitForFinished(pcmWriter);
       }
     } catch (e) {
       console.warn(`[PIPELINE STOP] user=${userId} ➜ ${e.message}`);
     } finally {
       // Destroy remnants
-      try { decoder?.destroy?.(); } catch {}
-      try { audioStream?.destroy?.(); } catch {}
+      try { decoder?.destroy?.(); } catch { }
+      try { audioStream?.destroy?.(); } catch { }
 
       // subscriptions + outputStreams cleanup
       if (userSubscriptions[userId]) {
-        try { userSubscriptions[userId].destroy?.(); } catch {}
+        try { userSubscriptions[userId].destroy?.(); } catch { }
         delete userSubscriptions[userId];
       }
       if (outputStreams[userId] && !outputStreams[userId].closed) {
-        try { outputStreams[userId].end(); } catch {}
+        try { outputStreams[userId].end(); } catch { }
       }
       delete outputStreams[userId];
     }
@@ -955,7 +958,15 @@ function audioListeningFunctions(connection, guild) {
     const member = guild.members.cache.get(userId);
     const chanId = member?.voice?.channel?.id;
     if ((settings.safeChannels || []).includes(chanId)) return;
-    if (!(await hasUserConsented(userId))) return;
+
+    let consentOk = true;
+    try {
+      consentOk = !!(await hasUserConsented(userId));
+    } catch (e) {
+      console.warn(`[TX CONSENT ERR] ${userId} → ${e?.message || e}`);
+      consentOk = false;
+    }
+    if (!consentOk) return;
 
     const unique = `${Date.now()}-${Math.floor(Math.random() * 1e3)}`;
     userAudioIds[userId] = unique;
@@ -968,7 +979,7 @@ function audioListeningFunctions(connection, guild) {
     }
 
     console.log(`[DEBUG] START for ${userId}`);
-    const audioStream = receiver.subscribe(userId, { end: { behavior: "manual" } });
+    const audioStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
     userSubscriptions[userId] = audioStream;
 
     const loudnessRes = await initiateLoudnessWarning(userId, audioStream, guild, () => {
@@ -984,22 +995,26 @@ function audioListeningFunctions(connection, guild) {
       rate: 48000,
     });
 
+    // Simple capture counter (helps confirm audio flow)
+    let byteCount = 0;
+    const onRaw = (chunk) => { byteCount += chunk.length; };
+    audioStream.on("data", onRaw);
+
     // guard everything with local helpers
     const closePipeline = async (reason) => {
       console.warn(`[DECODE GUARD] user=${userId} closing pipeline: ${reason}`);
       try { audioStream?.unpipe?.(decoder); } catch { }
       try { decoder?.unpipe?.(pcmWriter); } catch { }
       try { pcmWriter?.end?.(); } catch { }
-      try { pcmWriter?.destroy?.(); } catch { }
       try { decoder?.destroy?.(); } catch { }
       try { audioStream?.destroy?.(); } catch { }
+      try { audioStream.off?.("data", onRaw); } catch { }
     };
 
     decoder.on("error", async (err) => {
       // swallow common Opus corruption from the network and finalize safely
       console.warn(`[OPUS] decoder error for ${userId}: ${err.message}`);
       await closePipeline("decoder_error");
-      // best-effort finalize whatever we captured so far
       const member = guild.members.cache.get(userId);
       const chanId = member?.voice?.channel?.id || null;
       try { await finalizeUserAudio?.(userId, guild, unique, chanId); } catch { }
@@ -1048,6 +1063,8 @@ function audioListeningFunctions(connection, guild) {
           await stopUserPipeline(userId);
           const member = guild.members.cache.get(userId);
           const chanIdNow = member?.voice?.channel?.id || null;
+          audioStream.off?.("data", onRaw);
+          console.log(`[TX BYTES] ${userId} → captured ${byteCount} bytes before finalize`);
           await finalizeUserAudio(userId, guild, unique, chanIdNow);
           currentlySpeaking.delete(userId);
         } catch (e) {
@@ -1109,13 +1126,14 @@ function audioListeningFunctions(connection, guild) {
 
     const pipeObj = pipelines.get(userId);
     if (pipeObj?.decoder) {
-      try { await finished(pipeObj.decoder); } catch { }
+      try { await waitForFinished(pipeObj.decoder); } catch { }
     }
 
     try {
       if (!fs.existsSync(pcm) || fs.statSync(pcm).size < 2048) {
         await transcription.safeDeleteFile(pcm);
         cleanup(userId);
+        finalizingKeys.delete(key);
         return;
       }
 
