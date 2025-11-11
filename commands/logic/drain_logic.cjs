@@ -105,16 +105,18 @@ async function drainChannel(context, channel) {
                     hour12: false,
                 });
 
+                // ANSI colors in this scope
                 const bracket = "\u001b[2;30m"; // Dark gray
                 const white = "\u001b[2;37m";
                 const red = "\u001b[2;31m";
                 const blue = "\u001b[2;34m";
                 const yellow = "\u001b[2;33m";
-                const messageGray = "\u001b[2;37m";
                 const reset = "\u001b[0m";
 
                 // Fetch mod info safely
-                const modMember = await guild.members.fetch(context.user?.id || context.member?.user?.id).catch(() => null);
+                const modMember = await guild.members
+                    .fetch(context.user?.id || context.member?.user?.id)
+                    .catch(() => null);
                 const modTag = modMember?.user?.tag || "Unknown Moderator";
                 const modId = modMember?.id || "UnknownID";
                 const modName = modMember?.displayName || modTag.split("#")[0];
@@ -140,15 +142,16 @@ async function drainChannel(context, channel) {
                 }
 
                 const vcName = channel.name || "Unknown VC";
+
                 // --- Invisible spacer + helpers ---
-                const SPACE = "\u200A";                      // switch to "\u200B" if you want true zero-width
-                const c = (color) => `${color}${SPACE}`; // append SPACE after each color escape
+                const SPACE = "\u200A";                  // use "\u200B" if you prefer ZWSP
+                const c = (color) => `${color}${SPACE}`; // append after each color escape
                 const br = (inner) => `[${SPACE}${inner}${SPACE}]${SPACE}`;
                 const safe = (s) => String(s).replace(/</g, `<${SPACE}`);
 
-                // logMessage (timestamp, role, mod id, mod name, channel)
+                // Build the message (timestamp, role, mod id, mod name, channel), with spaces everywhere
                 const logMessage = `\`\`\`ansi
-${c(ansi.darkGray)}${br(`${c(white)}${timestamp}${c(ansi.darkGray)}`)}${br(`${c(roleColor)}${safe(roleName)}${c(ansi.darkGray)}`)}${br(`${c(white)}${safe(modId)}${c(ansi.darkGray)}`)} ${c(roleColor)}${safe(modName)}${c(ansi.darkGray)} drained ${br(`🔊${c(white)}${safe(vcName)}${c(ansi.darkGray)}`)}${c(reset)}
+${c(bracket)}${br(`${c(white)}${timestamp}${c(bracket)}`)}${br(`${c(roleColor)}${safe(roleName)}${c(bracket)}`)}${br(`${c(white)}${safe(modId)}${c(bracket)}`)} ${c(roleColor)}${safe(modName)}${c(bracket)} drained ${br(`🔊${c(white)}${safe(vcName)}${c(bracket)}`)}${c(reset)}
 \`\`\``;
 
                 await logChannel.send(logMessage).catch(console.error);
