@@ -570,7 +570,7 @@ async function postTranscription(guild, userId, transcription, channelId, confid
     const displayName = member?.displayName || `User ${userId}`;
 
     const formattedMessage = `
-${timestamp}${confidenceBadge} ${bracket}${SPACE}[${SPACE}${roleColor}${SPACE}${formattedRole}${SPACE}${bracket}${SPACE}]${SPACE} [${SPACE}${idColor}${SPACE}${userId}${SPACE}${bracket}${SPACE}]${SPACE} [🔊${SPACE}${channelColor}${SPACE}${voiceChannelName}${SPACE}${bracket}${ZSPACEWSP}]${SPACE} ${nameColor}${SPACE}${displayName}${SPACE}${bracket}${SPACE}:${SPACE}${messageColor}${SPACE} ${transcription}${reset}`;
+${timestamp}${confidenceBadge} ${bracket}${SPACE}[${SPACE}${roleColor}${SPACE}${formattedRole}${SPACE}${bracket}${SPACE}]${SPACE} [${SPACE}${idColor}${SPACE}${userId}${SPACE}${bracket}${SPACE}]${SPACE} [🔊${SPACE}${channelColor}${SPACE}${voiceChannelName}${SPACE}${bracket}${SPACE}]${SPACE} ${nameColor}${SPACE}${displayName}${SPACE}${bracket}${SPACE}:${SPACE}${messageColor}${SPACE} ${transcription}${reset}`;
     try {
       const maxLength = 1900;
       const content = formattedMessage.trim();
