@@ -470,12 +470,25 @@ async function transcribeAudio(wavFilePath) {
  * Posts the transcription to the transcription channel and checks for profanity.
  * @param {Object} guild - The guild object.
  * @param {string} userId - The user ID.
- * @param {string} transcription - The transcription text.
+ * @param {string|Object} transcription - The transcription text OR an object { text, confidence }.
  * @param {string} channelId - Voice/text channel id (for label).
  * @param {number} [confidence] - Optional confidence in [0..1].
  */
 async function postTranscription(guild, userId, transcription, channelId, confidence) {
   try {
+    // --- HOTFIX: unwrap accidental { text, confidence } objects ---
+    if (transcription && typeof transcription === "object") {
+      const t = transcription;
+      if (typeof t.text === "string") {
+        transcription = t.text;
+        if (confidence == null && typeof t.confidence === "number") {
+          confidence = t.confidence;
+        }
+      } else {
+        transcription = String(t); // hard fallback, avoids [object Object]
+      }
+    }
+
     const channel = await ensureTranscriptionChannel(guild);
     if (!channel) {
       console.error(
@@ -483,7 +496,6 @@ async function postTranscription(guild, userId, transcription, channelId, confid
       );
       return;
     }
-
     const member = await guild.members.fetch(userId).catch(() => null);
     if (!member) {
       console.warn(
@@ -498,15 +510,15 @@ async function postTranscription(guild, userId, transcription, channelId, confid
     const roleName = highestRole?.name || "Member";
     const formattedRole = roleName === "@everyone" ? "Member" : roleName;
 
-    // ====== Color System (kept as you do it, plus confidence colors) ======
-    let roleColor = "\u001b[2;37m"; // Default: light gray
-    let nameColor = "\u001b[2;37m"; // Match role for now
+    // ===== colors (your style) =====
+    let roleColor = "\u001b[2;37m"; // light gray
+    let nameColor = "\u001b[2;37m";
 
     if (guild.ownerId === userId) {
-      roleColor = "\u001b[31m"; // 🔴 Red (owner style you used)
+      roleColor = "\u001b[31m"; // red
       nameColor = "\u001b[31m";
     } else if (member?.permissions?.has?.("Administrator")) {
-      roleColor = "\u001b[34m"; // 🔵 Blue
+      roleColor = "\u001b[34m"; // blue
       nameColor = "\u001b[34m";
     } else if (
       member?.permissions?.has?.("ManageGuild") ||
@@ -515,22 +527,21 @@ async function postTranscription(guild, userId, transcription, channelId, confid
       member?.permissions?.has?.("BanMembers") ||
       member?.permissions?.has?.("ManageMessages")
     ) {
-      roleColor = "\u001b[33m"; // 🟡 Yellow/Gold
+      roleColor = "\u001b[33m"; // yellow/gold
       nameColor = "\u001b[33m";
     }
 
-    const bracket = "\u001b[2;30m"; // Dark gray
+    const bracket = "\u001b[2;30m"; // dark gray
     const reset = "\u001b[0m";
-    const idColor = "\u001b[37m"; // White
-    const timeColor = "\u001b[37m"; // White
-    const channelColor = "\u001b[37m"; // White
-    const messageColor = "\u001b[2;37m"; // Light gray
+    const idColor = "\u001b[37m"; // white
+    const timeColor = "\u001b[37m"; // white
+    const channelColor = "\u001b[37m"; // white
+    const messageColor = "\u001b[2;37m"; // light gray
 
-    // New: confidence colors (dim variants you specified)
-    const CONF_GREEN = "\u001b[2;32m"; // Green  (2;32m)
-    const CONF_YELLOW = "\u001b[2;33m"; // Yellow (2;33m)
-    const CONF_RED = "\u001b[2;31m"; // Red    (2;31m)
-    // =====================================================================
+    // confidence colors (dim)
+    const CONF_GREEN = "\u001b[2;32m";
+    const CONF_YELLOW = "\u001b[2;33m";
+    const CONF_RED = "\u001b[2;31m";
 
     const now = new Date();
     const timestamp = `${bracket}[${timeColor}${now.toLocaleTimeString("en-US", {
@@ -544,23 +555,24 @@ async function postTranscription(guild, userId, transcription, channelId, confid
       voiceChannelName = guild.channels.cache.get(channelId)?.name || "Unknown Channel";
     }
 
-    // Build confidence badge if provided as a number
+    // confidence badge
     let confidenceBadge = "";
     if (typeof confidence === "number" && !Number.isNaN(confidence)) {
       const pct = Math.max(0, Math.min(100, Math.round(confidence * 100)));
-      let confColor = CONF_YELLOW;         // default band
-      if (confidence >= 0.85) confColor = CONF_GREEN;   // high
-      else if (confidence < 0.60) confColor = CONF_RED; // low
+      let confColor = CONF_YELLOW;
+      if (confidence >= 0.85) confColor = CONF_GREEN;
+      else if (confidence < 0.60) confColor = CONF_RED;
       confidenceBadge = ` ${bracket}[${confColor}${pct}%${bracket}]${reset}`;
-      // Note: leading space so it sits between timestamp and role cleanly
     }
 
+    const displayName = member?.displayName || `User ${userId}`;
+
     const formattedMessage = `
-${timestamp}${confidenceBadge} ${bracket}[${roleColor}${formattedRole}${bracket}] [${idColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${member?.displayName || `User ${userId}`}${bracket}:${messageColor} ${transcription}${reset}`;
+${timestamp}${confidenceBadge} ${bracket}[${roleColor}${formattedRole}${bracket}] [${idColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${displayName}${bracket}:${messageColor} ${transcription}${reset}`;
 
     try {
       const maxLength = 1900;
-      const content = formattedMessage.trim(); // Full string
+      const content = formattedMessage.trim();
       let start = 0;
 
       while (start < content.length) {
@@ -574,7 +586,7 @@ ${timestamp}${confidenceBadge} ${bracket}[${roleColor}${formattedRole}${bracket}
       console.error(`[❌] Failed to send transcription: ${err.message}`);
     }
 
-    // Profanity integration: update filter, clean text, and flag if needed
+    // Profanity checks
     await updateProfanityFilter(guild.id);
     const censoredText = await clean(guild, transcription);
     if (transcription !== censoredText) {
