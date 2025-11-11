@@ -306,16 +306,25 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
       roleColor = ansi.yellow;
     }
 
+    // Invisible spacer + helpers
+    const SPACE = "\u200A";                      // swap to "\u200B" if you want true zero-width
+    const c = (color) => `${color}${SPACE}`; // append SPACE after every color code
+    const br = (inner) => `[${SPACE}${inner}${SPACE}]${SPACE}`;
+    const safe = (s) => String(s).replace(/</g, `<${SPACE}`);
+
     // Emoji formatting (use if it's a unicode emoji — animated ones have an ID)
-    const emoji = data.emoji?.id === null ? data.emoji?.name || "" : "";
+    const emoji = data.emoji?.id === null ? (data.emoji?.name || "") : "";
 
+    // Build log line (all blocks/brackets color-safe and parser-safe)
     const logMsg =
-      `[${roleColor}${topRole}${ansi.darkGray}] ` +
-      `[${ansi.white}${user.id}${ansi.darkGray}] ` +
-      `${roleColor}${user.username}${ansi.darkGray} triggered a soundboard: ` +
-      `${ansi.white}${emoji} ${soundName}${ansi.reset}`;
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      `${br(`${c(ansi.white)}${safe(user.id)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(user.username)}${c(ansi.darkGray)} triggered a soundboard: ` +
+      `${c(ansi.white)}${emoji ? `${emoji}${SPACE}` : ""}${safe(soundName)}${c(ansi.reset)}`;
 
-    const soundboardMessage = `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${logMsg}\n\`\`\``;
+    // Timestamped message (timestamp block also spaced)
+    const soundboardMessage =
+      `\`\`\`ansi\n${c(ansi.darkGray)}${br(`${c(ansi.white)}${timestamp}${c(ansi.darkGray)}`)}${SPACE}${logMsg}\n\`\`\``;
 
     await transcriptionChannel.send(soundboardMessage);
 

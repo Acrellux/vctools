@@ -140,9 +140,15 @@ async function drainChannel(context, channel) {
                 }
 
                 const vcName = channel.name || "Unknown VC";
+                // --- Invisible spacer + helpers ---
+                const SPACE = "\u200A";                      // switch to "\u200B" if you want true zero-width
+                const c = (color) => `${color}${SPACE}`; // append SPACE after each color escape
+                const br = (inner) => `[${SPACE}${inner}${SPACE}]${SPACE}`;
+                const safe = (s) => String(s).replace(/</g, `<${SPACE}`);
 
+                // logMessage (timestamp, role, mod id, mod name, channel)
                 const logMessage = `\`\`\`ansi
-${bracket}[${white}${timestamp}${bracket}] [${roleColor}${roleName}${bracket}] [${white}${modId}${bracket}] ${roleColor}${modName}${bracket} drained [🔊${white}${vcName}${bracket}]${reset}
+${c(ansi.darkGray)}${br(`${c(white)}${timestamp}${c(ansi.darkGray)}`)}${br(`${c(roleColor)}${safe(roleName)}${c(ansi.darkGray)}`)}${br(`${c(white)}${safe(modId)}${c(ansi.darkGray)}`)} ${c(roleColor)}${safe(modName)}${c(ansi.darkGray)} drained ${br(`🔊${c(white)}${safe(vcName)}${c(ansi.darkGray)}`)}${c(reset)}
 \`\`\``;
 
                 await logChannel.send(logMessage).catch(console.error);
