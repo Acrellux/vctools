@@ -305,7 +305,7 @@ function findBusiest(guild, safe) {
 }
 
 /************************************************************************************************
- * Detect user activity changes (logs)
+ * Detect user activity changes (logs) — with invisible separators to prevent Discord embedding
  ************************************************************************************************/
 async function detectUserActivityChanges(oldState, newState) {
   const guild = newState.guild;
@@ -330,6 +330,10 @@ async function detectUserActivityChanges(oldState, newState) {
   const username = member.user.username;
   const userId = member.user.id;
 
+  // Invisible separator used to break Discord's embedding/mention parsing.
+  // Swap to "\u200B" for Zero-Width Space if you prefer.
+  const SPACE = "\u200A"; // Hair Space
+
   const ansi = {
     darkGray: "\u001b[2;30m",
     white: "\u001b[2;37m",
@@ -339,23 +343,34 @@ async function detectUserActivityChanges(oldState, newState) {
     reset: "\u001b[0m",
   };
 
-  let roleColor = ansi.white;
-  if (guild.ownerId === userId) roleColor = ansi.red;
-  else if (member.permissions.has(PermissionsBitField.Flags.Administrator)) roleColor = ansi.cyan;
+  // Helper to append an invisible space after any color-change (prevents parser gluing)
+  const c = (color) => `${color}${SPACE}`;
+
+  // Bracket helpers that insert SPACE right after '[' and before ']', and a SPACE after the block
+  const br = (inner) => `[${SPACE}${inner}${SPACE}]${SPACE}`;
+
+  // Safen raw identifiers if they might appear inside <...> or similar (optional)
+  const safe = (s) => String(s).replace(/</g, `<${SPACE}`);
+
+  let roleColor = c(ansi.white);
+  if (guild.ownerId === userId) roleColor = c(ansi.red);
+  else if (member.permissions.has(PermissionsBitField.Flags.Administrator)) roleColor = c(ansi.cyan);
   else if (
     member.permissions.has(PermissionsBitField.Flags.ManageGuild) ||
     member.permissions.has(PermissionsBitField.Flags.KickMembers) ||
     member.permissions.has(PermissionsBitField.Flags.MuteMembers) ||
     member.permissions.has(PermissionsBitField.Flags.BanMembers) ||
     member.permissions.has(PermissionsBitField.Flags.ManageMessages)
-  ) roleColor = ansi.yellow;
+  ) roleColor = c(ansi.yellow);
 
   const now = new Date();
   const minute = now.getMinutes().toString().padStart(2, "0");
   const second = now.getSeconds().toString().padStart(2, "0");
   const timestamp = `${minute}:${second}`;
+
+  // Timestamp block gets brackets + spacers too
   const buildLog = (msg) =>
-    `\`\`\`ansi\n${ansi.darkGray}[${ansi.white}${timestamp}${ansi.darkGray}] ${msg}${ansi.reset}\n\`\`\``;
+    `\`\`\`ansi\n${c(ansi.darkGray)}${br(`${c(ansi.white)}${timestamp}${c(ansi.darkGray)}`)}${SPACE}${msg}${c(ansi.reset)}\n\`\`\``;
 
   // ---- NEW: Join / Move / Leave logs (normal cases) ----
   const oldChan = oldState.channelId ? guild.channels.cache.get(oldState.channelId) : null;
@@ -367,14 +382,21 @@ async function detectUserActivityChanges(oldState, newState) {
   if (oldId !== newId) {
     if (oldChan && newChan) {
       // moved channels
-      const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} moved from ${ansi.white}#${oldChan.name}${ansi.darkGray} to ${ansi.white}#${newChan.name}${ansi.darkGray}.`;
+      const logMsg =
+        `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+        ` ${roleColor}${safe(username)}${c(ansi.darkGray)} moved from ` +
+        `${c(ansi.white)}#${safe(oldChan.name)}${c(ansi.darkGray)} to ` +
+        `${c(ansi.white)}#${safe(newChan.name)}${c(ansi.darkGray)}.`;
       await activityChannel.send(buildLog(logMsg)).catch(console.error);
-      // continue to other activity checks after this (no return)
+      // continue
     } else if (!oldChan && newChan) {
       // joined a channel
-      const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} joined ${ansi.white}#${newChan.name}${ansi.darkGray}.`;
+      const logMsg =
+        `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+        ` ${roleColor}${safe(username)}${c(ansi.darkGray)} joined ` +
+        `${c(ansi.white)}#${safe(newChan.name)}${c(ansi.darkGray)}.`;
       await activityChannel.send(buildLog(logMsg)).catch(console.error);
-      // continue (no return)
+      // continue
     } else if (oldChan && !newChan) {
       // left a channel (may be forced — we’ll prefer the forced-disconnect message if we detect it)
       let forciblyDisconnected = false;
@@ -397,18 +419,26 @@ async function detectUserActivityChanges(oldState, newState) {
       }
 
       if (forciblyDisconnected) {
-        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] [${ansi.white}FORCED${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} was disconnected from ${ansi.white}#${oldChan.name}${ansi.darkGray} by ${ansi.white}${executor}${ansi.darkGray}.`;
+        const logMsg =
+          `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+          `${br(`${c(ansi.white)}FORCED${c(ansi.darkGray)}`)}` +
+          ` ${roleColor}${safe(username)}${c(ansi.darkGray)} was disconnected from ` +
+          `${c(ansi.white)}#${safe(oldChan.name)}${c(ansi.darkGray)} by ` +
+          `${c(ansi.white)}${safe(executor)}${c(ansi.darkGray)}.`;
         await activityChannel.send(buildLog(logMsg)).catch(console.error);
       } else {
-        const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} left ${ansi.white}#${oldChan.name}${ansi.darkGray}.`;
+        const logMsg =
+          `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+          ` ${roleColor}${safe(username)}${c(ansi.darkGray)} left ` +
+          `${c(ansi.white)}#${safe(oldChan.name)}${c(ansi.darkGray)}.`;
         await activityChannel.send(buildLog(logMsg)).catch(console.error);
       }
-      // we handled the leave fully; we can safely return to avoid duplicate messages
-      return;
+      return; // we handled the leave
     }
   }
 
-  // ---- Existing logs you already had (kept) ----
+  // ---- Existing logs (kept), all bracketed + color-changed with spacers ----
+
   // 2) Server mute/unmute
   if (oldState.serverMute !== newState.serverMute) {
     let executor = "Unknown";
@@ -428,7 +458,10 @@ async function detectUserActivityChanges(oldState, newState) {
     }
     if (!newState.serverMute && executor === "Unknown") return;
     const action = newState.serverMute ? "server-muted" : "server-unmuted";
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action} by ${ansi.white}${executor}${ansi.darkGray}.`;
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)} by ` +
+      `${c(ansi.white)}${safe(executor)}${c(ansi.darkGray)}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
@@ -451,28 +484,37 @@ async function detectUserActivityChanges(oldState, newState) {
     }
     if (!newState.serverDeaf && executor === "Unknown") return;
     const action = newState.serverDeaf ? "server-deafened" : "server-undeafened";
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action} by ${ansi.white}${executor}${ansi.darkGray}.`;
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)} by ` +
+      `${c(ansi.white)}${safe(executor)}${c(ansi.darkGray)}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
   // 4) Self mute/unmute
   if (oldState.selfMute !== newState.selfMute) {
     const action = newState.selfMute ? "self-muted" : "self-unmuted";
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
   // 5) Self deaf/undeaf
   if (oldState.selfDeaf !== newState.selfDeaf) {
     const action = newState.selfDeaf ? "self-deafened" : "self-undeafened";
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
   // 6) Screen share start/stop
   if (oldState.streaming !== newState.streaming) {
     const action = newState.streaming ? "started screen sharing" : "stopped screen sharing";
-    const logMsg = `[${roleColor}${topRole}${ansi.darkGray}] ${roleColor}${username}${ansi.darkGray} ${action}.`;
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)}.`;
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 }
