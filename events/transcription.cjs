@@ -543,6 +543,8 @@ async function postTranscription(guild, userId, transcription, channelId, confid
     const CONF_YELLOW = "\u001b[2;33m";
     const CONF_RED = "\u001b[2;31m";
 
+    const SPACE = "\u200B";
+
     const now = new Date();
     const timestamp = `${bracket}[${timeColor}${now.toLocaleTimeString("en-US", {
       minute: "2-digit",
@@ -568,8 +570,7 @@ async function postTranscription(guild, userId, transcription, channelId, confid
     const displayName = member?.displayName || `User ${userId}`;
 
     const formattedMessage = `
-${timestamp}${confidenceBadge} ${bracket}[${roleColor}${formattedRole}${bracket}] [${idColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${displayName}${bracket}:${messageColor} ${transcription}${reset}`;
-
+${timestamp}${confidenceBadge} ${bracket}${SPACE}[${SPACE}${roleColor}${SPACE}${formattedRole}${SPACE}${bracket}${SPACE}]${SPACE} [${SPACE}${idColor}${SPACE}${userId}${SPACE}${bracket}${SPACE}]${SPACE} [🔊${SPACE}${channelColor}${SPACE}${voiceChannelName}${SPACE}${bracket}${ZSPACEWSP}]${SPACE} ${nameColor}${SPACE}${displayName}${SPACE}${bracket}${SPACE}:${SPACE}${messageColor}${SPACE} ${transcription}${reset}`;
     try {
       const maxLength = 1900;
       const content = formattedMessage.trim();
