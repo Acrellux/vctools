@@ -401,9 +401,7 @@ async function transcribeAudio(wavFilePath) {
 
   return new Promise((resolve, reject) => {
     try {
-      const pyPath = path.resolve(
-        __dirname,
-        "../models/whisper/transcribe.py"
+      const pyPath = path.resolve("../models/whisper/transcribe.py"
       );
       const proc = spawn(process.execPath, [pyPath, wavFilePath], {
         cwd: __dirname,
