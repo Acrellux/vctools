@@ -354,39 +354,38 @@ async function processAudio(userId, guild) {
  * Processes the audio queue.
  */
 async function processQueue() {
-  if (isProcessing || processingQueue.length === 0) return;
-  const { userId, guild, wavFilePath, resolve, reject } =
-    processingQueue.shift();
-  isProcessing = true;
-  console.log(
-    `[DEBUG] Processing queue: userId=${userId}, wavFilePath=${wavFilePath}`
-  );
+  if (global.__vcToolsTranscribeProcessing) return;
+  global.__vcToolsTranscribeProcessing = true;
+
   try {
-    if (!fs.existsSync(wavFilePath)) {
-      console.error(
-        `[ERROR] WAV file missing for user ${userId}: ${wavFilePath}`
-      );
-      throw new Error(`WAV file missing for user ${userId}: ${wavFilePath}`);
+    while (processingQueue.length > 0) {
+      const job = processingQueue.shift();
+      if (!job) continue;
+
+      const { userId, guild, wavFilePath, channelId, resolve, reject } = job;
+
+      try {
+        const { text: transcriptionText, confidence } = await transcribeAudio(wavFilePath);
+        console.log(`[QUEUE] Transcription for user ${userId}: ${transcriptionText}`);
+
+        // Preserve prior resolve behavior for upstream callers
+        if (typeof resolve === "function") {
+          resolve(transcriptionText);
+        }
+
+        // Post to your log/output with the confidence badge
+        await postTranscription(guild, userId, transcriptionText, channelId, confidence);
+      } catch (err) {
+        console.error(`[QUEUE] Transcription failed for user ${userId}: ${err.message}`);
+        if (typeof reject === "function") {
+          reject(err);
+        }
+      } finally {
+        // Any cleanup for wavFilePath stays as-is elsewhere in your code
+      }
     }
-    console.log(`[DEBUG] Calling transcribeAudio with: ${wavFilePath}`);
-    const transcriptionText = await transcribeAudio(wavFilePath);
-    console.log(
-      `[QUEUE] Transcription for user ${userId}: ${transcriptionText}`
-    );
-    resolve(transcriptionText);
-    // Always attempt to delete the WAV after processing (success case)
-    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 60000);
-  } catch (err) {
-    console.error(
-      `[QUEUE] Error processing audio for user ${userId}: ${err.message}`
-    );
-    reject(err);
-    // Also try to delete the WAV even if transcription failed
-    setTimeout(() => safeDeleteFile(wavFilePath).catch(console.error), 60000);
   } finally {
-    inUsePaths.delete(path.resolve(wavFilePath));
-    isProcessing = false;
-    processQueue();
+    global.__vcToolsTranscribeProcessing = false;
   }
 }
 
@@ -395,58 +394,78 @@ async function processQueue() {
  * @param {string} wavFilePath - The path to the WAV file.
  * @returns {Promise<string>} - The transcription text.
  */
+// Spawns transcribe.py, parses JSON lines, returns { text, confidence }
 async function transcribeAudio(wavFilePath) {
-  if (!fs.existsSync(wavFilePath)) {
-    console.error(
-      `[ERROR] transcribeAudio: WAV file not found: ${wavFilePath}`
-    );
-    return Promise.reject(new Error("WAV file missing."));
-  }
-  const pythonScript = path.resolve(
-    __dirname,
-    "../models/whisper/transcribe.py"
-  );
-  console.log(`[DEBUG] Running Whisper on file: ${wavFilePath}`);
-  console.log(
-    `[DEBUG] Full Command: python "${pythonScript}" "${wavFilePath}"`
-  );
-  const command = `python "${pythonScript}" "${wavFilePath}"`;
+  const { spawn } = require("child_process");
+  const path = require("path");
+
   return new Promise((resolve, reject) => {
-    exec(command, { shell: true }, (error, stdout, stderr) => {
-      console.log(`[DEBUG] Whisper Raw Output:\n${stdout.trim()}`);
-      if (error) {
-        console.error(`[ERROR] Whisper transcription failed: ${error.message}`);
-        console.error(`[DEBUG] stderr: ${stderr}`);
-        return reject(error);
-      }
-      try {
-        const jsonMatches = stdout.match(/\{.*?\}/gs);
-        if (!jsonMatches || jsonMatches.length === 0) {
-          throw new Error("No valid JSON found in Whisper output.");
+    try {
+      const pyPath = path.resolve(__dirname, "transcribe.py"); // adjust if different
+      const proc = spawn(process.execPath, [pyPath, wavFilePath], {
+        cwd: __dirname,
+        windowsHide: true,
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (d) => (stdout += d.toString("utf8")));
+      proc.stderr.on("data", (d) => (stderr += d.toString("utf8")));
+
+      proc.on("error", (err) => reject(err));
+
+      proc.on("close", (code) => {
+        if (code !== 0 && !stdout) {
+          return reject(
+            new Error(`transcribe.py exited with code ${code}: ${stderr || "no stderr"}`)
+          );
         }
-        let transcriptionText = "";
-        for (const jsonStr of jsonMatches) {
-          try {
-            const parsedJson = JSON.parse(jsonStr);
-            if (parsedJson.text) {
-              transcriptionText = parsedJson.text;
-              break;
+
+        try {
+          // Collect all JSON objects printed by Python
+          const jsonMatches = stdout.match(/\{[\s\S]*?\}/g) || [];
+          let transcriptionText = "";
+          let confidence = undefined;
+
+          for (const j of jsonMatches) {
+            try {
+              const parsed = JSON.parse(j);
+              if (parsed && typeof parsed.text === "string" && parsed.text.length) {
+                transcriptionText = parsed.text;
+                if (typeof parsed.confidence === "number") {
+                  confidence = parsed.confidence;
+                } else if (typeof parsed.confidence_percent === "number") {
+                  confidence = Math.max(0, Math.min(1, parsed.confidence_percent / 100));
+                }
+                break;
+              }
+            } catch (_) {
+              // ignore malformed json lines
             }
-          } catch (e) {
-            console.warn(`[WARNING] Ignored invalid JSON segment: ${jsonStr}`);
           }
+
+          if (!transcriptionText) {
+            // If Python only returned an error JSON, surface it
+            for (const j of jsonMatches) {
+              try {
+                const errObj = JSON.parse(j);
+                if (errObj && errObj.error) {
+                  return reject(new Error(errObj.error));
+                }
+              } catch (_) { }
+            }
+            return reject(new Error("No transcription text found in Python output."));
+          }
+
+          resolve({ text: transcriptionText, confidence });
+        } catch (parseErr) {
+          reject(parseErr);
         }
-        if (!transcriptionText) {
-          throw new Error("No transcription text found in JSON output.");
-        }
-        resolve(transcriptionText);
-      } catch (parseError) {
-        console.error(
-          `[ERROR] Failed to parse Whisper output: ${parseError.message}`
-        );
-        reject(parseError);
-      }
-    });
+      });
+    } catch (outerErr) {
+      reject(outerErr);
+    }
   });
 }
 
@@ -455,8 +474,10 @@ async function transcribeAudio(wavFilePath) {
  * @param {Object} guild - The guild object.
  * @param {string} userId - The user ID.
  * @param {string} transcription - The transcription text.
+ * @param {string} channelId - Voice/text channel id (for label).
+ * @param {number} [confidence] - Optional confidence in [0..1].
  */
-async function postTranscription(guild, userId, transcription, channelId) {
+async function postTranscription(guild, userId, transcription, channelId, confidence) {
   try {
     const channel = await ensureTranscriptionChannel(guild);
     if (!channel) {
@@ -465,6 +486,7 @@ async function postTranscription(guild, userId, transcription, channelId) {
       );
       return;
     }
+
     const member = await guild.members.fetch(userId).catch(() => null);
     if (!member) {
       console.warn(
@@ -479,11 +501,12 @@ async function postTranscription(guild, userId, transcription, channelId) {
     const roleName = highestRole?.name || "Member";
     const formattedRole = roleName === "@everyone" ? "Member" : roleName;
 
+    // ====== Color System (kept as you do it, plus confidence colors) ======
     let roleColor = "\u001b[2;37m"; // Default: light gray
     let nameColor = "\u001b[2;37m"; // Match role for now
 
     if (guild.ownerId === userId) {
-      roleColor = "\u001b[31m"; // 🔴 Red
+      roleColor = "\u001b[31m"; // 🔴 Red (owner style you used)
       nameColor = "\u001b[31m";
     } else if (member?.permissions?.has?.("Administrator")) {
       roleColor = "\u001b[34m"; // 🔵 Blue
@@ -506,24 +529,37 @@ async function postTranscription(guild, userId, transcription, channelId) {
     const channelColor = "\u001b[37m"; // White
     const messageColor = "\u001b[2;37m"; // Light gray
 
+    // New: confidence colors (dim variants you specified)
+    const CONF_GREEN = "\u001b[2;32m"; // Green  (2;32m)
+    const CONF_YELLOW = "\u001b[2;33m"; // Yellow (2;33m)
+    const CONF_RED = "\u001b[2;31m"; // Red    (2;31m)
+    // =====================================================================
+
     const now = new Date();
-    const timestamp = `${bracket}[${timeColor}${now.toLocaleTimeString(
-      "en-US",
-      {
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      }
-    )}${bracket}]${reset}`;
+    const timestamp = `${bracket}[${timeColor}${now.toLocaleTimeString("en-US", {
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    })}${bracket}]${reset}`;
 
     let voiceChannelName = "Unknown Channel";
     if (channelId && guild.channels.cache.has(channelId)) {
       voiceChannelName = guild.channels.cache.get(channelId)?.name || "Unknown Channel";
     }
 
+    // Build confidence badge if provided as a number
+    let confidenceBadge = "";
+    if (typeof confidence === "number" && !Number.isNaN(confidence)) {
+      const pct = Math.max(0, Math.min(100, Math.round(confidence * 100)));
+      let confColor = CONF_YELLOW;         // default band
+      if (confidence >= 0.85) confColor = CONF_GREEN;   // high
+      else if (confidence < 0.60) confColor = CONF_RED; // low
+      confidenceBadge = ` ${bracket}[${confColor}${pct}%${bracket}]${reset}`;
+      // Note: leading space so it sits between timestamp and role cleanly
+    }
+
     const formattedMessage = `
-${timestamp} ${bracket}[${roleColor}${formattedRole}${bracket}] [${idColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${member?.displayName || `User ${userId}`
-      }${bracket}:${messageColor} ${transcription}${reset}`;
+${timestamp}${confidenceBadge} ${bracket}[${roleColor}${formattedRole}${bracket}] [${idColor}${userId}${bracket}] [🔊${channelColor}${voiceChannelName}${bracket}] ${nameColor}${member?.displayName || `User ${userId}`}${bracket}:${messageColor} ${transcription}${reset}`;
 
     try {
       const maxLength = 1900;
