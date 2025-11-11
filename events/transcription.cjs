@@ -543,7 +543,7 @@ async function postTranscription(guild, userId, transcription, channelId, confid
     const CONF_YELLOW = "\u001b[2;33m";
     const CONF_RED = "\u001b[2;31m";
 
-    const SPACE = "\u200B";
+    const SPACE = "\u200A";
 
     const now = new Date();
     const timestamp = `${bracket}[${timeColor}${now.toLocaleTimeString("en-US", {
