@@ -562,8 +562,8 @@ async function postTranscription(guild, userId, transcription, channelId, confid
     if (typeof confidence === "number" && !Number.isNaN(confidence)) {
       const pct = Math.max(0, Math.min(100, Math.round(confidence * 100)));
       let confColor = CONF_YELLOW;
-      if (confidence >= 0.75) confColor = CONF_GREEN;
-      else if (confidence < 0.55) confColor = CONF_RED;
+      if (confidence >= 0.55) confColor = CONF_GREEN;
+      else if (confidence < 0.4) confColor = CONF_RED;
       confidenceBadge = ` ${bracket}[${confColor}${pct}%${bracket}]${reset}`;
     }
 
