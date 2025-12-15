@@ -233,7 +233,7 @@ async function handleModMessageCommand(msg, args) {
       return msg.channel.send("> <❌> You do not have permission.");
 
     const sub = (args[0] || "").toLowerCase();
-    const valid = ["mute", "unmute", "warn", "kick", "ban", "unban", "history", "delete", "view"];
+    const valid = ["mute", "unmute", "warn", "kick", "ban", "unban", "history", "delete", "view", "clean"];
     if (!valid.includes(sub))
       return msg.channel.send(
         `> <❌> Unknown subcommand. Use: ${valid.map((s) => `\`${s}\``).join(", ")}`
@@ -353,6 +353,160 @@ async function handleModMessageCommand(msg, args) {
         data,
         msg.author.id
       );
+    }
+
+    /* ─── CLEAN (COUNT or TIME) ─── */
+    if (sub === "clean") {
+      if (!msg.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return msg.channel.send("> <❌> You need **Manage Messages** permission.");
+      }
+
+      const target = msg.mentions.members.first();
+      if (!target) {
+        return msg.channel.send(
+          "> <❌> Usage:\n" +
+          "> `>tc clean <@user> count <number>`\n" +
+          "> `>tc clean <@user> time <1h|3d|1w>`"
+        );
+      }
+
+      if (cantModerate(msg.member, target)) {
+        return msg.channel.send(`> <❌> You cannot act on ${wrap(target.user.tag)}.`);
+      }
+
+      const mode = (args[2] || "").toLowerCase();
+      const param = args[3];
+
+      if (!mode || !param) {
+        return msg.channel.send(
+          "> <❌> Usage:\n" +
+          "> `>tc clean <@user> count <number>`\n" +
+          "> `>tc clean <@user> time <1h|3d|1w>`"
+        );
+      }
+
+      const MAX_DELETE = 100;
+      let deletedCount = 0;
+
+      try {
+        /* ─── COUNT MODE ─── */
+        if (mode === "count") {
+          const limit = Math.min(Number(param), MAX_DELETE);
+          if (!Number.isInteger(limit) || limit <= 0) {
+            return msg.channel.send("> <❌> Invalid count.");
+          }
+
+          for (const channel of msg.guild.channels.cache.values()) {
+            if (deletedCount >= limit) break;
+            if (!channel.isTextBased?.()) continue;
+            if (!channel.permissionsFor(msg.guild.members.me)
+              ?.has(PermissionsBitField.Flags.ManageMessages)) continue;
+
+            let lastId = null;
+
+            while (deletedCount < limit) {
+              const fetched = await channel.messages.fetch({
+                limit: 100,
+                before: lastId ?? undefined,
+              });
+              if (!fetched.size) break;
+
+              const matches = fetched
+                .filter(m => m.author.id === target.id && !m.pinned)
+                .first(limit - deletedCount);
+
+              if (matches.length) {
+                await channel.bulkDelete(matches, true);
+                deletedCount += matches.length;
+              }
+
+              lastId = fetched.last()?.id;
+              if (!lastId) break;
+            }
+          }
+        }
+
+        /* ─── TIME MODE ─── */
+        else if (mode === "time") {
+          let durationMs = ms(param);
+          if (!durationMs) {
+            return msg.channel.send("> <❌> Invalid time format.");
+          }
+
+          const MAX_WINDOW = 14 * 24 * 60 * 60 * 1000;
+          durationMs = Math.min(durationMs, MAX_WINDOW);
+          const cutoff = Date.now() - durationMs;
+
+          for (const channel of msg.guild.channels.cache.values()) {
+            if (deletedCount >= MAX_DELETE) break;
+            if (!channel.isTextBased?.()) continue;
+            if (!channel.permissionsFor(msg.guild.members.me)
+              ?.has(PermissionsBitField.Flags.ManageMessages)) continue;
+
+            let lastId = null;
+
+            while (deletedCount < MAX_DELETE) {
+              const fetched = await channel.messages.fetch({
+                limit: 100,
+                before: lastId ?? undefined,
+              });
+              if (!fetched.size) break;
+
+              const matches = fetched
+                .filter(m =>
+                  m.author.id === target.id &&
+                  m.createdTimestamp >= cutoff &&
+                  !m.pinned
+                )
+                .first(MAX_DELETE - deletedCount);
+
+              if (matches.length) {
+                await channel.bulkDelete(matches, true);
+                deletedCount += matches.length;
+              }
+
+              const oldest = fetched.last();
+              if (!oldest || oldest.createdTimestamp < cutoff) break;
+              lastId = oldest.id;
+            }
+          }
+        }
+
+        /* ─── INVALID MODE ─── */
+        else {
+          return msg.channel.send(
+            "> <❌> Invalid mode.\n" +
+            "> Use `count` or `time`."
+          );
+        }
+
+        if (!deletedCount) {
+          return msg.channel.send("> <❇️> No messages matched.");
+        }
+
+        const id = await recordModerationAction({
+          guildId: msg.guild.id,
+          userId: target.id,
+          moderatorId: msg.member.id,
+          actionType: "clean",
+          reason:
+            mode === "count"
+              ? `Deleted ${deletedCount} recent messages`
+              : `Deleted messages from last ${ms(ms(param), { long: true })}`,
+        });
+
+        return msg.channel.send(
+          [
+            `> <✅> Deleted **${deletedCount}** messages from ${wrap(target.user.tag)}.`,
+            `> Mode: ${mode}`,
+            `> Action ID: ${fmtId(id)}`,
+          ].join("\n")
+        );
+      } catch (err) {
+        console.error("[tc clean]", err);
+        await logErrorToChannel(msg.guild?.id, err.stack, msg.client, "tc clean");
+        return msg.channel.send("> <❌> Failed to clean messages.");
+      }
     }
 
     /* ─── resolve targets ─── */
@@ -510,6 +664,10 @@ async function handleModMessageCommand(msg, args) {
         unban: "> <❌> Usage: `>tc unban <user ID> [reason]`",
         unmute: "> <❌> Usage: `>tc unmute <user> [reason]`",
         view: "> <❌> Usage: `>tc view <id>`",
+        clean:
+          "> <❌> Usage:\n" +
+          "> `>tc clean <@user> count <number>`\n" +
+          "> `>tc clean <@user> time <1h|3d|1w>`",
       }[sub] ||
       "> <❌> Something went wrong.";
 
@@ -713,6 +871,161 @@ async function handleModSlashCommand(inter) {
       })
     );
 
+    /* ─── CLEAN (COUNT or TIME) ─── */
+    if (sub === "clean") {
+      if (!inter.memberPermissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return inter.reply({
+          content: "> <❌> You need **Manage Messages** permission.",
+          ephemeral: true,
+        });
+      }
+
+      const target = inter.options.getUser("user");
+      const mode = inter.options.getString("mode");
+      const value = inter.options.getString("value");
+
+      if (!target || !mode || !value) {
+        return inter.reply({
+          content:
+            "> <❌> Usage:\n" +
+            "> `/tc clean user:<user> mode:count value:<number>`\n" +
+            "> `/tc clean user:<user> mode:time value:<1h|3d|1w>`",
+          ephemeral: true,
+        });
+      }
+
+      const member = await inter.guild.members.fetch(target.id).catch(() => null);
+      if (member && cantModerate(inter.member, member)) {
+        return inter.reply({
+          content: `> <❌> You cannot act on ${wrap(target.tag)}.`,
+          ephemeral: true,
+        });
+      }
+
+      const MAX_DELETE = 100;
+      let deletedCount = 0;
+
+      await inter.reply({ content: "🧹 Cleaning messages…", ephemeral: true });
+
+      try {
+        /* ─── COUNT MODE ─── */
+        if (mode === "count") {
+          const limit = Math.min(Number(value), MAX_DELETE);
+          if (!Number.isInteger(limit) || limit <= 0) {
+            return inter.editReply("> <❌> Invalid count.");
+          }
+
+          for (const channel of inter.guild.channels.cache.values()) {
+            if (deletedCount >= limit) break;
+            if (!channel.isTextBased?.()) continue;
+            if (
+              !channel.permissionsFor(inter.guild.members.me)
+                ?.has(PermissionsBitField.Flags.ManageMessages)
+            ) continue;
+
+            let lastId = null;
+
+            while (deletedCount < limit) {
+              const fetched = await channel.messages.fetch({
+                limit: 100,
+                before: lastId ?? undefined,
+              });
+              if (!fetched.size) break;
+
+              const matches = fetched
+                .filter(m => m.author.id === target.id && !m.pinned)
+                .first(limit - deletedCount);
+
+              if (matches.length) {
+                await channel.bulkDelete(matches, true);
+                deletedCount += matches.length;
+              }
+
+              lastId = fetched.last()?.id;
+              if (!lastId) break;
+            }
+          }
+        }
+
+        /* ─── TIME MODE ─── */
+        else if (mode === "time") {
+          let durationMs = ms(value);
+          if (!durationMs) {
+            return inter.editReply("> <❌> Invalid time format.");
+          }
+
+          const MAX_WINDOW = 14 * 24 * 60 * 60 * 1000;
+          durationMs = Math.min(durationMs, MAX_WINDOW);
+          const cutoff = Date.now() - durationMs;
+
+          for (const channel of inter.guild.channels.cache.values()) {
+            if (deletedCount >= MAX_DELETE) break;
+            if (!channel.isTextBased?.()) continue;
+            if (
+              !channel.permissionsFor(inter.guild.members.me)
+                ?.has(PermissionsBitField.Flags.ManageMessages)
+            ) continue;
+
+            let lastId = null;
+
+            while (deletedCount < MAX_DELETE) {
+              const fetched = await channel.messages.fetch({
+                limit: 100,
+                before: lastId ?? undefined,
+              });
+              if (!fetched.size) break;
+
+              const matches = fetched
+                .filter(m =>
+                  m.author.id === target.id &&
+                  m.createdTimestamp >= cutoff &&
+                  !m.pinned
+                )
+                .first(MAX_DELETE - deletedCount);
+
+              if (matches.length) {
+                await channel.bulkDelete(matches, true);
+                deletedCount += matches.length;
+              }
+
+              const oldest = fetched.last();
+              if (!oldest || oldest.createdTimestamp < cutoff) break;
+              lastId = oldest.id;
+            }
+          }
+        } else {
+          return inter.editReply("> <❌> Mode must be `count` or `time`.");
+        }
+
+        if (!deletedCount) {
+          return inter.editReply("> <❇️> No messages matched.");
+        }
+
+        const id = await recordModerationAction({
+          guildId: inter.guild.id,
+          userId: target.id,
+          moderatorId: inter.user.id,
+          actionType: "clean",
+          reason:
+            mode === "count"
+              ? `Deleted ${deletedCount} recent messages`
+              : `Deleted messages from last ${ms(ms(value), { long: true })}`,
+        });
+
+        return inter.editReply(
+          [
+            `> <✅> Deleted **${deletedCount}** messages from ${wrap(target.tag)}.`,
+            `> Mode: ${mode}`,
+            `> Action ID: ${fmtId(id)}`,
+          ].join("\n")
+        );
+      } catch (err) {
+        console.error("[tc clean slash]", err);
+        await logErrorToChannel(inter.guild?.id, err.stack, inter.client, "tc clean slash");
+        return inter.editReply("> <❌> Failed to clean messages.");
+      }
+    }
+
     const result =
       confirms.join("\n\n") ||
       {
@@ -723,6 +1036,10 @@ async function handleModSlashCommand(inter) {
         unban: "> <❌> Usage: `/tc unban user:<user ID> reason:<text>`",
         unmute: "> <❌> Usage: `/tc unmute user:<@user> reason:<text>`",
         view: "> <❌> Usage: `/tc view id:<number>`",
+        clean:
+          "> <❌> Usage:\n" +
+          "> `/tc clean user:<@user> mode:count value:<number>`\n" +
+          "> `/tc clean user:<@user> mode:time value:<1h|3d|1w>`",
       }[sub] ||
       "> <❌> Something went wrong.";
 

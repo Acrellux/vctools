@@ -313,6 +313,34 @@ const commands = [
             .setRequired(false)
         )
     )
+    // clean
+    .addSubcommand(sub =>
+      sub
+        .setName("clean")
+        .setDescription("Delete a user's messages by count or time window.")
+        .addUserOption(opt =>
+          opt
+            .setName("user")
+            .setDescription("The user whose messages should be deleted.")
+            .setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("mode")
+            .setDescription("Choose how messages are selected.")
+            .setRequired(true)
+            .addChoices(
+              { name: "Count (most recent messages)", value: "count" },
+              { name: "Time window (e.g. last 1h, 3d)", value: "time" }
+            )
+        )
+        .addStringOption(opt =>
+          opt
+            .setName("value")
+            .setDescription("Count (number) or time (e.g. 10m, 1h, 3d, 1w).")
+            .setRequired(true)
+        )
+    )
     // history
     .addSubcommand(sub =>
       sub

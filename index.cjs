@@ -118,6 +118,17 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 }
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+async function updateGuildStats(guildId, stats) {
+  const { error } = await supabase
+    .from("guild_settings")
+    .update(stats)
+    .eq("guildId", guildId);
+
+  if (error) {
+    console.error("[GUILD_STATS] update failed:", error);
+  }
+}
+
 // Load additional event handlers dynamically
 const loadEventHandlers = async () => {
   const eventsPath = path.join(__dirname, "events");
@@ -650,6 +661,11 @@ client.on(Events.GuildCreate, async (guild) => {
       return true;
     }
 
+    await updateGuildStats(guild.id, {
+      still_within: 1,
+      member_count: guild.memberCount,
+    });
+
     async function channelHasPublicMessages(channel) {
       try {
         if (!channel.isTextBased?.()) return false;
@@ -771,10 +787,42 @@ client.on(Events.GuildCreate, async (guild) => {
   }
 });
 
+// Member count updates
+client.on(Events.GuildMemberAdd, async (member) => {
+  const guild = member.guild;
+
+  await updateGuildStats(guild.id, {
+    member_count: guild.memberCount,
+  });
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  const guild = member.guild;
+
+  await updateGuildStats(guild.id, {
+    member_count: guild.memberCount,
+  });
+});
+
+// Bot removed from a server
+client.on(Events.GuildDelete, async (guild) => {
+  await updateGuildStats(guild.id, {
+    still_within: 0,
+  });
+});
+
+// Log in
 client.once("clientReady", async () => {
   console.log(`[INFO] Successfully logged in as ${client.user.tag}`);
   client.user.setPresence({ status: "idle" });
   console.log("Presence set to idle.");
+
+  for (const guild of client.guilds.cache.values()) {
+    await updateGuildStats(guild.id, {
+      still_within: 1,
+      member_count: guild.memberCount,
+    });
+  }
 
   const now = new Date();
   const timestamp = now.toLocaleTimeString("en-US", {
