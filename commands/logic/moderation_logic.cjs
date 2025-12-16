@@ -396,7 +396,17 @@ async function handleModMessageCommand(msg, args) {
             return msg.channel.send("> <❌> Invalid count.");
           }
 
-          for (const channel of msg.guild.channels.cache.values()) {
+          const channels = msg.guild.channels.cache.filter(c =>
+            c.isTextBased() &&
+            !c.isThread() &&
+            c.viewable &&
+            c.permissionsFor(msg.guild.members.me)?.has([
+              PermissionsBitField.Flags.ManageMessages,
+              PermissionsBitField.Flags.ReadMessageHistory,
+            ])
+          );
+
+          for (const channel of channels.values()) {
             if (deletedCount >= limit) break;
             if (!channel.isTextBased?.()) continue;
             if (!channel.permissionsFor(msg.guild.members.me)
@@ -442,7 +452,6 @@ async function handleModMessageCommand(msg, args) {
           durationMs = Math.min(durationMs, MAX_WINDOW);
 
           const cutoff = Date.now() - durationMs;
-          let deletedCount = 0;
 
           const channels = msg.guild.channels.cache.filter(c =>
             c.isTextBased() &&
@@ -929,7 +938,6 @@ async function handleModSlashCommand(inter) {
         /* ─── COUNT MODE ─── */
         if (mode === "count") {
           const limit = Math.min(Number(value), MAX_DELETE);
-          let deletedCount = 0;
 
           const channels = inter.guild.channels.cache.filter(c =>
             c.isTextBased() &&
@@ -985,7 +993,6 @@ async function handleModSlashCommand(inter) {
           durationMs = Math.min(durationMs, MAX_WINDOW);
 
           const cutoff = Date.now() - durationMs;
-          let deletedCount = 0;
 
           const channels = inter.guild.channels.cache.filter(c =>
             c.isTextBased() &&
@@ -1040,9 +1047,9 @@ async function handleModSlashCommand(inter) {
         }
 
         if (deletedCount === 0) {
-          return msg.channel.send(
+          return inter.editReply(
             "> <⚠️> No messages could be deleted.\n" +
-            "> Messages older than `14 days` cannot be bulk deleted by Discord."
+            "-# > Messages older than `14 days` cannot be bulk deleted by Discord."
           );
         }
 
