@@ -1035,7 +1035,7 @@ async function handleModSlashCommand(inter) {
         }
 
         if (!deletedCount) {
-          return inter.editReply("> <❇️> No messages matched.");
+          return inter.editReply("> <❌> No messages matched.");
         }
 
         if (deletedCount === 0) {
