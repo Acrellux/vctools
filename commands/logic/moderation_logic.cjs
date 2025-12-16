@@ -412,10 +412,15 @@ async function handleModMessageCommand(msg, args) {
               if (!fetched.size) break;
 
               const matches = fetched
-                .filter(m => m.author.id === target.id && !m.pinned)
-                .first(limit - deletedCount);
+                .filter(m =>
+                  m.author.id === target.id &&
+                  !m.pinned &&
+                  Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000
+                )
+                .toJSON()
+                .slice(0, limit - deletedCount);
 
-              if (matches.length) {
+              if (matches.length > 0) {
                 await channel.bulkDelete(matches, true);
                 deletedCount += matches.length;
               }
@@ -905,7 +910,7 @@ async function handleModSlashCommand(inter) {
       const MAX_DELETE = 100;
       let deletedCount = 0;
 
-      await inter.reply({ content: "🧹 Cleaning messages…", ephemeral: true });
+      await inter.reply({ content: "<❇️> Cleaning messages…", ephemeral: true });
 
       try {
         /* ─── COUNT MODE ─── */
