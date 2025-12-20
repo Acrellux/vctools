@@ -3,50 +3,136 @@ process.env.DISCORDJS_DISABLE_UDP = "true";
 
 const { Client, GatewayIntentBits, Events } = require("discord.js");
 
-// ── single-instance lock ─────────────────────────────────────
+// ── single-instance lock + crash-proof core ─────────────────────────────────────
 const fs = require("fs");
 const path = require("path");
 
 const LOCK_PATH = path.join(__dirname, "vc_tools_index.lock");
 const PID_PATH = path.join(__dirname, "vc_tools_index.pid");
 
+// Minimal logger (always safe)
+function safeLog(...args) {
+  try { console.log(...args); } catch { /* ignore */ }
+}
+function safeErr(...args) {
+  try { console.error(...args); } catch { /* ignore */ }
+}
+
+function isTransientError(err) {
+  const msg = (err && (err.stack || err.message)) || String(err || "");
+  return /ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|fetch failed|discord\.media|Unexpected server response:\s*522/i.test(msg);
+}
+function isOpusCorruption(err) {
+  const msg = (err && (err.stack || err.message)) || String(err || "");
+  return /compressed data.*corrupted|opus.*corrupt/i.test(msg);
+}
+
+// Circuit breaker: stop infinite error spam from taking everything down
+const CB = {
+  windowMs: 30_000,
+  maxErrors: 25,
+  errors: [],
+  trippedUntil: 0,
+};
+function circuitTripIfNeeded() {
+  const now = Date.now();
+  CB.errors = CB.errors.filter((t) => now - t < CB.windowMs);
+  if (CB.errors.length >= CB.maxErrors) {
+    CB.trippedUntil = now + 15_000; // cool down 15s
+    CB.errors = [];
+    safeErr("[CIRCUIT] Too many errors; cooling down for 15s.");
+  }
+}
+function recordErrorForCircuit() {
+  CB.errors.push(Date.now());
+  circuitTripIfNeeded();
+}
+function circuitIsTripped() {
+  return Date.now() < CB.trippedUntil;
+}
+
+// Single-instance lock
 try {
   if (fs.existsSync(LOCK_PATH)) {
     const oldPid = Number(fs.readFileSync(LOCK_PATH, "utf8"));
     if (!Number.isNaN(oldPid)) {
       try {
-        // Probe if old process exists
         process.kill(oldPid, 0);
-        console.error(`[LOCK] Another VC Tools instance is running (pid ${oldPid}). Exiting.`);
+        safeErr(`[LOCK] Another VC Tools instance is running (pid ${oldPid}). Exiting.`);
         process.exit(0);
       } catch {
-        // Stale lock; continue
+        // stale lock
       }
     }
   }
+
   fs.writeFileSync(LOCK_PATH, String(process.pid));
   fs.writeFileSync(PID_PATH, String(process.pid));
 
-  const cleanup = () => {
+  const cleanupLockFiles = () => {
     try { fs.unlinkSync(LOCK_PATH); } catch { }
     try { fs.unlinkSync(PID_PATH); } catch { }
   };
-  process.on("exit", cleanup);
-  process.on("SIGINT", () => { cleanup(); process.exit(); });
-  process.on("SIGTERM", () => { cleanup(); process.exit(); });
+
+  process.on("exit", cleanupLockFiles);
+  process.on("SIGINT", () => { cleanupLockFiles(); process.exit(); });
+  process.on("SIGTERM", () => { cleanupLockFiles(); process.exit(); });
+
+  // IMPORTANT:
+  // DO NOT exit the process on uncaughtException.
+  // We log, trip the circuit breaker, and keep the process alive.
   process.on("uncaughtException", (err) => {
+    try {
+      const msg = (err && (err.stack || err.message)) || String(err || "");
+
+      if (isOpusCorruption(err)) {
+        safeLog("[GLOBAL] Swallowed Opus corruption:", msg);
+        return;
+      }
+
+      if (isTransientError(err)) {
+        safeLog("[GLOBAL] Swallowed transient uncaughtException:", msg);
+        return;
+      }
+
+      recordErrorForCircuit();
+      safeErr("[GLOBAL] Uncaught exception (suppressed):", msg);
+
+      // fire-and-forget dev logging
+      Promise.resolve(
+        logGlobalError(
+          client,
+          `Uncaught Exception:\n${msg}`,
+          "process.on('uncaughtException')"
+        )
+      ).catch(() => { });
+
+    } catch (fatal) {
+      // absolute last-resort protection
+      safeErr("[UNCAUGHT-EXCEPTION-FAILSAFE]", fatal);
+    }
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    const err = reason instanceof Error
+      ? reason
+      : new Error(typeof reason === "object" ? JSON.stringify(reason) : String(reason));
+
     const msg = (err && (err.stack || err.message)) || String(err || "");
-    if (/compressed data.*corrupted|opus.*corrupt/i.test(msg)) {
-      console.warn("[LOCK] Swallowed Opus corruption during lock phase:", msg);
-      // IMPORTANT: do NOT cleanup+exit here; allow the process to continue.
+    if (isOpusCorruption(err)) {
+      safeLog("[GLOBAL] Swallowed Opus corruption rejection:", msg);
       return;
     }
-    console.error("[LOCK] Uncaught exception:", err?.stack || err);
-    cleanup();
-    process.exit(1);
+    if (isTransientError(err)) {
+      safeLog("[GLOBAL] Swallowed transient unhandledRejection:", msg);
+      return;
+    }
+    recordErrorForCircuit();
+    safeErr("[GLOBAL] Unhandled rejection (suppressed):", msg);
   });
+
 } catch (e) {
-  console.error("[LOCK] Failed to set lock:", e?.message || e);
+  safeErr("[LOCK] Failed to set lock:", e?.message || e);
 }
 
 const dotenv = require("dotenv");
@@ -85,13 +171,31 @@ const {
 dotenv.config();
 
 // Clean up the .pcm containing folder
+// Clean up the .pcm containing folder (Windows-safe: retry EPERM)
 const audioDir = path.resolve(__dirname, "../../temp_audio");
 
-fs.readdir(audioDir, (err, files) => {
+function safeUnlinkWithRetry(filePath, retries = 6) {
+  return new Promise((resolve) => {
+    const attempt = (n) => {
+      fs.unlink(filePath, (err) => {
+        if (!err) return resolve(true);
+        if ((err.code === "EPERM" || err.code === "EBUSY") && n > 0) {
+          return setTimeout(() => attempt(n - 1), 200);
+        }
+        // Not fatal; just report once
+        console.warn(`[SAFE-DEL] Failed to delete ${filePath} (${err.code}): ${err.message}`);
+        resolve(false);
+      });
+    };
+    attempt(retries);
+  });
+}
+
+fs.readdir(audioDir, async (err, files) => {
   if (err) return;
   for (const file of files) {
     if (file.endsWith(".pcm") || file.endsWith(".wav")) {
-      fs.unlink(path.join(audioDir, file), () => { });
+      await safeUnlinkWithRetry(path.join(audioDir, file));
     }
   }
 });
@@ -977,32 +1081,6 @@ async function logGlobalError(client, error, context = "Unknown") {
     console.error("[GLOBAL ERROR] Failed to report error:", err);
   }
 }
-
-process.on("unhandledRejection", async (reason) => {
-  const err = reason instanceof Error ? reason : new Error(
-    typeof reason === "object" ? JSON.stringify(reason) : String(reason)
-  );
-
-  if (isTransientError(err)) {
-    console.warn("[WARN] Transient unhandledRejection suppressed:", err.message);
-    return;
-  }
-  console.error("[UNHANDLED REJECTION]", err.stack || err.message);
-  await logGlobalError(client, `Unhandled Rejection:\n${err.stack || err.message}`, "process.on('unhandledRejection')");
-});
-
-process.on("uncaughtException", async (error) => {
-  if (isOpusCorruption(error)) {
-    console.warn("[GLOBAL] Swallowed Opus corruption crash:", error.message || error);
-    return; // prevent process exit for this known transient
-  }
-  if (isTransientError(error)) {
-    console.warn("[WARN] Transient uncaughtException suppressed:", error.message);
-    return;
-  }
-  console.error("[UNCAUGHT EXCEPTION]", error.stack || error.message);
-  await logGlobalError(client, `Uncaught Exception:\n${error.stack || error.message}`, "process.on('uncaughtException')");
-});
 
 // at bot bootstrap
 client.rest.on('rateLimited', (info) => {

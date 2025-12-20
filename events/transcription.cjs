@@ -615,38 +615,64 @@ async function convertOpusToWav(pcmPath, wavFilePath) {
     `[DEBUG] Converting PCM → WAV:\n  src: ${pcmPath}\n  dst: ${wavFilePath}`
   );
 
-  // Mark both files as in-use
-  inUsePaths.add(path.resolve(pcmPath));
-  inUsePaths.add(path.resolve(wavFilePath));
+  const pcmFull = path.resolve(pcmPath);
+  const wavFull = path.resolve(wavFilePath);
+
+  // Mark both files as in-use (only for the duration of ffmpeg)
+  inUsePaths.add(pcmFull);
+  inUsePaths.add(wavFull);
+
+  const releaseLocks = () => {
+    try { inUsePaths.delete(pcmFull); } catch { }
+    try { inUsePaths.delete(wavFull); } catch { }
+  };
+
+  const cleanupPcmBestEffort = async () => {
+    // IMPORTANT: unlock first, or safeDeleteFile will refuse
+    try { inUsePaths.delete(pcmFull); } catch { }
+
+    let ok = false;
+    try {
+      ok = await safeDeleteFile(pcmPath, { retries: 10, delayMs: 120 });
+    } catch { }
+
+    if (!ok) {
+      // escalate on Windows locks
+      try { await hardDeleteFile(pcmPath, { retries: 14, baseDelayMs: 140 }); } catch { }
+    }
+  };
 
   return new Promise((resolve, reject) => {
     ffmpeg(pcmPath)
-      .inputFormat("s16le")      // raw 16-bit little-endian PCM
-      .inputOptions(['-ar 48000', '-ac 1'])   // tell FFmpeg what it *really* receives
-      .audioFrequency(16000)                 // then resample
+      .inputFormat("s16le")
+      .inputOptions(["-ar 48000", "-ac 1"])
+      .audioFrequency(16000)
       .audioChannels(1)
       .audioCodec("pcm_s16le")
       .toFormat("wav")
       .save(wavFilePath)
       .on("end", () => {
         console.log(`[INFO] PCM → WAV conversion complete: ${wavFilePath}`);
-        // Try to delete the PCM right away (with retries)
+
+        // Small delay to let ffmpeg fully release file handles on Windows
         setTimeout(() => {
-          safeDeleteFile(pcmPath).catch(() => { });
-          inUsePaths.delete(path.resolve(pcmPath));
-          // Release WAV lock here; processQueue re-adds it when used via that flow
-          inUsePaths.delete(path.resolve(wavFilePath));
-        }, 5000);
+          cleanupPcmBestEffort().finally(() => {
+            // WAV is no longer "locked" by conversion step
+            try { inUsePaths.delete(wavFull); } catch { }
+          });
+        }, 150);
+
         resolve();
       })
       .on("error", (error) => {
         console.error(`[ERROR] FFmpeg failed: ${error.message}`);
-        // Even on error, try to delete PCM (best-effort)
+
         setTimeout(() => {
-          safeDeleteFile(pcmPath).catch(() => { });
-          inUsePaths.delete(path.resolve(pcmPath));
-          inUsePaths.delete(path.resolve(wavFilePath));
-        }, 5000);
+          cleanupPcmBestEffort().finally(() => {
+            releaseLocks();
+          });
+        }, 150);
+
         reject(error);
       });
   });
