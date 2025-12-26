@@ -121,135 +121,68 @@ const {
 
 const inflightConsent = new Set();
 
-/**
- * Settings cache
- * - Fixes slash-command Unknown interaction by allowing us to ACK first
- * - Reduces Supabase load for BOTH text + slash commands
- */
-const SETTINGS_CACHE = {
-  TTL_MS: 60 * 1000, // 60s is a good balance; adjust if you want
-  map: new Map(),    // guildId -> { settings, ts }
+/* =============================
+   SETTINGS CACHE (for interactions only)
+   - The bug was: awaiting getSettingsForGuild BEFORE ack -> 10062
+   - Solution: do NOT await it on the hot path. Use cache + background refresh.
+============================= */
 
-  getFresh(guildId) {
-    if (!guildId) return null;
-    const entry = this.map.get(guildId);
-    if (!entry) return null;
-    if (Date.now() - entry.ts > this.TTL_MS) return null;
-    return entry.settings || null;
-  },
+const SETTINGS_CACHE_TTL_MS = 60_000; // 1 minute
+const _settingsCache = new Map(); // guildId -> { settings, expiresAt, inflightPromise }
 
-  set(guildId, settings) {
-    if (!guildId) return;
-    this.map.set(guildId, { settings: settings || {}, ts: Date.now() });
-  },
+function getCachedSettingsSync(guildId) {
+  const entry = _settingsCache.get(guildId);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) return null;
+  return entry.settings || null;
+}
 
-  async fetch(guildId) {
-    // Always returns an object (never null)
-    const cached = this.getFresh(guildId);
-    if (cached) return cached;
+function refreshSettingsCache(guildId) {
+  const existing = _settingsCache.get(guildId);
+  if (existing?.inflightPromise) return existing.inflightPromise;
 
-    const settings = (await getSettingsForGuild(guildId)) || {};
-    this.set(guildId, settings);
-    return settings;
-  }
-};
-
-/**
- * Wrap an Interaction so old code that calls interaction.reply()
- * keeps working even after we defer early.
- *
- * - If deferred/replied: reply() becomes editReply()
- * - If editReply fails: fall back to followUp()
- * - deferReply() is idempotent
- */
-function makeSafeInteraction(interaction) {
-  const safeReply = async (payload) => {
+  const p = (async () => {
     try {
-      if (interaction.deferred || interaction.replied) {
-        // After deferReply or an initial reply, the "safe" equivalent is editReply.
-        try {
-          return await interaction.editReply(payload);
-        } catch (_) {
-          // If editReply isn't possible (edge cases), try followUp.
-          return await interaction.followUp(payload);
-        }
-      }
-      return await interaction.reply(payload);
+      const settings = (await getSettingsForGuild(guildId)) || {};
+      _settingsCache.set(guildId, {
+        settings,
+        expiresAt: Date.now() + SETTINGS_CACHE_TTL_MS,
+        inflightPromise: null,
+      });
+      return settings;
     } catch (err) {
-      // If token expired anyway, don't hard-crash the router.
-      // Still rethrow non-timing errors if you want; for now, swallow silently.
-      const msg = String(err?.message || err);
-      if (msg.includes("Unknown interaction") || msg.includes("Interaction has already been acknowledged")) {
-        return null;
+      // Keep whatever was cached; don't throw into interaction handler
+      if (existing) {
+        _settingsCache.set(guildId, {
+          settings: existing.settings,
+          expiresAt: existing.expiresAt,
+          inflightPromise: null,
+        });
       }
-      throw err;
+      return existing?.settings || null;
     }
-  };
+  })();
 
-  const safeDeferReply = async (opts = {}) => {
-    try {
-      if (!interaction.deferred && !interaction.replied) {
-        return await interaction.deferReply(opts);
-      }
-      return null;
-    } catch (err) {
-      const msg = String(err?.message || err);
-      if (msg.includes("Unknown interaction") || msg.includes("Interaction has already been acknowledged")) {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  const safeEditReply = async (payload) => {
-    try {
-      return await interaction.editReply(payload);
-    } catch (err) {
-      const msg = String(err?.message || err);
-      if (msg.includes("Unknown interaction")) return null;
-      throw err;
-    }
-  };
-
-  const safeFollowUp = async (payload) => {
-    try {
-      return await interaction.followUp(payload);
-    } catch (err) {
-      const msg = String(err?.message || err);
-      if (msg.includes("Unknown interaction")) return null;
-      throw err;
-    }
-  };
-
-  return new Proxy(interaction, {
-    get(target, prop) {
-      if (prop === "reply") return safeReply;
-      if (prop === "deferReply") return safeDeferReply;
-      if (prop === "editReply") return safeEditReply;
-      if (prop === "followUp") return safeFollowUp;
-
-      const value = target[prop];
-      if (typeof value === "function") return value.bind(target);
-      return value;
-    }
+  _settingsCache.set(guildId, {
+    settings: existing?.settings || null,
+    expiresAt: existing?.expiresAt || 0,
+    inflightPromise: p,
   });
+
+  return p;
 }
 
 /* =============================
     ERROR FLOOD GUARD
-   - Per-channel cooldown: at most 1 public error notice every COOL_DOWN_MS
-   - Global circuit breaker: if too many errors quickly, mute ALL public notices
-     and only log to the error-logs channel with a summary.
 ============================= */
 
 const ERROR_GUARD = {
-  // Tunables (adjust as needed)
-  COOL_DOWN_MS: 3 * 60 * 1000,     // one public notice per channel every 3 minutes
-  GLOBAL_WINDOW_MS: 30 * 1000,     // consider errors over a 30s window
-  GLOBAL_TRIP_THRESHOLD: 15,       // >=15 errors in window → trip breaker
-  GLOBAL_MUTE_MS: 15 * 60 * 1000,  // mute public notices for 15 minutes
+  COOL_DOWN_MS: 3 * 60 * 1000,
+  GLOBAL_WINDOW_MS: 30 * 1000,
+  GLOBAL_TRIP_THRESHOLD: 15,
+  GLOBAL_MUTE_MS: 15 * 60 * 1000,
 
-  perChannelNextAllowed: new Map(), // channelId -> timestamp (ms)
+  perChannelNextAllowed: new Map(),
   globalWindow: { start: Date.now(), count: 0 },
   globalMuteUntil: 0,
   trippedOnceThisMute: false,
@@ -270,11 +203,9 @@ const ERROR_GUARD = {
     this.globalWindow.count += 1;
 
     if (this.globalWindow.count >= this.GLOBAL_TRIP_THRESHOLD && this._now() > this.globalMuteUntil) {
-      // Trip the breaker
       this.globalMuteUntil = this._now() + this.GLOBAL_MUTE_MS;
-      this.trippedOnceThisMute = false; // allow one summary log
+      this.trippedOnceThisMute = false;
 
-      // Best-effort summary to error logs channel
       try {
         const details = [
           `Circuit breaker TRIPPED in ${contextLabel}`,
@@ -283,13 +214,13 @@ const ERROR_GUARD = {
           errStackForLog ? `Last error:\n${String(errStackForLog).slice(0, 1200)}` : null,
         ].filter(Boolean).join("\n");
         logErrorToChannel(guildId, details, client, "ERROR_FLOOD_GUARD");
-      } catch (_) { /* noop */ }
+      } catch (_) { }
     }
   },
 
   canNotifyPublic(channelId) {
     const now = this._now();
-    if (now < this.globalMuteUntil) return false; // globally muted
+    if (now < this.globalMuteUntil) return false;
 
     const nextAllowed = this.perChannelNextAllowed.get(channelId) || 0;
     if (now < nextAllowed) return false;
@@ -302,7 +233,6 @@ const ERROR_GUARD = {
     const guildId = messageOrInteraction.guild?.id ?? null;
     this._maybeTrip(messageOrInteraction, client, guildId, contextLabel, err?.stack || String(err));
 
-    // If globally muted and we haven't emitted a summary during this mute, emit once.
     if (this._now() < this.globalMuteUntil && !this.trippedOnceThisMute) {
       this.trippedOnceThisMute = true;
       try {
@@ -311,7 +241,7 @@ const ERROR_GUARD = {
           `They will resume around <t:${Math.floor(this.globalMuteUntil / 1000)}:t>.`,
         ].join("\n");
         logErrorToChannel(guildId, details, client, "ERROR_FLOOD_GUARD");
-      } catch (_) { /* noop */ }
+      } catch (_) { }
     }
   }
 };
@@ -339,9 +269,7 @@ async function safeDeferUpdate(interaction) {
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferUpdate();
     }
-  } catch (_) {
-    // If we can't defer because it's already acknowledged, ignore.
-  }
+  } catch (_) { }
 }
 
 /** Best-effort user feedback without crashing on perms */
@@ -360,7 +288,7 @@ async function safeSend(channel, payload) {
   try {
     return await channel.send(messageOptions);
   } catch (err) {
-    if (err?.code === 50013) { // Missing Permissions
+    if (err?.code === 50013) {
       try {
         if (interaction) {
           if (!interaction.deferred && !interaction.replied) {
@@ -375,7 +303,7 @@ async function safeSend(channel, payload) {
             });
           }
         }
-      } catch (_) { /* noop */ }
+      } catch (_) { }
       return null;
     }
     throw err;
@@ -387,12 +315,78 @@ async function guardedPublicErrorNotice(message, content) {
   try {
     if (!message?.channel) return;
     if (!ERROR_GUARD.canNotifyPublic(message.channel.id)) return;
-
-    // Optionally auto-delete shortly after:
-    // const sent = await safeSend(message.channel, content);
-    // setTimeout(() => sent?.delete().catch(()=>{}), 10_000);
     await safeSend(message.channel, content);
-  } catch (_) { /* never throw from guard */ }
+  } catch (_) { }
+}
+
+/* =============================
+   INTERACTION WATCHDOG + PATCH
+   - If a slash command handler takes too long, we defer PUBLICLY (not ephemeral)
+     to prevent 10062.
+   - If we deferred, command code that calls interaction.reply() is redirected
+     to editReply() / followUp() as needed.
+============================= */
+
+function sanitizeForEditReply(payload) {
+  if (payload == null) return payload;
+  if (typeof payload === "string") return { content: payload };
+  if (typeof payload !== "object") return payload;
+
+  const out = { ...payload };
+  // editReply does not support ephemeral
+  delete out.ephemeral;
+  // fetchReply is not used for editReply
+  delete out.fetchReply;
+  return out;
+}
+
+function patchInteractionReplyAfterWatchdog(interaction) {
+  if (interaction.__vct_reply_patched) return;
+  interaction.__vct_reply_patched = true;
+
+  const origReply = interaction.reply?.bind(interaction);
+  const origEditReply = interaction.editReply?.bind(interaction);
+  const origFollowUp = interaction.followUp?.bind(interaction);
+
+  if (!origReply || !origEditReply || !origFollowUp) return;
+
+  interaction.reply = async (payload) => {
+    // If not acknowledged yet, normal reply
+    if (!interaction.deferred && !interaction.replied) {
+      return origReply(payload);
+    }
+
+    // Already acknowledged (likely via watchdog defer)
+    // If caller explicitly asked ephemeral, use followUp ephemeral.
+    if (payload && typeof payload === "object" && payload.ephemeral === true) {
+      try {
+        // If we only deferred for safety, delete the public placeholder
+        // so the interaction feels truly ephemeral.
+        await interaction.deleteReply().catch(() => { });
+      } catch (_) { }
+      return origFollowUp(payload);
+    }
+
+    // Otherwise, edit the original deferred reply publicly.
+    return origEditReply(sanitizeForEditReply(payload));
+  };
+}
+
+async function startInteractionAckWatchdog(interaction) {
+  // Only for repliable interactions where Discord expects an ack in ~3 seconds
+  if (!interaction?.isRepliable?.()) return null;
+
+  // If the handler replies quickly, watchdog never fires.
+  // If not, we deferReply PUBLICLY so it does NOT force everything ephemeral.
+  const t = setTimeout(async () => {
+    try {
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ ephemeral: false }).catch(() => { });
+      }
+    } catch (_) { }
+  }, 1900);
+
+  return () => clearTimeout(t);
 }
 
 /* =============================
@@ -407,8 +401,7 @@ async function onMessageCreate(message) {
       return;
     }
 
-    // Use cached settings for BOTH text and slash commands
-    const settings = await SETTINGS_CACHE.fetch(message.guild.id);
+    const settings = (await getSettingsForGuild(message.guild.id)) || {};
     const prefixes = settings.prefixes ?? { slash: true, greater: true, exclamation: true };
 
     let used = null;
@@ -474,7 +467,6 @@ async function onMessageCreate(message) {
       "onMessageCreate"
     );
 
-    // Count toward guard and rate-limit any public notice
     ERROR_GUARD.recordError({
       messageOrInteraction: message,
       client: message.client,
@@ -493,22 +485,28 @@ async function onMessageCreate(message) {
    INTERACTION-BASED COMMAND ROUTING
 ============================= */
 async function onInteractionCreate(interaction) {
+  let stopWatchdog = null;
+
   try {
-    // ✅ DM guard FIRST (prevents interaction.guild null crashes)
-    if (!interaction.inGuild()) return;
+    // Start watchdog ASAP for any repliable interaction types.
+    stopWatchdog = await startInteractionAckWatchdog(interaction);
 
     if (interaction.isChatInputCommand()) {
-      // 🔒 ACKNOWLEDGE IMMEDIATELY — BEFORE ANY await (fixes 10062 for every command)
-      // NOTE: This makes slash commands ephemeral by default. If you want public slash outputs,
-      // change ephemeral: true -> false here.
-      const safe = makeSafeInteraction(interaction);
-      await safe.deferReply({ ephemeral: true });
+      // 🚧 DM guard MUST come before interaction.guild access
+      if (!interaction.inGuild()) return;
 
-      // Now it's safe to await Supabase/settings without interaction expiry.
-      const settings = await SETTINGS_CACHE.fetch(interaction.guild.id);
+      // Patch reply() so command modules can keep calling reply() even if watchdog deferred.
+      patchInteractionReplyAfterWatchdog(interaction);
 
-      if (settings.prefixes && settings.prefixes.slash === false) {
-        const enabled = settings.prefixes;
+      // ✅ IMPORTANT: Do NOT await Supabase settings before ack.
+      // Use cache sync-check and refresh in background.
+      const guildId = interaction.guild.id;
+      const cached = getCachedSettingsSync(guildId);
+      refreshSettingsCache(guildId).catch(() => { });
+
+      // Enforce slash disabled using cached settings (fast)
+      if (cached?.prefixes && cached.prefixes.slash === false) {
+        const enabled = cached.prefixes;
         const alternatives = [];
         if (enabled.greater) alternatives.push("the `> prefix`");
         if (enabled.exclamation) alternatives.push("the `! prefix`");
@@ -516,63 +514,63 @@ async function onInteractionCreate(interaction) {
           ? `You can still use ${alternatives.join(" or ")} instead.`
           : "No command prefixes are currently enabled.";
 
-        await safe.editReply({
+        await interaction.reply({
           content: ["> <❌> Slash commands are disabled on this server.", fallback].join("\n"),
-        });
+          ephemeral: false,
+        }).catch(() => { });
+
         return;
       }
 
       switch (interaction.commandName) {
         case "settings":
-          await handleSettingsSlashCommand(safe);
+          await handleSettingsSlashCommand(interaction);
           break;
         case "initialize":
-          await handleInitializeSlashCommand(safe);
+          await handleInitializeSlashCommand(interaction);
           break;
         case "help":
-          await handleHelpSlashCommand(safe);
+          await handleHelpSlashCommand(interaction);
           break;
         case "vc":
-          await handleVCSlashCommand(safe);
+          await handleVCSlashCommand(interaction);
           break;
         case "tc":
-          await handleModSlashCommand(safe);
+          await handleModSlashCommand(interaction);
           break;
         case "safeuser":
-          await handlesafeUserslashCommand(safe);
+          await handlesafeUserslashCommand(interaction);
           break;
         case "safechannel":
-          await handlesafeChannelslashCommand(safe);
+          await handlesafeChannelslashCommand(interaction);
           break;
         case "report":
-          await handleReportSlashCommand(safe);
+          await handleReportSlashCommand(interaction);
           break;
         case "disallow":
-          await handleDisallowSlashCommand(safe);
+          await handleDisallowSlashCommand(interaction);
           break;
         case "filter":
-          await handleFilterSlashCommand(safe);
+          await handleFilterSlashCommand(interaction);
           break;
         case "notify":
-          await handleNotifySlashCommand(safe);
+          await handleNotifySlashCommand(interaction);
           break;
         case "drain":
-          await handleDrainSlashCommand(safe);
+          await handleDrainSlashCommand(interaction);
           break;
         case "consent":
-          await showConsentSettingsUI(safe, true);
+          await showConsentSettingsUI(interaction, true);
           break;
         default:
           console.log(`[DEBUG] Unhandled slash command: ${interaction.commandName}`);
-          await safe.editReply({ content: "> <❌> Unknown command." });
-          break;
+          await interaction.reply({ content: "> <❇️> Unknown command.", ephemeral: true }).catch(() => { });
       }
 
     } else if (interaction.isModalSubmit()) {
-      // Modal submits also have the 3s ACK rule.
-      const safe = makeSafeInteraction(interaction);
-      await safe.deferReply({ ephemeral: true });
-      await handleReportSubmission(safe);
+      // Modal submits also need quick ack; watchdog handles it.
+      patchInteractionReplyAfterWatchdog(interaction);
+      await handleReportSubmission(interaction);
 
     } else if (interaction.isButton() || interaction.isStringSelectMenu()) {
       // VC settings UI (buttons + role select)
@@ -596,11 +594,10 @@ async function onInteractionCreate(interaction) {
       if (interaction.customId.startsWith("notify:")) return handleNotifyFlow(interaction);
       if (interaction.isButton() && interaction.customId.startsWith("prefix:")) return handlePrefixSettingsFlow(interaction);
 
-      // ✅ Safer consent grant handler: defer first, then editReply (no .update())
+      // ✅ Safer consent grant handler
       if (interaction.isButton() && interaction.customId.startsWith("consent:grant:")) {
         const [, , targetUserId] = interaction.customId.split(":");
 
-        // Only the targeted user can grant their consent
         if (interaction.user.id !== targetUserId) {
           if (!interaction.deferred && !interaction.replied) {
             await interaction.reply({
@@ -611,7 +608,6 @@ async function onInteractionCreate(interaction) {
           return;
         }
 
-        // If another handler run is already in-flight for this user, noop
         if (inflightConsent.has(targetUserId)) {
           if (!interaction.deferred && !interaction.replied) {
             await interaction.reply({
@@ -624,14 +620,11 @@ async function onInteractionCreate(interaction) {
 
         inflightConsent.add(targetUserId);
 
-        // Watchdog: ensure we ACK quickly to avoid token expiry
         const watchdog = setTimeout(() => safeDeferUpdate(interaction), 1500);
 
         try {
-          // ACK immediately (safe, idempotent)
           await safeDeferUpdate(interaction);
 
-          // 1) Show "Processing…" on the original message (editReply after defer)
           const processingRows = replaceConsentButton(
             interaction.message,
             btn => btn.setLabel("Processing…").setStyle(ButtonStyle.Secondary).setDisabled(true)
@@ -645,13 +638,9 @@ async function onInteractionCreate(interaction) {
             }
           });
 
-          // 2) Persist consent (UPSERT/idempotent)
           await grantUserConsent(targetUserId, interaction.guild);
-
-          // 3) Clear any pending context for this user
           interactionContexts.delete(targetUserId);
 
-          // 4) Final UI: "Consent recorded"
           const successRows = replaceConsentButton(
             interaction.message,
             btn => btn.setLabel("Consent recorded").setStyle(ButtonStyle.Success).setDisabled(true)
@@ -663,7 +652,6 @@ async function onInteractionCreate(interaction) {
             }
           });
 
-          // Optional ephemeral confirm
           try {
             await interaction.followUp({ ephemeral: true, content: "> <✅> Consent recorded." });
           } catch (_) { }
@@ -703,29 +691,19 @@ async function onInteractionCreate(interaction) {
         }
       }
 
-      // 🛠️ Admin/settings UI for consent (select menus etc.)
       if (interaction.customId.startsWith("consent:")) {
         return handleConsentSettingChange(interaction);
       }
 
-      // — unified list buttons —
-      if (interaction.customId.startsWith("safeUserList:")) {
-        return showSafeUserList(interaction);
-      }
-      if (interaction.customId.startsWith("safeChannelList:")) {
-        return showSafeChannelList(interaction);
-      }
-      if (interaction.customId.startsWith("notifyList:")) {
-        return showNotifyList(interaction);
-      }
+      if (interaction.customId.startsWith("safeUserList:")) return showSafeUserList(interaction);
+      if (interaction.customId.startsWith("safeChannelList:")) return showSafeChannelList(interaction);
+      if (interaction.customId.startsWith("notifyList:")) return showNotifyList(interaction);
 
-      // init flows
       if (interaction.customId.startsWith("init:")) {
-        const parts = interaction.customId.split(":"); // e.g. ["init","setup_transcription_yes","1234567890"]
+        const parts = interaction.customId.split(":");
         const action = parts[1];
         const ownerId = parts[2] ?? null;
 
-        // 🔒 Only the user who started the init flow can interact
         if (ownerId && ownerId !== interaction.user.id) {
           if (!interaction.deferred && !interaction.replied) {
             await interaction.reply({
@@ -736,14 +714,12 @@ async function onInteractionCreate(interaction) {
           return;
         }
 
-        // 🧭 Get or seed context; don't require mode === "init"
         let context = interactionContexts.get(interaction.user.id);
         if (!context) {
           context = { guildId: interaction.guild.id, mode: "init", initMethod: "ftt" };
           interactionContexts.set(interaction.user.id, context);
         }
 
-        // ⏱️ Watchdog: if no ack within ~2s, defer update to prevent toast
         const watchdog = setTimeout(async () => {
           try {
             if (!interaction.deferred && !interaction.replied) {
@@ -778,11 +754,11 @@ async function onInteractionCreate(interaction) {
         return;
       }
 
-      // fallback to any other interactions
       if (!interaction.replied && !interaction.deferred) {
         await handleAllInteractions(interaction);
       }
     }
+
   } catch (error) {
     console.error(`[ERROR] onInteractionCreate failed: ${error.message}`);
     await logErrorToChannel(
@@ -792,7 +768,6 @@ async function onInteractionCreate(interaction) {
       "onInteractionCreate"
     );
 
-    // Count toward breaker; interactions never post public errors
     ERROR_GUARD.recordError({
       messageOrInteraction: interaction,
       client: interaction.client,
@@ -800,21 +775,27 @@ async function onInteractionCreate(interaction) {
       err: error
     });
 
-    // Use a safe interaction wrapper for best-effort feedback
     try {
-      const safe = makeSafeInteraction(interaction);
-      if (!interaction.replied && !interaction.deferred && interaction.inGuild()) {
-        await safe.reply({
-          content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
-          ephemeral: true,
-        });
-      } else if (interaction.deferred || interaction.replied) {
-        await safe.followUp({
-          content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
-          ephemeral: true,
-        }).catch(() => { });
+      if (interaction?.isRepliable?.()) {
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({
+            content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
+          }).catch(async () => {
+            await interaction.followUp({
+              content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
+              ephemeral: true,
+            }).catch(() => { });
+          });
+        } else {
+          await interaction.reply({
+            content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
+            ephemeral: true,
+          }).catch(() => { });
+        }
       }
-    } catch (_) { /* noop */ }
+    } catch (_) { }
+  } finally {
+    try { stopWatchdog?.(); } catch (_) { }
   }
 }
 
