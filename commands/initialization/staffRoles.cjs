@@ -97,7 +97,7 @@ async function handleStaffRolesFlow(interaction, mode, action) {
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [
-            createRoleDropdown("init:select_admin_role", guild, userId),
+            createRoleDropdown(`init:select_admin_role:${userId}`, guild, userId),
           ],
         });
         break;
@@ -134,7 +134,7 @@ async function handleStaffRolesFlow(interaction, mode, action) {
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [
-            createRoleDropdown("init:select_moderator_role", guild, userId),
+            createRoleDropdown(`init:select_moderator_role:${userId}`, guild, userId),
           ],
         });
         break;
@@ -164,7 +164,7 @@ async function handleStaffRolesFlow(interaction, mode, action) {
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
           components: [
-            createRoleDropdown("init:select_vcmoderator_role", guild, userId),
+            createRoleDropdown(`init:select_vcmoderator_role:${userId}`, guild, userId),
           ],
         });
         break;

@@ -160,7 +160,7 @@ async function transitionToAdminRole(interaction) {
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
       components: [
         // Use a consistent custom ID format.
-        createRoleDropdown("init:select_admin_role", guild, userId),
+        createRoleDropdown(`init:select_admin_role:${userId}`, guild, userId),
       ],
     });
   } catch (error) {
@@ -189,7 +189,7 @@ async function transitionToModeratorRole(interaction) {
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
       components: [
-        createRoleDropdown("init:select_moderator_role", guild, userId),
+        createRoleDropdown(`init:select_moderator_role:${userId}`, guild, userId),
       ],
     });
   } catch (error) {
@@ -223,7 +223,7 @@ async function transitionToVcModeratorRole(interaction) {
 
 -# *Unable to find a specific role? Log into the [Dashboard](<https://vctools.app/dashboard>) to avoid the 25 dropdown option limit.*`,
       components: [
-        createRoleDropdown("init:select_vcmoderator_role", guild, userId),
+        createRoleDropdown(`init:select_vcmoderator_role:${userId}`, guild, userId),
       ],
     });
   } catch (error) {
