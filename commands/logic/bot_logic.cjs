@@ -191,7 +191,14 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
     ];
 
     // Send or update
-    if (interactionOrMessage.isRepliable?.()) {
+    if (interactionOrMessage instanceof Message) {
+      // Message-based command
+      await interactionOrMessage.channel.send({
+        content: contentMessage,
+        components,
+      });
+    } else {
+      // Interaction-based command
       if (interactionOrMessage.replied || interactionOrMessage.deferred) {
         await interactionOrMessage.editReply({
           content: contentMessage,
@@ -204,11 +211,6 @@ async function showBotSettingsUI(interactionOrMessage, isEphemeral = false) {
           ephemeral: isEphemeral,
         });
       }
-    } else {
-      await interactionOrMessage.channel.send({
-        content: contentMessage,
-        components,
-      });
     }
   } catch (error) {
     console.error(`[ERROR] showBotSettingsUI failed: ${error.message}`);
