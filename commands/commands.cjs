@@ -121,6 +121,120 @@ const {
 
 const inflightConsent = new Set();
 
+/**
+ * Settings cache
+ * - Fixes slash-command Unknown interaction by allowing us to ACK first
+ * - Reduces Supabase load for BOTH text + slash commands
+ */
+const SETTINGS_CACHE = {
+  TTL_MS: 60 * 1000, // 60s is a good balance; adjust if you want
+  map: new Map(),    // guildId -> { settings, ts }
+
+  getFresh(guildId) {
+    if (!guildId) return null;
+    const entry = this.map.get(guildId);
+    if (!entry) return null;
+    if (Date.now() - entry.ts > this.TTL_MS) return null;
+    return entry.settings || null;
+  },
+
+  set(guildId, settings) {
+    if (!guildId) return;
+    this.map.set(guildId, { settings: settings || {}, ts: Date.now() });
+  },
+
+  async fetch(guildId) {
+    // Always returns an object (never null)
+    const cached = this.getFresh(guildId);
+    if (cached) return cached;
+
+    const settings = (await getSettingsForGuild(guildId)) || {};
+    this.set(guildId, settings);
+    return settings;
+  }
+};
+
+/**
+ * Wrap an Interaction so old code that calls interaction.reply()
+ * keeps working even after we defer early.
+ *
+ * - If deferred/replied: reply() becomes editReply()
+ * - If editReply fails: fall back to followUp()
+ * - deferReply() is idempotent
+ */
+function makeSafeInteraction(interaction) {
+  const safeReply = async (payload) => {
+    try {
+      if (interaction.deferred || interaction.replied) {
+        // After deferReply or an initial reply, the "safe" equivalent is editReply.
+        try {
+          return await interaction.editReply(payload);
+        } catch (_) {
+          // If editReply isn't possible (edge cases), try followUp.
+          return await interaction.followUp(payload);
+        }
+      }
+      return await interaction.reply(payload);
+    } catch (err) {
+      // If token expired anyway, don't hard-crash the router.
+      // Still rethrow non-timing errors if you want; for now, swallow silently.
+      const msg = String(err?.message || err);
+      if (msg.includes("Unknown interaction") || msg.includes("Interaction has already been acknowledged")) {
+        return null;
+      }
+      throw err;
+    }
+  };
+
+  const safeDeferReply = async (opts = {}) => {
+    try {
+      if (!interaction.deferred && !interaction.replied) {
+        return await interaction.deferReply(opts);
+      }
+      return null;
+    } catch (err) {
+      const msg = String(err?.message || err);
+      if (msg.includes("Unknown interaction") || msg.includes("Interaction has already been acknowledged")) {
+        return null;
+      }
+      throw err;
+    }
+  };
+
+  const safeEditReply = async (payload) => {
+    try {
+      return await interaction.editReply(payload);
+    } catch (err) {
+      const msg = String(err?.message || err);
+      if (msg.includes("Unknown interaction")) return null;
+      throw err;
+    }
+  };
+
+  const safeFollowUp = async (payload) => {
+    try {
+      return await interaction.followUp(payload);
+    } catch (err) {
+      const msg = String(err?.message || err);
+      if (msg.includes("Unknown interaction")) return null;
+      throw err;
+    }
+  };
+
+  return new Proxy(interaction, {
+    get(target, prop) {
+      if (prop === "reply") return safeReply;
+      if (prop === "deferReply") return safeDeferReply;
+      if (prop === "editReply") return safeEditReply;
+      if (prop === "followUp") return safeFollowUp;
+
+      const value = target[prop];
+      if (typeof value === "function") return value.bind(target);
+      return value;
+    }
+  });
+}
+
 /* =============================
     ERROR FLOOD GUARD
    - Per-channel cooldown: at most 1 public error notice every COOL_DOWN_MS
@@ -293,7 +407,8 @@ async function onMessageCreate(message) {
       return;
     }
 
-    const settings = (await getSettingsForGuild(message.guild.id)) || {};
+    // Use cached settings for BOTH text and slash commands
+    const settings = await SETTINGS_CACHE.fetch(message.guild.id);
     const prefixes = settings.prefixes ?? { slash: true, greater: true, exclamation: true };
 
     let used = null;
@@ -379,8 +494,19 @@ async function onMessageCreate(message) {
 ============================= */
 async function onInteractionCreate(interaction) {
   try {
+    // ✅ DM guard FIRST (prevents interaction.guild null crashes)
+    if (!interaction.inGuild()) return;
+
     if (interaction.isChatInputCommand()) {
-      const settings = (await getSettingsForGuild(interaction.guild.id)) || {};
+      // 🔒 ACKNOWLEDGE IMMEDIATELY — BEFORE ANY await (fixes 10062 for every command)
+      // NOTE: This makes slash commands ephemeral by default. If you want public slash outputs,
+      // change ephemeral: true -> false here.
+      const safe = makeSafeInteraction(interaction);
+      await safe.deferReply({ ephemeral: true });
+
+      // Now it's safe to await Supabase/settings without interaction expiry.
+      const settings = await SETTINGS_CACHE.fetch(interaction.guild.id);
+
       if (settings.prefixes && settings.prefixes.slash === false) {
         const enabled = settings.prefixes;
         const alternatives = [];
@@ -389,66 +515,64 @@ async function onInteractionCreate(interaction) {
         const fallback = alternatives.length
           ? `You can still use ${alternatives.join(" or ")} instead.`
           : "No command prefixes are currently enabled.";
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: ["> <❌> Slash commands are disabled on this server.", fallback].join("\n"),
-            ephemeral: false,
-          });
-        }
-        return;
-      }
 
-      // 🚧 DM guard (interactions)
-      if (!interaction.inGuild()) {
+        await safe.editReply({
+          content: ["> <❌> Slash commands are disabled on this server.", fallback].join("\n"),
+        });
         return;
       }
 
       switch (interaction.commandName) {
         case "settings":
-          await handleSettingsSlashCommand(interaction);
+          await handleSettingsSlashCommand(safe);
           break;
         case "initialize":
-          await handleInitializeSlashCommand(interaction);
+          await handleInitializeSlashCommand(safe);
           break;
         case "help":
-          await handleHelpSlashCommand(interaction);
+          await handleHelpSlashCommand(safe);
           break;
         case "vc":
-          await handleVCSlashCommand(interaction);
+          await handleVCSlashCommand(safe);
           break;
         case "tc":
-          await handleModSlashCommand(interaction);
+          await handleModSlashCommand(safe);
           break;
         case "safeuser":
-          await handlesafeUserslashCommand(interaction);
+          await handlesafeUserslashCommand(safe);
           break;
         case "safechannel":
-          await handlesafeChannelslashCommand(interaction);
+          await handlesafeChannelslashCommand(safe);
           break;
         case "report":
-          await handleReportSlashCommand(interaction);
+          await handleReportSlashCommand(safe);
           break;
         case "disallow":
-          await handleDisallowSlashCommand(interaction);
+          await handleDisallowSlashCommand(safe);
           break;
         case "filter":
-          await handleFilterSlashCommand(interaction);
+          await handleFilterSlashCommand(safe);
           break;
         case "notify":
-          await handleNotifySlashCommand(interaction);
+          await handleNotifySlashCommand(safe);
           break;
         case "drain":
-          await handleDrainSlashCommand(interaction);
+          await handleDrainSlashCommand(safe);
           break;
         case "consent":
-          await showConsentSettingsUI(interaction, true);
+          await showConsentSettingsUI(safe, true);
           break;
         default:
           console.log(`[DEBUG] Unhandled slash command: ${interaction.commandName}`);
+          await safe.editReply({ content: "> <❌> Unknown command." });
+          break;
       }
 
     } else if (interaction.isModalSubmit()) {
-      await handleReportSubmission(interaction);
+      // Modal submits also have the 3s ACK rule.
+      const safe = makeSafeInteraction(interaction);
+      await safe.deferReply({ ephemeral: true });
+      await handleReportSubmission(safe);
 
     } else if (interaction.isButton() || interaction.isStringSelectMenu()) {
       // VC settings UI (buttons + role select)
@@ -676,12 +800,21 @@ async function onInteractionCreate(interaction) {
       err: error
     });
 
-    if (!interaction.replied) {
-      await interaction.reply({
-        content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
-        ephemeral: true,
-      }).catch(() => { });
-    }
+    // Use a safe interaction wrapper for best-effort feedback
+    try {
+      const safe = makeSafeInteraction(interaction);
+      if (!interaction.replied && !interaction.deferred && interaction.inGuild()) {
+        await safe.reply({
+          content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
+          ephemeral: true,
+        });
+      } else if (interaction.deferred || interaction.replied) {
+        await safe.followUp({
+          content: "> <❌> An unexpected error occurred processing your interaction. (INT_ERR_006)",
+          ephemeral: true,
+        }).catch(() => { });
+      }
+    } catch (_) { /* noop */ }
   }
 }
 
