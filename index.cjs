@@ -1107,13 +1107,31 @@ client.on("interactionCreate", async (interaction) => {
   try {
     await commands.onInteractionCreate(interaction);
   } catch (error) {
-    console.error(`[ERROR] Interaction handling failed: ${error.message}`);
-    if (!interaction.replied && interaction.isRepliable?.()) {
-      await interaction.reply({
-        content:
-          "> <❌> An error occurred while processing your interaction. (INT_ERR_006)",
-        ephemeral: true,
-      });
+    console.error(`[ERROR] Interaction handling failed: ${error?.message || error}`);
+
+    const isRepliable =
+      typeof interaction.isRepliable === "function" ? interaction.isRepliable() : false;
+
+    if (!isRepliable) return;
+
+    const payload = {
+      content: "> <❌> An error occurred while processing your interaction. (INT_ERR_006)",
+      ephemeral: true,
+    };
+
+    try {
+      // If it was already ACK'd (deferred or replied), we must follow up.
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp(payload);
+      } else {
+        await interaction.reply(payload);
+      }
+    } catch (e) {
+      // Swallow "Unknown interaction" (token expired / too slow / already invalid)
+      const code = e?.code ?? e?.rawError?.code;
+      if (code === 10062) return;
+
+      console.error(`[ERROR] Failed to send interaction error response: ${e?.message || e}`);
     }
   }
 });
