@@ -726,9 +726,6 @@ async function onInteractionCreate(interaction) {
           return;
         }
 
-        // ACK ASAP so the interaction token can't expire while your flow does work.
-        await safeDeferUpdate(interaction);
-
         let context = interactionContexts.get(interaction.user.id);
         if (!context) {
           context = { guildId: interaction.guild.id, mode: "init", initMethod: "ftt" };
