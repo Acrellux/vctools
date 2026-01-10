@@ -702,31 +702,38 @@ async function onInteractionCreate(interaction) {
       if (interaction.customId.startsWith("init:")) {
         const parts = interaction.customId.split(":");
         const action = parts[1];
-        const ownerId = parts[2] ?? null;
 
-        if (ownerId && ownerId !== interaction.user.id) {
+        // IMPORTANT:
+        // customId sometimes ends up with "undefined" or "null" as a STRING.
+        // Treat those as "no lock".
+        const rawOwner = parts[2];
+        const ownerId =
+          rawOwner && rawOwner !== "undefined" && rawOwner !== "null" ? rawOwner : null;
+
+        // Allow the locked user OR the guild owner to use the components.
+        const isGuildOwner =
+          interaction.guild?.ownerId && interaction.user.id === interaction.guild.ownerId;
+
+        if (ownerId && ownerId !== interaction.user.id && !isGuildOwner) {
           if (!interaction.deferred && !interaction.replied) {
-            await interaction.reply({
-              content: "> <❌> You cannot interact with this component. (INT_ERR_004)",
-              ephemeral: true,
-            }).catch(() => { });
+            await interaction
+              .reply({
+                content: "> <❌> You cannot interact with this component. (INT_ERR_004)",
+                ephemeral: true,
+              })
+              .catch(() => { });
           }
           return;
         }
+
+        // ACK ASAP so the interaction token can't expire while your flow does work.
+        await safeDeferUpdate(interaction);
 
         let context = interactionContexts.get(interaction.user.id);
         if (!context) {
           context = { guildId: interaction.guild.id, mode: "init", initMethod: "ftt" };
           interactionContexts.set(interaction.user.id, context);
         }
-
-        const watchdog = setTimeout(async () => {
-          try {
-            if (!interaction.deferred && !interaction.replied) {
-              await interaction.deferUpdate().catch(() => { });
-            }
-          } catch (_) { }
-        }, 2000);
 
         try {
           switch (context.initMethod) {
@@ -742,15 +749,17 @@ async function onInteractionCreate(interaction) {
           }
         } catch (err) {
           console.error("[ERROR] init flow router:", err);
-          if (!interaction.deferred && !interaction.replied) {
-            await interaction.reply({
+
+          // Since we already deferredUpdate, reply() will often fail.
+          // Follow up instead (best-effort).
+          await interaction
+            .followUp({
               content: "> <❌> Something went wrong handling that step. (INIT_ROUTER_ERR)",
               ephemeral: true,
-            }).catch(() => { });
-          }
-        } finally {
-          clearTimeout(watchdog);
+            })
+            .catch(() => { });
         }
+
         return;
       }
 
