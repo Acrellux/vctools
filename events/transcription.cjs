@@ -49,6 +49,13 @@ const finalizingUsers = new Set();
 const FINALIZE_COOLDOWN_MS = 1500;
 const lastFinalizeAt = new Map();
 
+// ─────────────────────────────────────────────
+// PER-GUILD TRANSCRIPTION QUEUES (FAIR SCHEDULING)
+// ─────────────────────────────────────────────
+
+const guildQueues = new Map();        // guildId → Array<job>
+const guildProcessing = new Set();    // guildIds currently processing
+
 // =========================================
 // TEMP FILE SAFETY CONFIG (env → inline defaults)
 // =========================================
@@ -173,8 +180,6 @@ const DEFAULT_SILENCE_TIMEOUT = 1000;
 const GRACE_PERIOD_MS = 3000;
 const finalizationTimers = {};
 
-let isProcessing = false;
-const processingQueue = [];
 const outputStreams = {};
 const userSubscriptions = {};
 
@@ -336,26 +341,79 @@ async function ensureTranscriptionChannel(guild) {
 async function processAudio(userId, guild) {
   return new Promise((resolve, reject) => {
     const audioDir = path.resolve(__dirname, "../../temp_audio");
-    ensureDirectoryExistence(path.join(audioDir, "._ensure")); // ensure directory exists
+    ensureDirectoryExistence(path.join(audioDir, "._ensure"));
+
     const unique = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const wavFilePath = path.join(audioDir, `${userId}-${unique}.wav`);
-    console.log(
-      `[DEBUG] Pushing to queue: userId=${userId}, wavFilePath=${wavFilePath}`
-    );
-    // Mark as in-use to protect from sweeper until we're done
-    inUsePaths.add(path.resolve(wavFilePath));
-    processingQueue.push({ userId, guild, wavFilePath, unique, resolve, reject });
 
-    processQueue();
+    inUsePaths.add(path.resolve(wavFilePath));
+
+    const job = {
+      userId,
+      guild,
+      wavFilePath,
+      unique,
+      resolve,
+      reject,
+    };
+
+    const guildId = guild.id;
+
+    if (!guildQueues.has(guildId)) {
+      guildQueues.set(guildId, []);
+    }
+
+    guildQueues.get(guildId).push(job);
+
+    processGuildQueue(guildId);
   });
+}
+
+async function processGuildQueue(guildId) {
+  if (guildProcessing.has(guildId)) return;
+
+  const queue = guildQueues.get(guildId);
+  if (!queue || queue.length === 0) return;
+
+  guildProcessing.add(guildId);
+
+  try {
+    while (queue.length > 0) {
+      const job = queue.shift();
+      if (!job) continue;
+
+      const { userId, guild, wavFilePath, resolve, reject } = job;
+
+      try {
+        const { text, confidence } = await transcribeAudio(wavFilePath);
+
+        if (typeof resolve === "function") {
+          resolve(text);
+        }
+
+        await postTranscription(
+          guild,
+          userId,
+          text,
+          null,
+          confidence
+        );
+      } catch (err) {
+        console.error(
+          `[QUEUE:${guildId}] Transcription failed for ${userId}: ${err.message}`
+        );
+        if (typeof reject === "function") reject(err);
+      }
+    }
+  } finally {
+    guildProcessing.delete(guildId);
+  }
 }
 
 /**
  * Processes the audio queue.
  */
 async function processQueue() {
-  if (global.__vcToolsTranscribeProcessing) return;
-  global.__vcToolsTranscribeProcessing = true;
 
   try {
     while (processingQueue.length > 0) {
