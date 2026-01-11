@@ -52,6 +52,9 @@ EventEmitter.defaultMaxListeners = 50;
 const finalizingUsers = new Set();                // users currently finalizing
 const lastFinalizeAt = new Map();                 // userId → timestamp
 const FINALIZE_COOLDOWN_MS = 1500;                // prevents rapid re-finalize spam
+const emptySince = new Map();                     // guildId -> timestamp
+const EMPTY_GRACE_MS = 15000;                     // 15 seconds
+
 
 /************************************************************************************************
  * GLOBALS & CONSTANTS
@@ -829,10 +832,21 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       await moveToChannel(busiest, connection, guild, client);
       return;
     }
-    if (currentHumans === 0 && !isDisconnecting) {
-      console.log("[ROUTE] 0 humans and no valid target → disconnect.");
-      await disconnectAndReset(connection, guild, client);
+    if (currentHumans === 0) {
+      const since = emptySince.get(guild.id) ?? Date.now();
+      emptySince.set(guild.id, since);
+
+      if (Date.now() - since >= EMPTY_GRACE_MS && !isDisconnecting) {
+        console.log("[ROUTE] 0 humans for grace period → disconnect.");
+        emptySince.delete(guild.id);
+        await disconnectAndReset(connection, guild, client);
+      }
+      return;
     }
+
+    // reset if humans come back
+    emptySince.delete(guild.id);
+
     return;
   }
 
