@@ -55,7 +55,6 @@ const FINALIZE_COOLDOWN_MS = 1500;                // prevents rapid re-finalize 
 const emptySince = new Map();                     // guildId -> timestamp
 const EMPTY_GRACE_MS = 15000;                     // 15 seconds
 
-
 /************************************************************************************************
  * GLOBALS & CONSTANTS
  ************************************************************************************************/
