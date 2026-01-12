@@ -679,6 +679,13 @@ async function joinChannel(client, channelId, guild) {
     return null;
   }
 
+  const safe = new Set(settings.safeChannels || []);
+
+  // 🚫 ABSOLUTE SAFE CHANNEL BLOCK
+  if (safe.has(channelId)) {
+    return null;
+  }
+
   // If there's an existing connection, decide whether to reuse or rebuild.
   const existing = getVoiceConnection(guild.id);
   if (existing) {
