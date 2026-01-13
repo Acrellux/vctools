@@ -732,7 +732,7 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
     if (!featureOn) {
       if (!currentChannel) {
         if (busiest && busiestHumans > 0) {
-          const newConn = await joinChannel(client, busiest.id, guild);
+          const newConn = await safeJoinChannel(client, busiest.id, guild);
           if (newConn) audioListeningFunctions(newConn, guild);
         }
         return;
@@ -894,6 +894,18 @@ async function moveToChannel(targetChannel, connection, guild, client) {
       audioListeningFunctions(newConnection, guild);
     }
   }
+}
+
+async function safeJoinChannel(client, channelId, guild) {
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  const safeChannels = new Set(settings.safeChannels || []);
+
+  if (safeChannels.has(channelId)) {
+    console.log(`[SAFE BLOCK] Refusing to join safe channel ${channelId}`);
+    return null;
+  }
+
+  return joinChannel(client, channelId, guild);
 }
 
 async function joinChannel(client, channelId, guild) {
