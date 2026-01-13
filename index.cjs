@@ -957,58 +957,17 @@ client.once("clientReady", async () => {
     console.warn("[WARN] Failed to send startup message:", err.message);
   }
 
-  const { joinVoiceChannel, getVoiceConnection, VoiceConnectionStatus } = require("@discordjs/voice");
-  const { audioListeningFunctions } = require("./events/voiceChannelManager.cjs");
-  const { VC_STATE_PATH, saveVCState } = require("./util/vc_state.cjs");
 
-  let lastKnownVCs = {};
-  if (fs.existsSync(VC_STATE_PATH)) {
-    try {
-      lastKnownVCs = JSON.parse(fs.readFileSync(VC_STATE_PATH, "utf8"));
-      console.log("[INFO] Loaded last VC state:", lastKnownVCs);
-    } catch (err) {
-      console.warn("[WARN] Failed to parse VC state file:", err.message);
+  // Start periodic VC routing checks (fixes: staying in empty VCs, joining empty VCs on boot,
+  // and failing to join when the only active VC already has people/mods but no fresh voice events)
+  try {
+    if (typeof voiceChannelManager.startPeriodicVCCheck === "function") {
+      voiceChannelManager.startPeriodicVCCheck(client, 15000);
+    } else {
+      console.warn("[AUTO-VC] startPeriodicVCCheck not available on voiceChannelManager.");
     }
-  }
-
-  for (const guild of client.guilds.cache.values()) {
-    const savedChannelId = lastKnownVCs[guild.id];
-    if (!savedChannelId) continue;
-
-    const settings = await getSettingsForGuild(guild.id);
-    if (!settings.transcriptionEnabled) continue;
-
-    const channel = guild.channels.cache.get(savedChannelId);
-    if (!channel || channel.type !== ChannelType.GuildVoice) continue;
-
-    const existingConnection = getVoiceConnection(guild.id);
-    if (existingConnection) {
-      try {
-        existingConnection.destroy();
-        await new Promise(r => setTimeout(r, 1000)); // short delay to ensure cleanup
-        console.log(`[INFO] Destroyed stale VC connection in ${guild.name}`);
-      } catch (e) {
-        console.warn(`[WARN] Failed to destroy VC connection: ${e.message}`);
-      }
-    }
-
-    try {
-      const connection = joinVoiceChannel({
-        channelId: channel.id,
-        guildId: guild.id,
-        adapterCreator: guild.voiceAdapterCreator,
-        selfDeaf: false,
-      });
-
-      connection.on(VoiceConnectionStatus.Ready, () => {
-        console.log(`[INFO] Rejoined VC ${channel.name} in ${guild.name}`);
-        saveVCState(guild.id, channel.id);
-      });
-
-      audioListeningFunctions(connection, guild);
-    } catch (err) {
-      console.error(`[JOIN ERROR] Failed to rejoin ${channel.name} in ${guild.name}:`, err);
-    }
+  } catch (e) {
+    console.warn("[AUTO-VC] Failed to start periodic VC check:", e?.message || e);
   }
 
   // Cleanup old reports + reset presence if needed

@@ -1286,25 +1286,38 @@ const vcProbeRunning = new Set();
 function startPeriodicVCCheck(client, intervalMs = 15000) {
   if (vcAutoCheckInterval) clearInterval(vcAutoCheckInterval);
 
+  const probeGuild = async (guild) => {
+    if (!guild) return;
+    if (vcProbeRunning.has(guild.id)) return;
+    vcProbeRunning.add(guild.id);
+
+    try {
+      // One unified decision point handles both connected + disconnected states.
+      await manageVoiceChannels(guild, client, null);
+    } catch (e) {
+      console.warn(`[AUTO-VC] Guild ${guild.id} probe failed: ${e?.message || e}`);
+    } finally {
+      vcProbeRunning.delete(guild.id);
+    }
+  };
+
+  const probeAll = async () => {
+    // Avoid async-forEach footguns; keep it predictable.
+    for (const guild of client.guilds.cache.values()) {
+      await probeGuild(guild);
+    }
+  };
+
+  // Run once immediately so we can:
+  // - disconnect after the grace timer without needing a new voice event
+  // - join an already-active VC even if nobody has joined/left since boot
+  probeAll().catch((e) => {
+    console.warn(`[AUTO-VC] Initial probe failed: ${e?.message || e}`);
+  });
+
   vcAutoCheckInterval = setInterval(() => {
-    client.guilds.cache.forEach(async (guild) => {
-      if (vcProbeRunning.has(guild.id)) return;
-      vcProbeRunning.add(guild.id);
-
-      try {
-        const connection = getVoiceConnection(guild.id);
-        if (connection && connection.state?.status === VoiceConnectionStatus.Ready) {
-          await manageVoiceChannels(guild, client, null);
-          return;
-        }
-
-        // If disconnected, recompute targets and (maybe) join
-        await manageVoiceChannels(guild, client, null);
-      } catch (e) {
-        console.warn(`[AUTO-VC] Guild ${guild.id} probe failed: ${e?.message || e}`);
-      } finally {
-        vcProbeRunning.delete(guild.id);
-      }
+    probeAll().catch((e) => {
+      console.warn(`[AUTO-VC] Interval probe failed: ${e?.message || e}`);
     });
   }, intervalMs);
 
