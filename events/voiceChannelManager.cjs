@@ -803,19 +803,23 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
 
     // 2) General reroute
     if (!currentChannel) {
-      // Not connected: prefer unsupervised≥2; otherwise join busiest EVEN IF it has a mod
       const bestWhenDisconnected = findBestUnsupervised2(guild, safe, null);
       if (bestWhenDisconnected) {
-        console.log("[ROUTE] (disconnected) joining unsupervised≥2:", bestWhenDisconnected.name);
-        const newConn = await joinChannel(client, bestWhenDisconnected.id, guild);
-        if (newConn) audioListeningFunctions(newConn, guild);
+        const { humans } = channelCounts(bestWhenDisconnected);
+        if (humans > 0) {
+          console.log("[ROUTE] (disconnected) joining unsupervised≥2:", bestWhenDisconnected.name);
+          const newConn = await joinChannel(client, bestWhenDisconnected.id, guild);
+          if (newConn) audioListeningFunctions(newConn, guild);
+        }
         return;
       }
+
       if (busiest && busiestHumans > 0) {
-        console.log("[ROUTE] (disconnected) joining busiest (mod allowed):", busiest.name);
+        console.log("[ROUTE] (disconnected) joining busiest:", busiest.name);
         const newConn = await joinChannel(client, busiest.id, guild);
         if (newConn) audioListeningFunctions(newConn, guild);
       }
+
       return;
     }
 
