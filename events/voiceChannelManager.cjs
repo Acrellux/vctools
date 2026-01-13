@@ -925,11 +925,6 @@ async function joinChannel(client, channelId, guild) {
       audioListeningFunctions(connection, guild);
     });
 
-    // ALSO recompute on disconnects
-    connection.on(VoiceConnectionStatus.Disconnected, async () => {
-      try { await manageVoiceChannels(guild, guild.client || client, null); } catch { }
-    });
-
     return connection;
   } catch (error) {
     console.error(`[ERROR] Can't connect to ${channel.name}: ${error.message}`);
