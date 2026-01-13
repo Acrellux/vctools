@@ -921,7 +921,9 @@ async function joinChannel(client, channelId, guild) {
     connection.on(VoiceConnectionStatus.Ready, async () => {
       console.log(`[INFO] Connected to ${channel.name}`);
       saveVCState(guild.id, channel.id);
-      try { await manageVoiceChannels(guild, guild.client || client, null); } catch { }
+      try {
+        await manageVoiceChannels(guild, client, null);
+      } catch { }
       audioListeningFunctions(connection, guild);
     });
 
