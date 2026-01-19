@@ -568,7 +568,7 @@ async function handleModMessageCommand(msg, args) {
 
           if (processedChannels === 1 || processedChannels % 5 === 0) {
             await statusMsg.edit(
-              "> <🧹> Cleaning messages…\n-# Scanned **${processedChannels}/${totalChannels}** channels"
+              `> <🧹> Cleaning messages…\n-# Scanned **${processedChannels}/${totalChannels}** channels`
             );
           }
         }
