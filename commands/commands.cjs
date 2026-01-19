@@ -389,6 +389,18 @@ async function startInteractionAckWatchdog(interaction) {
   return () => clearTimeout(t);
 }
 
+const TC_HINT_COMMANDS = new Set([
+  "ban",
+  "unban",
+  "kick",
+  "mute",
+  "unmute",
+  "warn",
+  "clean",
+  "history",
+  "view",
+]);
+
 /* =============================
    MESSAGE-BASED COMMAND ROUTING
 ============================= */
@@ -455,8 +467,18 @@ async function onMessageCreate(message) {
       case "consent":
         await showConsentSettingsUI(message, false);
         break;
-      default:
+      default: {
+        // Gentle hint for tc-prefixed moderation commands
+        if (TC_HINT_COMMANDS.has(command)) {
+          await message.channel.send(
+            [
+              "-# That command is under `>tc`.",
+              `-# Try \`>tc ${command}\`.`,
+            ].join("\n")
+          );
+        }
         break;
+      }
     }
   } catch (error) {
     console.error(`[ERROR] onMessageCreate failed: ${error.message}`);

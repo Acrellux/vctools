@@ -73,6 +73,32 @@ const cantModerate = (mod, tgt) => {
   );
 };
 
+function canBan(mod, target, guild) {
+  const bot = guild.members.me;
+
+  if (!mod.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+    return { ok: false, msg: "> <❌> You need **Ban Members** permission." };
+  }
+
+  if (!bot.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+    return { ok: false, msg: "> <❌> I do not have **Ban Members** permission." };
+  }
+
+  if (target.id === guild.ownerId) {
+    return { ok: false, msg: "> <❌> You cannot ban the server owner." };
+  }
+
+  if (mod.roles.highest.comparePositionTo(target.roles.highest) <= 0) {
+    return { ok: false, msg: "> <❌> That user has equal or higher role than you." };
+  }
+
+  if (bot.roles.highest.comparePositionTo(target.roles.highest) <= 0) {
+    return { ok: false, msg: "> <❌> That user has a higher role than me." };
+  }
+
+  return { ok: true };
+}
+
 async function safeDM(user, lines) {
   try {
     await user.send(lines.join("\n"));
@@ -362,22 +388,34 @@ async function handleModMessageCommand(msg, args) {
         return msg.channel.send("> <❌> You need **Manage Messages** permission.");
       }
 
+      // ─── Usage guard ───
+      if (args.length < 4) {
+        return msg.channel.send(
+          "> <❌> Usage:\n" +
+          "> `>tc clean <@user | id | name> count <number>`\n" +
+          "> `>tc clean <@user | id | name> time <1h|3d|1w>`"
+        );
+      }
+
+      // ─── Resolve target ───
       let target = msg.mentions.members.first();
 
-      if (!target && args[1]) {
-        if (/^\d{17,19}$/.test(args[1])) {
-          target = await msg.guild.members.fetch(args[1]).catch(() => null);
+      if (!target) {
+        const raw = args[1];
+
+        if (/^\d{17,19}$/.test(raw)) {
+          target = await msg.guild.members.fetch(raw).catch(() => null);
         }
 
         if (!target) {
-          const m = args[1].match(/^<@!?(\d{17,19})>$/);
-          if (m) {
-            target = await msg.guild.members.fetch(m[1]).catch(() => null);
+          const mentionMatch = raw.match(/^<@!?(\d{17,19})>$/);
+          if (mentionMatch) {
+            target = await msg.guild.members.fetch(mentionMatch[1]).catch(() => null);
           }
         }
 
         if (!target) {
-          const name = args[1].toLowerCase();
+          const name = raw.toLowerCase();
           target = msg.guild.members.cache.find(
             m =>
               m.user.username.toLowerCase() === name ||
@@ -387,27 +425,29 @@ async function handleModMessageCommand(msg, args) {
       }
 
       if (!target) {
-        return msg.channel.send("> <❌> Could not find user.");
+        return msg.channel.send("> <❌> Could not find that user.");
       }
 
       if (cantModerate(msg.member, target)) {
         return msg.channel.send(`> <❌> You cannot act on ${wrap(target.user.tag)}.`);
       }
 
-      const mode = (args[2] || "").toLowerCase();
+      // ─── Parse mode ───
+      const mode = args[2].toLowerCase();
       const value = args[3];
 
-      if (!mode || !value || !["count", "time"].includes(mode)) {
+      if (!["count", "time"].includes(mode)) {
         return msg.channel.send(
-          "> <❌> Usage:\n" +
-          "> `>tc clean <@user> count <number>`\n" +
-          "> `>tc clean <@user> time <1h|3d|1w>`"
+          "> <❌> Invalid mode.\n" +
+          "> Use `count` or `time`.\n" +
+          "> Example: `>tc clean @user time 2h`"
         );
       }
 
       const MAX_DELETE = 100;
       let deletedCount = 0;
 
+      // ─── Prepare channel list ───
       const channels = msg.guild.channels.cache.filter(c =>
         c.isTextBased() &&
         !c.isThread() &&
@@ -418,18 +458,22 @@ async function handleModMessageCommand(msg, args) {
         ])
       );
 
+      // ─── COUNT MODE ───
       if (mode === "count") {
-        const limit = Math.min(Number(value), MAX_DELETE);
+        const limit = Number(value);
+
         if (!Number.isInteger(limit) || limit <= 0) {
-          return msg.channel.send("> <❌> Invalid count.");
+          return msg.channel.send("> <❌> Count must be a positive number.");
         }
 
+        const cap = Math.min(limit, MAX_DELETE);
+
         for (const channel of channels.values()) {
-          if (deletedCount >= limit) break;
+          if (deletedCount >= cap) break;
 
           let lastId = null;
 
-          while (deletedCount < limit) {
+          while (deletedCount < cap) {
             const fetched = await channel.messages.fetch({
               limit: 100,
               before: lastId ?? undefined,
@@ -444,7 +488,7 @@ async function handleModMessageCommand(msg, args) {
                 Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000
               )
               .toJSON()
-              .slice(0, limit - deletedCount);
+              .slice(0, cap - deletedCount);
 
             if (deletable.length) {
               await channel.bulkDelete(deletable);
@@ -457,10 +501,12 @@ async function handleModMessageCommand(msg, args) {
         }
       }
 
+      // ─── TIME MODE ───
       if (mode === "time") {
         let durationMs = ms(value);
+
         if (!durationMs) {
-          return msg.channel.send("> <❌> Invalid time format.");
+          return msg.channel.send("> <❌> Invalid time format. Example: `2h`, `3d`.");
         }
 
         durationMs = Math.min(durationMs, 14 * 24 * 60 * 60 * 1000);
@@ -504,7 +550,8 @@ async function handleModMessageCommand(msg, args) {
 
       if (!deletedCount) {
         return msg.channel.send(
-          "> <⚠️> No messages could be deleted (messages may be older than 14 days)."
+          "> <⚠️> No messages could be deleted.\n" +
+          "-# Messages may be older than 14 days."
         );
       }
 
@@ -515,8 +562,8 @@ async function handleModMessageCommand(msg, args) {
         actionType: "clean",
         reason:
           mode === "count"
-            ? `Deleted ${deletedCount} recent messages`
-            : `Deleted messages from last ${ms(ms(value), { long: true })}`,
+            ? `Deleted ${deletedCount} messages`
+            : `Deleted messages from last ${ms(durationMs, { long: true })}`,
       });
 
       return msg.channel.send(
@@ -621,7 +668,13 @@ async function handleModMessageCommand(msg, args) {
       }
 
       const member = target;
-      if (cantModerate(msg.member, member)) {
+      if (sub === "ban") {
+        const check = canBan(msg.member, member, msg.guild);
+        if (!check.ok) {
+          confirms.push(check.msg);
+          continue;
+        }
+      } else if (cantModerate(msg.member, member)) {
         confirms.push(`> <❌> You cannot act on ${wrap(member.user.tag)}.`);
         continue;
       }
@@ -668,8 +721,9 @@ async function handleModMessageCommand(msg, args) {
             `> Action ID: ${fmtId(id)}`,
           ].join("\n")
         );
-      } catch {
-        confirms.push(`> <❌> Failed on ${wrap(member.user.tag)}`);
+      } catch (err) {
+        console.error("[TC BAN ERROR]", err);
+        confirms.push(`> <❌> Failed to ban ${wrap(member.user.tag)}.`);
       }
     }
 
@@ -701,8 +755,15 @@ async function handleModMessageCommand(msg, args) {
 /* ─────── SLASH COMMAND (/tc …) ─────── */
 async function handleModSlashCommand(inter) {
   try {
-    if (!inter.memberPermissions.has(PermissionsBitField.Flags.KickMembers))
-      return inter.reply({ content: "> <❌> You do not have permission.", ephemeral: true });
+    if (
+      sub === "ban" &&
+      !inter.memberPermissions.has(PermissionsBitField.Flags.BanMembers)
+    ) {
+      return inter.reply({
+        content: "> <❌> You need **Ban Members** permission.",
+        ephemeral: true,
+      });
+    }
 
     const sub = inter.options.getSubcommand();
     const reason = inter.options.getString("reason") || "No reason";
@@ -853,8 +914,12 @@ async function handleModSlashCommand(inter) {
           }
 
           const member = await inter.guild.members.fetch(id);
-          if (cantModerate(inter.member, member))
+          if (sub === "ban") {
+            const check = canBan(inter.member, member, inter.guild);
+            if (!check.ok) return check.msg;
+          } else if (cantModerate(inter.member, member)) {
             return `> <❌> Cannot act on ${wrap(member.user.tag)}`;
+          }
 
           /* UNMUTE */
           if (sub === "unmute") {
@@ -884,14 +949,25 @@ async function handleModSlashCommand(inter) {
             `> Reason: ${wrap(reason)}`,
             `> Action ID: ${fmtId(recId)}`,
           ].join("\n");
-        } catch {
-          return `> <❌> Failed on \`${id}\``;
+        } catch (err) {
+          console.error("[TC SLASH BAN ERROR]", err);
+          return `> <❌> Failed to ban \`${id}\``;
         }
       })
     );
 
     /* ─── CLEAN (COUNT or TIME) ─── */
     if (sub === "clean") {
+      if (!inter.options.getUser("user") || !inter.options.getString("mode") || !inter.options.getString("value")) {
+        return inter.reply({
+          content:
+            "> <❌> Usage:\n" +
+            "> `/tc clean user:<user> mode:count value:<number>`\n" +
+            "> `/tc clean user:<user> mode:time value:<1h|3d|1w>`",
+          ephemeral: true,
+        });
+      }
+
       if (!inter.memberPermissions.has(PermissionsBitField.Flags.ManageMessages)) {
         return inter.reply({
           content: "> <❌> You need **Manage Messages** permission.",
