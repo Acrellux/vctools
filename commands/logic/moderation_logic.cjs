@@ -381,7 +381,6 @@ async function handleModMessageCommand(msg, args) {
       );
     }
 
-    /* ─── CLEAN (COUNT or TIME) ─── */
     /* ───────────────── CLEAN ───────────────── */
     if (sub === "clean") {
       if (!msg.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
@@ -446,16 +445,27 @@ async function handleModMessageCommand(msg, args) {
 
       const MAX_DELETE = 100;
       let deletedCount = 0;
+      let durationMs = null;
 
       // ─── Prepare channel list ───
-      const channels = msg.guild.channels.cache.filter(c =>
-        c.isTextBased() &&
-        !c.isThread() &&
-        c.viewable &&
-        c.permissionsFor(msg.guild.members.me)?.has([
-          PermissionsBitField.Flags.ManageMessages,
-          PermissionsBitField.Flags.ReadMessageHistory,
-        ])
+      const channels = [
+        ...msg.guild.channels.cache.filter(c =>
+          c.isTextBased() &&
+          !c.isThread() &&
+          c.viewable &&
+          c.permissionsFor(msg.guild.members.me)?.has([
+            PermissionsBitField.Flags.ManageMessages,
+            PermissionsBitField.Flags.ReadMessageHistory,
+          ])
+        ).values()
+      ];
+
+      const totalChannels = channels.length;
+      let processedChannels = 0;
+
+      // ─── Status message ───
+      const statusMsg = await msg.channel.send(
+        "> <🧹> Cleaning messages…\n-# Scanning channels."
       );
 
       // ─── COUNT MODE ───
@@ -463,14 +473,16 @@ async function handleModMessageCommand(msg, args) {
         const limit = Number(value);
 
         if (!Number.isInteger(limit) || limit <= 0) {
-          return msg.channel.send("> <❌> Count must be a positive number.");
+          await statusMsg.edit("> <❌> Count must be a positive number.");
+          return;
         }
 
         const cap = Math.min(limit, MAX_DELETE);
 
-        for (const channel of channels.values()) {
+        for (const channel of channels) {
           if (deletedCount >= cap) break;
 
+          processedChannels++;
           let lastId = null;
 
           while (deletedCount < cap) {
@@ -498,23 +510,31 @@ async function handleModMessageCommand(msg, args) {
             lastId = fetched.last()?.id;
             if (!lastId) break;
           }
+
+          if (processedChannels === 1 || processedChannels % 5 === 0) {
+            await statusMsg.edit(
+              `> <🧹> Cleaning messages…\n-# Scanned \`${processedChannels}/${totalChannels}\` channels`
+            );
+          }
         }
       }
 
       // ─── TIME MODE ───
       if (mode === "time") {
-        let durationMs = ms(value);
+        durationMs = ms(value);
 
         if (!durationMs) {
-          return msg.channel.send("> <❌> Invalid time format. Example: `2h`, `3d`.");
+          await statusMsg.edit("> <❌> Invalid time format. Example: `2h`, `3d`.");
+          return;
         }
 
         durationMs = Math.min(durationMs, 14 * 24 * 60 * 60 * 1000);
         const cutoff = Date.now() - durationMs;
 
-        for (const channel of channels.values()) {
+        for (const channel of channels) {
           if (deletedCount >= MAX_DELETE) break;
 
+          processedChannels++;
           let lastId = null;
 
           while (deletedCount < MAX_DELETE) {
@@ -545,14 +565,21 @@ async function handleModMessageCommand(msg, args) {
 
             lastId = oldest.id;
           }
+
+          if (processedChannels === 1 || processedChannels % 5 === 0) {
+            await statusMsg.edit(
+              "> <🧹> Cleaning messages…\n-# Scanned \`${processedChannels}/${totalChannels}\` channels"
+            );
+          }
         }
       }
 
       if (!deletedCount) {
-        return msg.channel.send(
+        await statusMsg.edit(
           "> <⚠️> No messages could be deleted.\n" +
           "-# Messages may be older than 14 days."
         );
+        return;
       }
 
       const id = await recordModerationAction({
@@ -566,13 +593,15 @@ async function handleModMessageCommand(msg, args) {
             : `Deleted messages from last ${ms(durationMs, { long: true })}`,
       });
 
-      return msg.channel.send(
+      await statusMsg.edit(
         [
           `> <✅> Deleted **${deletedCount}** messages from ${wrap(target.user.tag)}.`,
           `> Mode: ${mode}`,
           `> Action ID: ${fmtId(id)}`,
         ].join("\n")
       );
+
+      return;
     }
 
     /* ─── resolve targets ─── */
@@ -957,8 +986,11 @@ async function handleModSlashCommand(inter) {
     );
 
     /* ─── CLEAN (COUNT or TIME) ─── */
+    /* ─── CLEAN (COUNT or TIME) ─── */
     if (sub === "clean") {
-      if (!inter.options.getUser("user") || !inter.options.getString("mode") || !inter.options.getString("value")) {
+      if (!inter.options.getUser("user") ||
+        !inter.options.getString("mode") ||
+        !inter.options.getString("value")) {
         return inter.reply({
           content:
             "> <❌> Usage:\n" +
@@ -979,16 +1011,6 @@ async function handleModSlashCommand(inter) {
       const mode = inter.options.getString("mode");
       const value = inter.options.getString("value");
 
-      if (!target || !mode || !value) {
-        return inter.reply({
-          content:
-            "> <❌> Usage:\n" +
-            "> `/tc clean user:<user> mode:count value:<number>`\n" +
-            "> `/tc clean user:<user> mode:time value:<1h|3d|1w>`",
-          ephemeral: true,
-        });
-      }
-
       const member = await inter.guild.members.fetch(target.id).catch(() => null);
       if (member && cantModerate(inter.member, member)) {
         return inter.reply({
@@ -999,151 +1021,163 @@ async function handleModSlashCommand(inter) {
 
       const MAX_DELETE = 100;
       let deletedCount = 0;
+      let durationMs = null;
 
-      await inter.reply({ content: "> <❇️> Cleaning messages…" });
+      // ─── Prepare channel list ───
+      const channels = [
+        ...inter.guild.channels.cache.filter(c =>
+          c.isTextBased() &&
+          !c.isThread() &&
+          c.viewable &&
+          c.permissionsFor(inter.guild.members.me)?.has([
+            PermissionsBitField.Flags.ManageMessages,
+            PermissionsBitField.Flags.ReadMessageHistory,
+          ])
+        ).values()
+      ];
 
-      try {
-        /* ─── COUNT MODE ─── */
-        if (mode === "count") {
-          const limit = Math.min(Number(value), MAX_DELETE);
+      const totalChannels = channels.length;
+      let processedChannels = 0;
 
-          const channels = inter.guild.channels.cache.filter(c =>
-            c.isTextBased() &&
-            !c.isThread() &&
-            c.viewable &&
-            c.permissionsFor(inter.guild.members.me)?.has([
-              PermissionsBitField.Flags.ManageMessages,
-              PermissionsBitField.Flags.ReadMessageHistory,
-            ])
-          );
+      // ─── Initial status ───
+      await inter.reply({
+        content: "> <🧹> Cleaning messages…\n-# Scanning channels.",
+        ephemeral: false,
+      });
 
-          for (const channel of channels.values()) {
-            if (deletedCount >= limit) break;
+      /* ─── COUNT MODE ─── */
+      if (mode === "count") {
+        const limit = Number(value);
 
-            let lastId = null;
+        if (!Number.isInteger(limit) || limit <= 0) {
+          return inter.editReply("> <❌> Count must be a positive number.");
+        }
 
-            while (deletedCount < limit) {
-              const fetched = await channel.messages.fetch({
-                limit: 100,
-                before: lastId ?? undefined,
-              });
+        const cap = Math.min(limit, MAX_DELETE);
 
-              if (!fetched.size) break;
+        for (const channel of channels) {
+          if (deletedCount >= cap) break;
 
-              const deletable = fetched
-                .filter(m =>
-                  m.author.id === target.id &&
-                  !m.pinned &&
-                  Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000
-                )
-                .toJSON()
-                .slice(0, limit - deletedCount);
+          processedChannels++;
+          let lastId = null;
 
-              if (deletable.length > 0) {
-                await channel.bulkDelete(deletable);
-                deletedCount += deletable.length;
-              }
+          while (deletedCount < cap) {
+            const fetched = await channel.messages.fetch({
+              limit: 100,
+              before: lastId ?? undefined,
+            });
 
-              lastId = fetched.last()?.id;
-              if (!lastId) break;
+            if (!fetched.size) break;
+
+            const deletable = fetched
+              .filter(m =>
+                m.author.id === target.id &&
+                !m.pinned &&
+                Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000
+              )
+              .toJSON()
+              .slice(0, cap - deletedCount);
+
+            if (deletable.length) {
+              await channel.bulkDelete(deletable);
+              deletedCount += deletable.length;
             }
-          }
-        }
 
-        /* ─── TIME MODE ─── */
-        else if (mode === "time") {
-          let durationMs = ms(value);
-          if (!durationMs) {
-            return inter.editReply("> <❌> Invalid time format.");
+            lastId = fetched.last()?.id;
+            if (!lastId) break;
           }
 
-          const MAX_WINDOW = 14 * 24 * 60 * 60 * 1000;
-          durationMs = Math.min(durationMs, MAX_WINDOW);
-
-          const cutoff = Date.now() - durationMs;
-
-          const channels = inter.guild.channels.cache.filter(c =>
-            c.isTextBased() &&
-            !c.isThread() &&
-            c.viewable &&
-            c.permissionsFor(inter.guild.members.me)?.has([
-              PermissionsBitField.Flags.ManageMessages,
-              PermissionsBitField.Flags.ReadMessageHistory,
-            ])
-          );
-
-          for (const channel of channels.values()) {
-            if (deletedCount >= MAX_DELETE) break;
-
-            let lastId = null;
-
-            while (deletedCount < MAX_DELETE) {
-              const fetched = await channel.messages.fetch({
-                limit: 100,
-                before: lastId ?? undefined,
-              });
-
-              if (!fetched.size) break;
-
-              const deletable = fetched
-                .filter(m =>
-                  m.author.id === target.id &&
-                  !m.pinned &&
-                  m.createdTimestamp >= cutoff &&
-                  Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000
-                )
-                .toJSON()
-                .slice(0, MAX_DELETE - deletedCount);
-
-              if (deletable.length > 0) {
-                await channel.bulkDelete(deletable);
-                deletedCount += deletable.length;
-              }
-
-              const oldest = fetched.last();
-              if (!oldest || oldest.createdTimestamp < cutoff) break;
-
-              lastId = oldest.id;
-            }
+          if (processedChannels === 1 || processedChannels % 5 === 0) {
+            await inter.editReply(
+              `<# Cleaning messages…\n-# Scanned \`${processedChannels}/${totalChannels}\` channels`
+            );
           }
-        } else {
-          return inter.editReply("> <❌> Mode must be `count` or `time`.");
         }
-
-        if (!deletedCount) {
-          return inter.editReply("> <❌> No messages matched.");
-        }
-
-        if (deletedCount === 0) {
-          return inter.editReply(
-            "> <⚠️> No messages could be deleted.\n" +
-            "-# > Messages older than `14 days` cannot be bulk deleted by Discord."
-          );
-        }
-
-        const id = await recordModerationAction({
-          guildId: inter.guild.id,
-          userId: target.id,
-          moderatorId: inter.user.id,
-          actionType: "clean",
-          reason:
-            mode === "count"
-              ? `Deleted ${deletedCount} recent messages`
-              : `Deleted messages from last ${ms(ms(value), { long: true })}`,
-        });
-
-        return inter.editReply(
-          [
-            `> <✅> Deleted **${deletedCount}** messages from ${wrap(target.tag)}.`,
-            `> Mode: ${mode}`,
-            `> Action ID: ${fmtId(id)}`,
-          ].join("\n")
-        );
-      } catch (err) {
-        console.error("[tc clean slash]", err);
-        await logErrorToChannel(inter.guild?.id, err.stack, inter.client, "tc clean slash");
-        return inter.editReply("> <❌> Failed to clean messages.");
       }
+
+      /* ─── TIME MODE ─── */
+      else if (mode === "time") {
+        durationMs = ms(value);
+
+        if (!durationMs) {
+          return inter.editReply("> <❌> Invalid time format. Example: `2h`, `3d`.");
+        }
+
+        durationMs = Math.min(durationMs, 14 * 24 * 60 * 60 * 1000);
+        const cutoff = Date.now() - durationMs;
+
+        for (const channel of channels) {
+          if (deletedCount >= MAX_DELETE) break;
+
+          processedChannels++;
+          let lastId = null;
+
+          while (deletedCount < MAX_DELETE) {
+            const fetched = await channel.messages.fetch({
+              limit: 100,
+              before: lastId ?? undefined,
+            });
+
+            if (!fetched.size) break;
+
+            const deletable = fetched
+              .filter(m =>
+                m.author.id === target.id &&
+                !m.pinned &&
+                m.createdTimestamp >= cutoff &&
+                Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000
+              )
+              .toJSON()
+              .slice(0, MAX_DELETE - deletedCount);
+
+            if (deletable.length) {
+              await channel.bulkDelete(deletable);
+              deletedCount += deletable.length;
+            }
+
+            const oldest = fetched.last();
+            if (!oldest || oldest.createdTimestamp < cutoff) break;
+
+            lastId = oldest.id;
+          }
+
+          if (processedChannels === 1 || processedChannels % 5 === 0) {
+            await inter.editReply(
+              `-# Cleaning messages…\n-# Scanned ${processedChannels}/${totalChannels} channels`
+            );
+          }
+        }
+      }
+
+      else {
+        return inter.editReply("> <❌> Mode must be `count` or `time`.");
+      }
+
+      if (!deletedCount) {
+        return inter.editReply(
+          "> <⚠️> No messages could be deleted.\n" +
+          "-# Messages may be older than 14 days."
+        );
+      }
+
+      const id = await recordModerationAction({
+        guildId: inter.guild.id,
+        userId: target.id,
+        moderatorId: inter.user.id,
+        actionType: "clean",
+        reason:
+          mode === "count"
+            ? `Deleted ${deletedCount} messages`
+            : `Deleted messages from last ${ms(durationMs, { long: true })}`,
+      });
+
+      return inter.editReply(
+        [
+          `> <✅> Deleted **${deletedCount}** messages from ${wrap(target.tag)}.`,
+          `> Mode: ${mode}`,
+          `> Action ID: ${fmtId(id)}`,
+        ].join("\n")
+      );
     }
 
     const result =
