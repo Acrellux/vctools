@@ -6,6 +6,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 const ms = require("ms");
+const crypto = require("crypto");
 const {
   PermissionsBitField,
   ActionRowBuilder,
@@ -118,6 +119,185 @@ const display = {
   ban: { emoji: "🔨", label: "Banned", verb: "banned" },
   unban: { emoji: "🔓", label: "Unbanned", verb: "unbanned" },
 };
+
+/* ─────── PENDING CONFIRMATIONS (BAN BY ID) ─────── */
+const EXTERNAL_BAN_CONFIRM_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const pendingExternalBans = new Map(); // token -> { guildId, moderatorId, targetIds, reason, createdAt }
+
+function createPendingExternalBan({ guildId, moderatorId, targetIds, reason }) {
+  const token = crypto.randomBytes(9).toString("base64url"); // short + URL-safe
+  pendingExternalBans.set(token, {
+    guildId,
+    moderatorId,
+    targetIds: Array.from(new Set(targetIds)),
+    reason: reason || "No reason",
+    createdAt: Date.now(),
+  });
+  return token;
+}
+
+function buildExternalBanConfirmRow(token) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`tcban:confirm:${token}`)
+      .setLabel("Confirm Ban")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`tcban:cancel:${token}`)
+      .setLabel("Cancel")
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
+async function sendExternalBanConfirmMessage({ channel, guild, moderatorId, targetIds, reason }) {
+  const token = createPendingExternalBan({ guildId: guild.id, moderatorId, targetIds, reason });
+  const row = buildExternalBanConfirmRow(token);
+
+  const preview = targetIds.slice(0, 5).map((id) => `\`${id}\``).join(", ");
+  const more = targetIds.length > 5 ? ` (+${targetIds.length - 5} more)` : "";
+
+  const content = [
+    `## <⚠️> Ban confirmation required.`,
+    `> This user is not in the server. Please confirm to ban the following ID${targetIds.length === 1 ? "" : "s"}:`,
+    `> Target ID${targetIds.length === 1 ? "" : "s"}: ${preview}${more}`,
+    `> Reason: ${wrap(reason || "No reason")}`,
+    `> Press **Confirm Ban** to proceed.`,
+  ].join("\n");
+
+  return channel.send({ content, components: [row] });
+}
+
+async function handleTcBanConfirmInteraction(interaction) {
+  try {
+    if (!interaction.inGuild?.() || !interaction.guild) {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "> <❇️> This can only be used in a server.", ephemeral: true }).catch(() => { });
+      }
+      return;
+    }
+
+    const parts = String(interaction.customId || "").split(":"); // tcban:<action>:<token>
+    const action = parts[1];
+    const token = parts[2];
+
+    const pending = token ? pendingExternalBans.get(token) : null;
+    if (!pending) {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "> <⌛> That confirmation expired. Please run the command again.", ephemeral: true }).catch(() => { });
+      }
+      return;
+    }
+
+    // Guild guard
+    if (pending.guildId !== interaction.guild.id) {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "> <❇️> That confirmation is for a different server.", ephemeral: true }).catch(() => { });
+      }
+      return;
+    }
+
+    // Only the mod who requested it can press it
+    if (pending.moderatorId !== interaction.user.id) {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "> <❇️> You cannot interact with this button.", ephemeral: true }).catch(() => { });
+      }
+      return;
+    }
+
+    // TTL
+    if (Date.now() - pending.createdAt > EXTERNAL_BAN_CONFIRM_TTL_MS) {
+      pendingExternalBans.delete(token);
+      try {
+        await interaction.update({ content: "> <⌛> That confirmation expired. Please run the command again.", components: [] });
+      } catch {
+        await interaction.reply({ content: "> <⌛> That confirmation expired. Please run the command again.", ephemeral: true }).catch(() => { });
+      }
+      return;
+    }
+
+    if (action === "cancel") {
+      pendingExternalBans.delete(token);
+      try {
+        await interaction.update({ content: "> <❇️> Ban cancelled.", components: [] });
+      } catch {
+        await interaction.reply({ content: "> <❇️> Ban cancelled.", ephemeral: true }).catch(() => { });
+      }
+      return;
+    }
+
+    if (action !== "confirm") {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "> <❇️> Unknown action.", ephemeral: true }).catch(() => { });
+      }
+      return;
+    }
+
+    // Permission checks at time-of-click
+    if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.BanMembers)) {
+      await interaction.reply({ content: "> <❌> You need **Ban Members** permission.", ephemeral: true }).catch(() => { });
+      return;
+    }
+    const bot = interaction.guild.members.me;
+    if (!bot?.permissions?.has(PermissionsBitField.Flags.BanMembers)) {
+      await interaction.reply({ content: "> <❌> I do not have **Ban Members** permission.", ephemeral: true }).catch(() => { });
+      return;
+    }
+
+    // Acknowledge quickly + remove buttons
+    await interaction.update({ content: "> <⏳> Processing ban…", components: [] }).catch(() => { });
+
+    const results = [];
+    for (const targetId of pending.targetIds) {
+      try {
+        await interaction.guild.members.ban(targetId, { reason: pending.reason });
+
+        const recId = await recordModerationAction({
+          guildId: interaction.guild.id,
+          userId: targetId,
+          moderatorId: interaction.user.id,
+          actionType: "ban",
+          reason: pending.reason,
+        });
+
+        const usr = await interaction.client.users.fetch(targetId).catch(() => null);
+        if (usr) {
+          await safeDM(usr, [
+            `> <🔨> You have been \`banned\` in **${interaction.guild.name}**.`,
+            `> Reason: ${wrap(pending.reason)}`,
+            `> Action ID: ${fmtId(recId)}`,
+          ]);
+        }
+
+        results.push(
+          [
+            `> <${display.ban.emoji}> ${display.ban.label}: ${wrap(usr ? usr.tag : targetId)}`,
+            `> Reason: ${wrap(pending.reason)}`,
+            `> Action ID: ${fmtId(recId)}`,
+          ].join("\n")
+        );
+      } catch (e) {
+        results.push(`> <❌> Failed to ban \`${targetId}\``);
+      }
+    }
+
+    pendingExternalBans.delete(token);
+
+    const finalContent = results.join("\n\n") || "> <❌> No bans were applied.";
+    // Best-effort edit (update already removed buttons)
+    try {
+      await interaction.editReply({ content: finalContent, components: [] });
+    } catch {
+      await interaction.message?.edit?.({ content: finalContent, components: [] }).catch(() => { });
+    }
+  } catch (err) {
+    console.error("[handleTcBanConfirmInteraction]", err);
+    try {
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "> <❌> An internal error occurred.", ephemeral: true });
+      }
+    } catch { }
+  }
+}
 
 /* ─────── HISTORY RENDERING ─────── */
 function buildHistoryPage(records, page, map) {
@@ -638,6 +818,25 @@ async function handleModMessageCommand(msg, args) {
       if (member) {
         targets = new Map([[member.id, member]]);
       } else {
+        // BAN by ID support (even if the user cannot be resolved as a current member)
+        if (sub === "ban") {
+          const raw = String(rawArg2 || "").trim();
+          const mm = raw.match(/^<@!?(\d{17,19})>$/) || raw.match(/^(\d{17,19})$/);
+          const targetId = mm ? (mm[1] || mm[2]) : null;
+
+          if (targetId && /^\d{17,19}$/.test(targetId)) {
+            const reasonForConfirm = args.slice(2).join(" ") || "No reason";
+            await sendExternalBanConfirmMessage({
+              channel: msg.channel,
+              guild: msg.guild,
+              moderatorId: msg.author.id,
+              targetIds: [targetId],
+              reason: reasonForConfirm,
+            });
+            return;
+          }
+        }
+
         return msg.channel.send(`> <❌> Could not find user: ${rawArg2}`);
       }
     }
@@ -912,6 +1111,93 @@ async function handleModSlashCommand(inter) {
       if (durMs > MAX_TIMEOUT_MS)
         return inter.reply({ content: "> <❌> Duration too long (max 28 days).", ephemeral: true });
       durSec = Math.floor(durMs / 1000);
+    }
+
+
+    // ─────────────────────────────
+    // BAN BY ID (supports users not currently in the server via confirmation)
+    // ─────────────────────────────
+    if (sub === "ban") {
+      const inGuild = [];
+      const external = [];
+
+      for (const id of ids) {
+        const member = await inter.guild.members.fetch(id).catch(() => null);
+        if (member) inGuild.push(member);
+        else external.push(id);
+      }
+
+      const lines = [];
+
+      // Ban members we can resolve normally
+      for (const member of inGuild) {
+        const check = canBan(inter.member, member, inter.guild);
+        if (!check.ok) {
+          lines.push(check.msg);
+          continue;
+        }
+
+        try {
+          const recId = await performAndLog({
+            member,
+            moderator: inter.member,
+            guild: inter.guild,
+            type: "ban",
+            reason,
+          });
+
+          lines.push(
+            [
+              `> <${display.ban.emoji}> ${display.ban.label}: ${wrap(member.user.tag)}`,
+              `> Reason: ${wrap(reason)}`,
+              `> Action ID: ${fmtId(recId)}`,
+            ].join("\n")
+          );
+        } catch {
+          lines.push(`> <❌> Failed to ban ${wrap(member.user.tag)}.`);
+        }
+      }
+
+      // If any IDs couldn't be resolved as members, require explicit confirmation
+      if (external.length) {
+        // Ensure bot still has Ban Members permission
+        const bot = inter.guild.members.me;
+        if (!bot?.permissions?.has(PermissionsBitField.Flags.BanMembers)) {
+          lines.push("> <❌> I do not have **Ban Members** permission.");
+          return inter.reply({ content: lines.join("\n\n") || "> <❌> Cannot proceed.", ephemeral: true });
+        }
+
+        const token = createPendingExternalBan({
+          guildId: inter.guild.id,
+          moderatorId: inter.user.id,
+          targetIds: external,
+          reason,
+        });
+
+        const row = buildExternalBanConfirmRow(token);
+
+        const preview = external.slice(0, 5).map((x) => `\`${x}\``).join(", ");
+        const more = external.length > 5 ? ` (+${external.length - 5} more)` : "";
+
+        lines.push(
+          [
+            `> <⚠️> Ban confirmation required for ${external.length} ID${external.length === 1 ? "" : "s"}: ${preview}${more}`,
+            `> Reason: ${wrap(reason)}`,
+            `> Press **Confirm Ban** to proceed.`,
+          ].join("\n")
+        );
+
+        return inter.reply({
+          content: lines.join("\n\n") || "> <⚠️> Ban confirmation required.",
+          components: [row],
+          ephemeral: false,
+        });
+      }
+
+      return inter.reply({
+        content: lines.join("\n\n") || "> <❇️> No valid users provided.",
+        ephemeral: false,
+      });
     }
 
     const confirms = await Promise.all(
@@ -1198,4 +1484,5 @@ async function handleModSlashCommand(inter) {
 module.exports = {
   handleModMessageCommand,
   handleModSlashCommand,
+  handleTcBanConfirmInteraction,
 };

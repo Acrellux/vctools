@@ -70,6 +70,7 @@ const {
 const {
   handleModMessageCommand,
   handleModSlashCommand,
+  handleTcBanConfirmInteraction,
 } = require("./logic/moderation_logic.cjs");
 const {
   handleSafeUserMessageCommand,
@@ -615,6 +616,7 @@ async function onInteractionCreate(interaction) {
 
       if (interaction.customId.startsWith("notify:")) return handleNotifyFlow(interaction);
       if (interaction.isButton() && interaction.customId.startsWith("prefix:")) return handlePrefixSettingsFlow(interaction);
+      if (interaction.isButton() && interaction.customId.startsWith("tcban:")) return handleTcBanConfirmInteraction(interaction);
 
       // ✅ Safer consent grant handler
       if (interaction.isButton() && interaction.customId.startsWith("consent:grant:")) {
