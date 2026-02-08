@@ -56,6 +56,65 @@ const emptySince = new Map();                     // guildId -> timestamp
 const EMPTY_GRACE_MS = 15000;                     // 15 seconds
 
 /************************************************************************************************
+ * SETTINGS CACHE (CRITICAL: reduces Supabase egress / stops hot-path reads)
+ *
+ * Problem:
+ * - getSettingsForGuild() ultimately reads guild_settings from Supabase.
+ * - This file calls it in hot paths (voice events, speaking events, periodic checks).
+ * - That can explode into thousands of /rest/v1/guild_settings GETs.
+ *
+ * Fix:
+ * - Cache per guild in memory with TTL.
+ * - Deduplicate in-flight fetches (stampede protection).
+ * - Allow forced refresh only where truly needed.
+ ************************************************************************************************/
+const SETTINGS_TTL_MS = 30_000; // 30s is plenty for VC logic; adjust if you want
+const settingsCache = new Map(); // guildId -> { data, ts, inFlightPromise }
+
+/**
+ * Fetch guild settings with cache + in-flight dedupe.
+ * @param {string} guildId
+ * @param {{force?: boolean}} opts
+ * @returns {Promise<object>}
+ */
+async function getSettingsCached(guildId, opts = {}) {
+  const force = !!opts.force;
+  const now = Date.now();
+
+  const entry = settingsCache.get(guildId);
+  if (!force && entry?.data && (now - entry.ts) < SETTINGS_TTL_MS) {
+    return entry.data;
+  }
+
+  if (!force && entry?.inFlightPromise) {
+    return entry.inFlightPromise;
+  }
+
+  const p = (async () => {
+    try {
+      const s = (await getSettingsForGuild(guildId).catch(() => null)) || {};
+      settingsCache.set(guildId, { data: s, ts: Date.now(), inFlightPromise: null });
+      return s;
+    } catch {
+      const fallback = entry?.data || {};
+      settingsCache.set(guildId, { data: fallback, ts: Date.now(), inFlightPromise: null });
+      return fallback;
+    }
+  })();
+
+  settingsCache.set(guildId, { data: entry?.data || {}, ts: entry?.ts || 0, inFlightPromise: p });
+  return p;
+}
+
+/**
+ * Optional helper if you ever want to invalidate on a settings update event.
+ */
+function invalidateSettingsCache(guildId) {
+  if (!guildId) return;
+  settingsCache.delete(guildId);
+}
+
+/************************************************************************************************
  * GLOBALS & CONSTANTS
  ************************************************************************************************/
 const GRACE_PERIOD_MS = 3000;
@@ -131,8 +190,8 @@ const initiateLoudnessWarning = async (
   guild,
   updateTimestamp
 ) => {
-  // ✅ Null-safe settings
-  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  // ✅ Cached settings (prevents hot-path Supabase reads)
+  const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
   if (settings.safeUsers?.includes?.(userId)) {
     console.log(`[INFO] User ${userId} is a safe user. Skipping loudness detection.`);
     return null;
@@ -155,7 +214,8 @@ const initiateLoudnessWarning = async (
 
     console.log(`*** WARNING: User ${uid} is too loud (RMS: ${rms}) ***`);
 
-    const s = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    // ✅ Cached settings again (but still cached)
+    const s = (await getSettingsCached(guild.id).catch(() => null)) || {};
     const roleId = s.notifyLoudUser ? s.voiceCallPingRoleId : null;
 
     try {
@@ -318,7 +378,8 @@ async function detectUserActivityChanges(oldState, newState) {
     return;
   }
 
-  const settings = await getSettingsForGuild(guild.id);
+  // ✅ Cached settings
+  const settings = await getSettingsCached(guild.id);
   if (!settings.vcLoggingEnabled || !settings.vcLoggingChannelId) return;
 
   const activityChannel = guild.channels.cache.get(settings.vcLoggingChannelId);
@@ -333,8 +394,6 @@ async function detectUserActivityChanges(oldState, newState) {
   const username = member.user.username;
   const userId = member.user.id;
 
-  // Invisible separator used to break Discord's embedding/mention parsing.
-  // Swap to "\u200B" for Zero-Width Space if you prefer.
   const SPACE = "\u200A"; // Hair Space
 
   const ansi = {
@@ -346,13 +405,8 @@ async function detectUserActivityChanges(oldState, newState) {
     reset: "\u001b[0m",
   };
 
-  // Helper to append an invisible space after any color-change (prevents parser gluing)
   const c = (color) => `${color}${SPACE}`;
-
-  // Bracket helpers that insert SPACE right after '[' and before ']', and a SPACE after the block
   const br = (inner) => `[${SPACE}${inner}${SPACE}]${SPACE}`;
-
-  // Safen raw identifiers if they might appear inside <...> or similar (optional)
   const safe = (s) => String(s).replace(/</g, `<${SPACE}`);
 
   let roleColor = c(ansi.white);
@@ -371,37 +425,29 @@ async function detectUserActivityChanges(oldState, newState) {
   const second = now.getSeconds().toString().padStart(2, "0");
   const timestamp = `${minute}:${second}`;
 
-  // Timestamp block gets brackets + spacers too
   const buildLog = (msg) =>
     `\`\`\`ansi\n${c(ansi.darkGray)}${br(`${c(ansi.white)}${timestamp}${c(ansi.darkGray)}`)}${SPACE}${msg}${c(ansi.reset)}\n\`\`\``;
 
-  // ---- NEW: Join / Move / Leave logs (normal cases) ----
   const oldChan = oldState.channelId ? guild.channels.cache.get(oldState.channelId) : null;
   const newChan = newState.channelId ? guild.channels.cache.get(newState.channelId) : null;
   const oldId = oldChan?.id || null;
   const newId = newChan?.id || null;
 
-  // only log when the channel actually changed (including joins/leaves)
   if (oldId !== newId) {
     if (oldChan && newChan) {
-      // moved channels
       const logMsg =
         `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
         ` ${roleColor}${safe(username)}${c(ansi.darkGray)} moved from ` +
         `${c(ansi.white)}#${safe(oldChan.name)}${c(ansi.darkGray)} to ` +
         `${c(ansi.white)}#${safe(newChan.name)}${c(ansi.darkGray)}.`;
       await activityChannel.send(buildLog(logMsg)).catch(console.error);
-      // continue
     } else if (!oldChan && newChan) {
-      // joined a channel
       const logMsg =
         `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
         ` ${roleColor}${safe(username)}${c(ansi.darkGray)} joined ` +
         `${c(ansi.white)}#${safe(newChan.name)}${c(ansi.darkGray)}.`;
       await activityChannel.send(buildLog(logMsg)).catch(console.error);
-      // continue
     } else if (oldChan && !newChan) {
-      // left a channel (may be forced — we’ll prefer the forced-disconnect message if we detect it)
       let forciblyDisconnected = false;
       let executor = "Unknown";
       try {
@@ -436,13 +482,10 @@ async function detectUserActivityChanges(oldState, newState) {
           `${c(ansi.white)}#${safe(oldChan.name)}${c(ansi.darkGray)}.`;
         await activityChannel.send(buildLog(logMsg)).catch(console.error);
       }
-      return; // we handled the leave
+      return;
     }
   }
 
-  // ---- Existing logs (kept), all bracketed + color-changed with spacers ----
-
-  // 2) Server mute/unmute
   if (oldState.serverMute !== newState.serverMute) {
     let executor = "Unknown";
     try {
@@ -468,7 +511,6 @@ async function detectUserActivityChanges(oldState, newState) {
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
-  // 3) Server deaf/undeaf
   if (oldState.serverDeaf !== newState.serverDeaf) {
     let executor = "Unknown";
     try {
@@ -494,7 +536,6 @@ async function detectUserActivityChanges(oldState, newState) {
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
-  // 4) Self mute/unmute
   if (oldState.selfMute !== newState.selfMute) {
     const action = newState.selfMute ? "self-muted" : "self-unmuted";
     const logMsg =
@@ -503,7 +544,6 @@ async function detectUserActivityChanges(oldState, newState) {
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
-  // 5) Self deaf/undeaf
   if (oldState.selfDeaf !== newState.selfDeaf) {
     const action = newState.selfDeaf ? "self-deafened" : "self-undeafened";
     const logMsg =
@@ -512,7 +552,6 @@ async function detectUserActivityChanges(oldState, newState) {
     await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 
-  // 6) Screen share start/stop
   if (oldState.streaming !== newState.streaming) {
     const action = newState.streaming ? "started screen sharing" : "stopped screen sharing";
     const logMsg =
@@ -533,7 +572,6 @@ let isDisconnecting = false;
 async function execute(oldState, newState, client) {
   if (newState?.member?.user?.bot) return;
 
-  // Activity logs (safe)
   try {
     await detectUserActivityChanges(oldState, newState);
   } catch (e) {
@@ -552,10 +590,10 @@ async function execute(oldState, newState, client) {
     return;
   }
 
-  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  // ✅ Cached settings
+  const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
   const safe = new Set(settings.safeChannels || []);
 
-  // Build move context for trading logic
   const actorMember = newState.member || guild.members.cache.get(userId);
   const actorIsMod = isModerator(actorMember);
   const moveContext = {
@@ -565,9 +603,6 @@ async function execute(oldState, newState, client) {
     destId: newState?.channelId || null,
   };
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Case 1: User moved channels
-  // ───────────────────────────────────────────────────────────────────────────
   if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
     console.log(`[DEBUG] User ${userId} moved from ${oldState.channelId} to ${newState.channelId}`);
 
@@ -577,14 +612,10 @@ async function execute(oldState, newState, client) {
       return;
     }
 
-    // Always recompute on every member move
     await manageVoiceChannels(guild, client, moveContext);
     return;
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Case 2: User joined a channel
-  // ───────────────────────────────────────────────────────────────────────────
   if (!oldState.channelId && newState.channelId) {
     console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
     userJoinTimes.set(userId, Date.now());
@@ -599,16 +630,15 @@ async function execute(oldState, newState, client) {
       audioListeningFunctions(connection, guild);
     }
 
-    // ---- Fresh settings just before consent logic (null-safe) ----
-    const freshSettings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    // “Fresh” settings for consent destination, but still cached+controlled.
+    // If you *really* need immediate reflect after a dashboard update, set force:true.
+    const freshSettings = (await getSettingsCached(guild.id, { force: false }).catch(() => null)) || {};
 
-    // Normalize safeUsers to string IDs (defensive)
     const safeUsersArr = Array.isArray(freshSettings.safeUsers)
       ? freshSettings.safeUsers.map((x) => String(x))
       : [];
     const isSafeUser = safeUsersArr.includes(String(userId));
 
-    // ✅ Safe user bypass (skip consent & muting)
     if (isSafeUser) {
       console.log(`[CONSENT] ${userId} is a safe user; skipping consent & muting.`);
       try {
@@ -621,13 +651,12 @@ async function execute(oldState, newState, client) {
       return;
     }
 
-    // ---- Consent flow (treat errors as no-consent) ----
     let hasConsent = false;
     try {
       hasConsent = !!(await hasUserConsented(userId));
     } catch (e) {
       console.warn(`[CONSENT] hasUserConsented failed for ${userId}: ${e?.message || e}`);
-      hasConsent = false; // default to requiring consent
+      hasConsent = false;
     }
 
     if (hasConsent) {
@@ -670,16 +699,12 @@ async function execute(oldState, newState, client) {
       try {
         await newState.setMute(true, "Awaiting transcription consent.");
       } catch (err) {
-        // If the bot lacks permission, log loudly so you catch it
         console.error(`[ERROR] Failed to mute user ${userId} (no consent): ${err.message}`);
       }
     }
     return;
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Case 3: User left a channel
-  // ───────────────────────────────────────────────────────────────────────────
   if (oldState.channelId && !newState.channelId) {
     console.log(`[DEBUG] User ${userId} left channel: ${oldState.channelId}`);
 
@@ -706,12 +731,12 @@ async function execute(oldState, newState, client) {
  * MANAGE VOICE CHANNELS & MOVES (core decision engine)
  ************************************************************************************************/
 async function manageVoiceChannels(guild, client, moveContext = null) {
-
   if (routingLock.has(guild.id)) return;
   routingLock.add(guild.id);
 
   try {
-    const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    // ✅ Cached settings (this is hit very frequently)
+    const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
     const featureOn = !!settings.mod_auto_route_enabled;
     const safe = new Set(settings.safeChannels || []);
 
@@ -723,12 +748,10 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
     const { busiest, busiestHumans } = findBusiest(guild, safe);
     const bestUnsupervised = findBestUnsupervised2(guild, safe, currentChannel?.id || null);
 
-    // Helper to respect cooldown
     const now = Date.now();
     const last = guildLastMoveAt.get(guild.id) || 0;
     const canMove = now - last >= guildMoveCooldownMs;
 
-    // If feature is OFF, simple behavior (also promote when <2 humans)
     if (!featureOn) {
       if (!currentChannel) {
         if (busiest && busiestHumans > 0) {
@@ -758,15 +781,12 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       return;
     }
 
-    // FEATURE ON: full logic
-    // 0) Never sit in SAFE
     if (currentChannel && safe.has(currentChannel.id)) {
       if (bestUnsupervised && canMove) {
         guildLastMoveAt.set(guild.id, now);
         await moveToChannel(bestUnsupervised, connection, guild, client);
         return;
       }
-      // Fallback: join busiest even if a mod is there (covers "only 1 active VC")
       if (busiest && busiestHumans > 0 && canMove) {
         guildLastMoveAt.set(guild.id, now);
         await moveToChannel(busiest, connection, guild, client);
@@ -778,7 +798,6 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       return;
     }
 
-    // 1) Trade-places on MOD moves (explicit)
     if (currentChannel && moveContext?.actorIsMod && canMove) {
       const origin = moveContext.originId
         ? guild.channels.cache.get(moveContext.originId)
@@ -787,7 +806,6 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
         ? guild.channels.cache.get(moveContext.destId)
         : null;
 
-      // Mod moved INTO our channel → swap to origin if it's valid (no SAFE, no mod, ≥2)
       if (dest && dest.id === currentChannel.id && origin && !safe.has(origin.id)) {
         const { humans, mods } = channelCounts(origin);
         if (mods === 0 && humans >= AUTO_ROUTE_MIN_OTHER_HUMANS) {
@@ -796,12 +814,9 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
           await moveToChannel(origin, connection, guild, client);
           return;
         }
-        // fallthrough to general reroute
       }
-      // Mod moved OUT OF our channel → no immediate move; continue to general reroute
     }
 
-    // 2) General reroute
     if (!currentChannel) {
       const bestWhenDisconnected = findBestUnsupervised2(guild, safe, null);
       if (bestWhenDisconnected) {
@@ -819,14 +834,11 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
         const newConn = await joinChannel(client, busiest.id, guild);
         if (newConn) audioListeningFunctions(newConn, guild);
       }
-
       return;
     }
 
-    // Connected:
     const currentHumans = currentChannel.members.filter((m) => !m.user.bot).size;
 
-    // If low population (<2): prefer unsupervised≥2; else move to biggest (even if it has a mod), else disconnect if 0
     if (currentHumans < 2) {
       const dest = findBestUnsupervised2(guild, safe, currentChannel.id);
       if (dest && canMove) {
@@ -853,17 +865,13 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
         return;
       }
 
-      // reset if humans come back
       emptySince.delete(guild.id);
-
       return;
     }
 
-    // Not low-population:
     const currentHasMod = channelHasMod(currentChannel);
 
     if (currentHasMod) {
-      // Leave mods to supervise here → move to best unsupervised≥2 if any
       const dest = findBestUnsupervised2(guild, safe, currentChannel.id);
       if (dest && canMove) {
         guildLastMoveAt.set(guild.id, now);
@@ -873,7 +881,6 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
       return;
     }
 
-    // Our room has no mod; consider moving only to a bigger NO-MOD room
     if (busiest && busiest.id !== currentChannel.id && !channelHasMod(busiest)) {
       const here = channelCounts(currentChannel);
       const there = channelCounts(busiest);
@@ -901,7 +908,7 @@ async function moveToChannel(targetChannel, connection, guild, client) {
 }
 
 async function safeJoinChannel(client, channelId, guild) {
-  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
   const safeChannels = new Set(settings.safeChannels || []);
 
   if (safeChannels.has(channelId)) {
@@ -913,7 +920,7 @@ async function safeJoinChannel(client, channelId, guild) {
 }
 
 async function joinChannel(client, channelId, guild) {
-  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
   if ((settings.safeChannels || []).includes(channelId)) {
     console.log(`[INFO] Channel ${channelId} is in safeChannels. Not joining.`);
     return null;
@@ -933,7 +940,6 @@ async function joinChannel(client, channelId, guild) {
       selfDeaf: false,
     });
 
-    // ALWAYS recompute on rejoin/ready
     connection.on(VoiceConnectionStatus.Ready, async () => {
       console.log(`[INFO] Connected to ${channel.name}`);
       saveVCState(guild.id, channel.id);
@@ -962,7 +968,6 @@ async function disconnectAndReset(connection, guild, client) {
       console.error(`[ERROR] During disconnect: ${error.message}`);
     } finally {
       isDisconnecting = false;
-      // Immediately recalc after disconnect (prevents “dies” scenario)
       if (guild && client) {
         try { await manageVoiceChannels(guild, client, null); } catch (e) { console.warn("[ROUTE] Post-disconnect manage failed:", e?.message || e); }
       }
@@ -990,28 +995,23 @@ function audioListeningFunctions(connection, guild) {
     pipelines.delete(userId);
 
     try {
-      // loudness
       try { loudnessRes?.teardown?.(); } catch { }
 
-      // stop flow of new data
       try { audioStream?.unpipe?.(decoder); } catch { }
       try { decoder?.unpipe?.(pcmWriter); } catch { }
       try { audioStream?.pause?.(); } catch { }
 
-      // finish writer safely
       if (pcmWriter && !pcmWriter.closed) {
-        pcmWriter.on("error", () => { }); // swallow harmless late errors
+        pcmWriter.on("error", () => { });
         try { pcmWriter.end(); } catch { }
         await waitForFinished(pcmWriter);
       }
     } catch (e) {
       console.warn(`[PIPELINE STOP] user=${userId} ➜ ${e.message}`);
     } finally {
-      // Destroy remnants
       try { decoder?.destroy?.(); } catch { }
       try { audioStream?.destroy?.(); } catch { }
 
-      // subscriptions + outputStreams cleanup
       if (userSubscriptions[userId]) {
         try { userSubscriptions[userId].destroy?.(); } catch { }
         delete userSubscriptions[userId];
@@ -1027,8 +1027,8 @@ function audioListeningFunctions(connection, guild) {
   receiver.speaking.on("start", async (userId) => {
     if (currentlySpeaking.has(userId)) return;
 
-    // ✅ Null-safe settings
-    const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    // ✅ Cached settings (this is a VERY hot path)
+    const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
     if (!settings.transcriptionEnabled) return;
     if (settings.safeUsers?.includes?.(userId)) return;
 
@@ -1072,12 +1072,10 @@ function audioListeningFunctions(connection, guild) {
       rate: 48000,
     });
 
-    // Simple capture counter (helps confirm audio flow)
     let byteCount = 0;
     const onRaw = (chunk) => { byteCount += chunk.length; };
     audioStream.on("data", onRaw);
 
-    // guard everything with local helpers
     const closePipeline = async (reason) => {
       console.warn(`[DECODE GUARD] user=${userId} closing pipeline: ${reason}`);
       try { audioStream?.unpipe?.(decoder); } catch { }
@@ -1089,7 +1087,6 @@ function audioListeningFunctions(connection, guild) {
     };
 
     decoder.on("error", async (err) => {
-      // swallow common Opus corruption from the network and finalize safely
       console.warn(`[OPUS] decoder error for ${userId}: ${err.message}`);
       await closePipeline("decoder_error");
       const member = guild.members.cache.get(userId);
@@ -1103,7 +1100,6 @@ function audioListeningFunctions(connection, guild) {
     });
 
     pcmWriter.on("error", (err) => {
-      // write errors should never crash the process
       console.warn(`[PCM WRITE] ${userId}: ${err.message}`);
     });
 
@@ -1128,14 +1124,12 @@ function audioListeningFunctions(connection, guild) {
 
         console.warn(`[SILENCE FINALIZE] ${userId} silent for ${silenceDuration}ms (threshold: ${threshold})`);
 
-        // stop the interval first, regardless of speaking state
         safeClearTimer(perUserSilenceTimer[userId]);
         delete perUserSilenceTimer[userId];
 
         finalizingUsers.add(userId);
         lastFinalizeAt.set(userId, now);
 
-        // Always stop the pipeline (idempotent) and then finalize whatever we have
         try {
           await stopUserPipeline(userId);
           const member = guild.members.cache.get(userId);
@@ -1148,7 +1142,7 @@ function audioListeningFunctions(connection, guild) {
           console.error(`[SILENCE FINALIZE] finalize failed for ${userId}: ${e.message}`);
         } finally {
           finalizingUsers.delete(userId);
-          await new Promise(r => setTimeout(r, 250));     // small grace on Windows
+          await new Promise(r => setTimeout(r, 250));
         }
       }
     }, 1000);
@@ -1176,7 +1170,6 @@ function audioListeningFunctions(connection, guild) {
     }, wait > 0 ? wait : 0);
   });
 
-  // ALWAYS recompute on disconnect
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     receiver.speaking.removeAllListeners();
     receiver.isListening = false;
@@ -1220,11 +1213,9 @@ function audioListeningFunctions(connection, guild) {
     } catch (err) {
       console.error(`[FINALIZE] user=${userId} ➜ ${err.message}`);
     } finally {
-      // Kill any leftover timers for this user (defensive)
       safeClearTimer(perUserSilenceTimer[userId]);
       delete perUserSilenceTimer[userId];
 
-      // Make absolutely sure pipeline objects are torn down before delete
       try {
         const p = pipelines.get(userId);
         if (p) {
@@ -1238,14 +1229,11 @@ function audioListeningFunctions(connection, guild) {
         }
       } catch { }
 
-      // Give Windows a brief moment to flush close events
       await new Promise(r => setTimeout(r, 40));
 
-      // First try the normal safe path (cheap when free)
       try { await transcription.safeDeleteFile(pcm); } catch { }
       try { await transcription.safeDeleteFile(wav); } catch { }
 
-      // Then escalate: bypass stale "in use" guard and hammer the lock
       try {
         const ok = await transcription.hardFinalizeDelete([pcm, wav]);
         if (!ok) console.warn(`[HARD-DEL] Not fully removed: ${pcm} / ${wav}`);
@@ -1292,7 +1280,6 @@ function startPeriodicVCCheck(client, intervalMs = 15000) {
     vcProbeRunning.add(guild.id);
 
     try {
-      // One unified decision point handles both connected + disconnected states.
       await manageVoiceChannels(guild, client, null);
     } catch (e) {
       console.warn(`[AUTO-VC] Guild ${guild.id} probe failed: ${e?.message || e}`);
@@ -1302,15 +1289,11 @@ function startPeriodicVCCheck(client, intervalMs = 15000) {
   };
 
   const probeAll = async () => {
-    // Avoid async-forEach footguns; keep it predictable.
     for (const guild of client.guilds.cache.values()) {
       await probeGuild(guild);
     }
   };
 
-  // Run once immediately so we can:
-  // - disconnect after the grace timer without needing a new voice event
-  // - join an already-active VC even if nobody has joined/left since boot
   probeAll().catch((e) => {
     console.warn(`[AUTO-VC] Initial probe failed: ${e?.message || e}`);
   });
@@ -1329,4 +1312,5 @@ module.exports = {
   joinChannel,
   audioListeningFunctions,
   startPeriodicVCCheck,
+  invalidateSettingsCache, // optional, but useful
 };
