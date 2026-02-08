@@ -68,7 +68,7 @@ const EMPTY_GRACE_MS = 15000;                     // 15 seconds
  * - Deduplicate in-flight fetches (stampede protection).
  * - Allow forced refresh only where truly needed.
  ************************************************************************************************/
-const SETTINGS_TTL_MS = 30_000; // 30s is plenty for VC logic; adjust if you want
+const SETTINGS_TTL_MS = 180000; // 3m is plenty for VC logic; adjust if you want
 const settingsCache = new Map(); // guildId -> { data, ts, inFlightPromise }
 
 /**
