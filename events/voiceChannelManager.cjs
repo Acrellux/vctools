@@ -92,12 +92,16 @@ async function getSettingsCached(guildId, opts = {}) {
 
   const p = (async () => {
     try {
-      const s = (await getSettingsForGuild(guildId).catch(() => null)) || {};
+      const s = (await getSettingsForGuild(guildId)) || entry?.data || {};
       settingsCache.set(guildId, { data: s, ts: Date.now(), inFlightPromise: null });
       return s;
-    } catch {
+    } catch (e) {
       const fallback = entry?.data || {};
-      settingsCache.set(guildId, { data: fallback, ts: Date.now(), inFlightPromise: null });
+      settingsCache.set(guildId, {
+        data: fallback,
+        ts: Date.now(),
+        inFlightPromise: null,
+      });
       return fallback;
     }
   })();
@@ -653,9 +657,12 @@ async function execute(oldState, newState, client) {
 
     let hasConsent = false;
     try {
-      hasConsent = !!(await hasUserConsented(userId));
+      // ✅ guild-scoped consent (prevents cross-guild consent bleed)
+      hasConsent = !!(await hasUserConsented(userId, guild.id));
     } catch (e) {
-      console.warn(`[CONSENT] hasUserConsented failed for ${userId}: ${e?.message || e}`);
+      console.warn(
+        `[CONSENT] hasUserConsented failed for ${userId} in guild ${guild.id}: ${e?.message || e}`
+      );
       hasConsent = false;
     }
 
@@ -697,7 +704,11 @@ async function execute(oldState, newState, client) {
       });
 
       try {
-        await newState.setMute(true, "Awaiting transcription consent.");
+        // If consent check *failed*, avoid punishment-style mute.
+        // Only mute when we definitively know they haven't consented.
+        if (hasConsent === false) {
+          await newState.setMute(true, "Awaiting transcription consent.");
+        }
       } catch (err) {
         console.error(`[ERROR] Failed to mute user ${userId} (no consent): ${err.message}`);
       }
@@ -1038,9 +1049,10 @@ function audioListeningFunctions(connection, guild) {
 
     let consentOk = true;
     try {
-      consentOk = !!(await hasUserConsented(userId));
+      // ✅ guild-scoped consent
+      consentOk = !!(await hasUserConsented(userId, guild.id));
     } catch (e) {
-      console.warn(`[TX CONSENT ERR] ${userId} → ${e?.message || e}`);
+      console.warn(`[TX CONSENT ERR] ${userId} (guild ${guild.id}) → ${e?.message || e}`);
       consentOk = false;
     }
     if (!consentOk) return;
