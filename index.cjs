@@ -1010,29 +1010,38 @@ client.on("messageCreate", async (message) => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  await withRescue(async () => {
-    await commands.onInteractionCreate(interaction);
-  }, "commands.onInteractionCreate");
-
-  // if commands.onInteractionCreate throws, we still want your friendly ephem error
-}).catch(async (error) => {
-  safeErr(`[ERROR] Interaction handling failed: ${error?.message || error}`);
-
-  const isRepliable = typeof interaction.isRepliable === "function" ? interaction.isRepliable() : false;
-  if (!isRepliable) return;
-
-  const payload = {
-    content: "> <❌> An error occurred while processing your interaction. (INT_ERR_006)",
-    ephemeral: true,
-  };
-
   try {
-    if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
-    else await interaction.reply(payload);
-  } catch (e) {
-    const code = e?.code ?? e?.rawError?.code;
-    if (code === 10062) return; // Unknown interaction
-    safeErr(`[ERROR] Failed to send interaction error response: ${e?.message || e}`);
+    await withRescue(async () => {
+      await commands.onInteractionCreate(interaction);
+    }, "commands.onInteractionCreate");
+  } catch (error) {
+    safeErr(`[ERROR] Interaction handling failed: ${error?.message || error}`);
+
+    const isRepliable =
+      typeof interaction?.isRepliable === "function"
+        ? interaction.isRepliable()
+        : false;
+
+    if (!isRepliable) return;
+
+    const payload = {
+      content: "> <❌> An error occurred while processing your interaction. (INT_ERR_006)",
+      ephemeral: true,
+    };
+
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp(payload);
+      } else {
+        await interaction.reply(payload);
+      }
+    } catch (e) {
+      const code = e?.code ?? e?.rawError?.code;
+      if (code === 10062) return; // Unknown interaction
+      safeErr(
+        `[ERROR] Failed to send interaction error response: ${e?.message || e}`
+      );
+    }
   }
 });
 
