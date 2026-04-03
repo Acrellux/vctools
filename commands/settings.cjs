@@ -1,5 +1,5 @@
 /*******************************************************
- * settings.cjs (UPDATED)
+ * settings.cjs (UPDATED + CACHED)
  *******************************************************/
 const fs = require("fs");
 const path = require("path");
@@ -128,7 +128,60 @@ function buildDefaultSettingsRow(guildId) {
 }
 
 // ****************************************
-// 4. GUILD SETTINGS FUNCTIONS
+// 4. CACHE LAYER
+// ****************************************
+const SETTINGS_TTL_MS = 3 * 60 * 1000; // 3 minutes
+const CONSENT_TTL_MS = 60 * 1000; // 1 minute
+
+// guildId -> { data, ts, inFlightPromise }
+const settingsCache = new Map();
+
+// key -> { data, ts, inFlightPromise }
+// key format:
+//   guild-scoped: `${userId}:${guildId}`
+//   legacy user-only: `${userId}:__legacy__`
+const consentCache = new Map();
+
+function getConsentCacheKey(userId, guildId = null) {
+  return `${userId}:${guildId || "__legacy__"}`;
+}
+
+function invalidateSettingsCache(guildId) {
+  if (!guildId) return;
+  settingsCache.delete(guildId);
+}
+
+function setSettingsCache(guildId, data) {
+  if (!guildId) return;
+  settingsCache.set(guildId, {
+    data,
+    ts: Date.now(),
+    inFlightPromise: null,
+  });
+}
+
+function invalidateConsentCache(userId, guildId = null) {
+  if (!userId) return;
+
+  if (guildId) {
+    consentCache.delete(getConsentCacheKey(userId, guildId));
+  }
+
+  // also clear legacy fallback key, just to be safe
+  consentCache.delete(getConsentCacheKey(userId, null));
+}
+
+function setConsentCache(userId, guildId, consented) {
+  if (!userId) return;
+  consentCache.set(getConsentCacheKey(userId, guildId), {
+    data: !!consented,
+    ts: Date.now(),
+    inFlightPromise: null,
+  });
+}
+
+// ****************************************
+// 5. GUILD SETTINGS FUNCTIONS
 // ****************************************
 
 /**
@@ -137,64 +190,88 @@ function buildDefaultSettingsRow(guildId) {
  *
  * FAIL-OPEN: returns defaults (no DB writes).
  */
-async function getSettingsForGuild(guildId) {
+async function getSettingsForGuild(guildId, opts = {}) {
   if (!guildId) return null;
 
   if (FAIL_OPEN.enabled) {
     return buildDefaultSettingsRow(guildId);
   }
 
-  return await withRescue(
-    async () => {
-      const { data, error } = await supabase
-        .from("guild_settings")
-        .select("*")
-        .eq("guildId", guildId)
-        .maybeSingle();
+  const force = !!opts.force;
+  const now = Date.now();
+  const entry = settingsCache.get(guildId);
 
-      // Row missing → initialize defaults
-      if (!data && !error) {
-        console.warn(
-          `[WARNING] No settings found for ${guildId}. Initializing default settings.`
-        );
+  if (!force && entry?.data && (now - entry.ts) < SETTINGS_TTL_MS) {
+    return entry.data;
+  }
 
-        const defaults = buildDefaultSettingsRow(guildId);
+  if (!force && entry?.inFlightPromise) {
+    return entry.inFlightPromise;
+  }
 
-        const { error: insertError } = await supabase
+  const p = (async () => {
+    const result = await withRescue(
+      async () => {
+        const { data, error } = await supabase
           .from("guild_settings")
-          .insert([defaults]);
+          .select("*")
+          .eq("guildId", guildId)
+          .maybeSingle();
 
-        if (insertError) {
-          if (looksLikeBillingOrQuota(insertError)) {
-            enableFailOpen("getSettingsForGuild insert billing/quota");
-            return defaults;
-          }
-          console.error(
-            `[ERROR] Failed to initialize settings for ${guildId}:`,
-            insertError
+        // Row missing -> initialize defaults
+        if (!data && !error) {
+          console.warn(
+            `[WARNING] No settings found for ${guildId}. Initializing default settings.`
           );
+
+          const defaults = buildDefaultSettingsRow(guildId);
+
+          const { error: insertError } = await supabase
+            .from("guild_settings")
+            .insert([defaults]);
+
+          if (insertError) {
+            if (looksLikeBillingOrQuota(insertError)) {
+              enableFailOpen("getSettingsForGuild insert billing/quota");
+              return defaults;
+            }
+            console.error(
+              `[ERROR] Failed to initialize settings for ${guildId}:`,
+              insertError
+            );
+            return null;
+          }
+
+          return defaults;
+        }
+
+        if (error) {
+          if (looksLikeBillingOrQuota(error)) {
+            enableFailOpen("getSettingsForGuild select billing/quota");
+            return buildDefaultSettingsRow(guildId);
+          }
+          console.error(`[ERROR] Could not fetch settings for ${guildId}:`, error);
           return null;
         }
 
-        return defaults;
-      }
+        // Merge in any newly-added defaults without overwriting existing values
+        return { ...buildDefaultSettingsRow(guildId), ...data };
+      },
+      "getSettingsForGuild",
+      buildDefaultSettingsRow(guildId)
+    );
 
-      if (error) {
-        if (looksLikeBillingOrQuota(error)) {
-          enableFailOpen("getSettingsForGuild select billing/quota");
-          return buildDefaultSettingsRow(guildId);
-        }
-        console.error(`[ERROR] Could not fetch settings for ${guildId}:`, error);
-        return null;
-      }
+    setSettingsCache(guildId, result);
+    return result;
+  })();
 
-      // Merge in any newly-added defaults without overwriting existing values
-      const merged = { ...buildDefaultSettingsRow(guildId), ...data };
-      return merged;
-    },
-    "getSettingsForGuild",
-    buildDefaultSettingsRow(guildId)
-  );
+  settingsCache.set(guildId, {
+    data: entry?.data || null,
+    ts: entry?.ts || 0,
+    inFlightPromise: p,
+  });
+
+  return p;
 }
 
 /**
@@ -204,14 +281,17 @@ async function getSettingsForGuild(guildId) {
  * FAIL-OPEN: does nothing (returns merged object only).
  */
 async function updateSettingsForGuild(guildId, updates, guild) {
-  if (!guildId) return;
+  if (!guildId) return null;
 
   // Always compute merged result, even if we can’t write.
-  const existing = (await getSettingsForGuild(guildId)) || buildDefaultSettingsRow(guildId);
+  const existing =
+    (await getSettingsForGuild(guildId)) || buildDefaultSettingsRow(guildId);
   const newSettings = { ...existing, ...updates, guildId };
 
   if (FAIL_OPEN.enabled) {
     console.warn("[FAIL-OPEN] updateSettingsForGuild skipped DB write.");
+    setSettingsCache(guildId, newSettings);
+
     // Still try to apply permissions if guild is passed (safe local action)
     if (guild) {
       await applyPermissionSideEffects(newSettings, guild).catch(() => { });
@@ -229,11 +309,17 @@ async function updateSettingsForGuild(guildId, updates, guild) {
       if (upsertError) {
         if (looksLikeBillingOrQuota(upsertError)) {
           enableFailOpen("updateSettingsForGuild upsert billing/quota");
+          setSettingsCache(guildId, newSettings);
           return newSettings;
         }
-        console.error(`[ERROR] Failed to update settings for ${guildId}:`, upsertError);
+        console.error(
+          `[ERROR] Failed to update settings for ${guildId}:`,
+          upsertError
+        );
         return null;
       }
+
+      setSettingsCache(guildId, newSettings);
 
       if (guild) {
         await applyPermissionSideEffects(newSettings, guild);
@@ -252,7 +338,12 @@ async function applyPermissionSideEffects(settings, guild) {
   const { channelId, errorLogsChannelId, allowedRoleId, errorLogsRoleId } = settings;
 
   if (channelId) {
-    await updateChannelPermissionsForGuild(guild.id, channelId, allowedRoleId, guild);
+    await updateChannelPermissionsForGuild(
+      guild.id,
+      channelId,
+      allowedRoleId,
+      guild
+    );
   }
 
   if (errorLogsChannelId) {
@@ -290,7 +381,7 @@ async function updateChannelPermissionsForGuild(guildId, channelId, role_id, gui
 }
 
 // ****************************************
-// 5. ERROR LOGGING FUNCTIONS
+// 6. ERROR LOGGING FUNCTIONS
 // ****************************************
 async function enableErrorLogging(guildId, guild) {
   try {
@@ -305,9 +396,12 @@ async function enableErrorLogging(guildId, guild) {
         guild
       );
     }
+
     console.log(`[INFO] Error logging enabled for guild: ${guildId}`);
   } catch (error) {
-    console.error(`[ERROR] Failed to enable error logging for guild ${guildId}: ${error.message}`);
+    console.error(
+      `[ERROR] Failed to enable error logging for guild ${guildId}: ${error.message}`
+    );
   }
 }
 
@@ -316,12 +410,14 @@ async function disableErrorLogging(guildId, guild) {
     await updateSettingsForGuild(guildId, { errorLogsEnabled: false }, guild);
     console.log(`[INFO] Error logging disabled for guild: ${guildId}`);
   } catch (error) {
-    console.error(`[ERROR] Failed to disable error logging for guild ${guildId}: ${error.message}`);
+    console.error(
+      `[ERROR] Failed to disable error logging for guild ${guildId}: ${error.message}`
+    );
   }
 }
 
 // ****************************************
-// 6. CONSENT MANAGEMENT (Supabase + JSON fallback)
+// 7. CONSENT MANAGEMENT (Supabase + JSON fallback)
 // ****************************************
 const CONSENT_FILE = path.join(__dirname, "../database/consent.json");
 
@@ -340,7 +436,11 @@ async function readConsentData() {
 
 async function writeConsentData(data) {
   try {
-    await fs.promises.writeFile(CONSENT_FILE, JSON.stringify(data, null, 4), "utf8");
+    await fs.promises.writeFile(
+      CONSENT_FILE,
+      JSON.stringify(data, null, 4),
+      "utf8"
+    );
   } catch (error) {
     console.error(`[ERROR] Failed to write consent file: ${error.message}`);
   }
@@ -350,56 +450,87 @@ async function writeConsentData(data) {
  * Checks if a user has given consent (guild-scoped).
  *
  * Backwards compatible:
- * - hasUserConsented(userId)    -> checks latest consent for user (any guild if table has no guildId)
+ * - hasUserConsented(userId) -> checks latest consent for user
  * - hasUserConsented(userId, guildId) -> preferred, guild-scoped
  *
  * FAIL-OPEN: returns true (so you never mute/deny by accident).
  */
-async function hasUserConsented(userId, guildId = null) {
+async function hasUserConsented(userId, guildId = null, opts = {}) {
   if (!userId) return false;
   if (FAIL_OPEN.enabled) return true;
 
-  return await withRescue(
-    async () => {
-      // Try guild-scoped first (if your table has guildId)
-      if (guildId) {
+  const force = !!opts.force;
+  const cacheKey = getConsentCacheKey(userId, guildId);
+  const now = Date.now();
+  const entry = consentCache.get(cacheKey);
+
+  if (!force && entry && (now - entry.ts) < CONSENT_TTL_MS) {
+    return !!entry.data;
+  }
+
+  if (!force && entry?.inFlightPromise) {
+    return entry.inFlightPromise;
+  }
+
+  const p = (async () => {
+    const result = await withRescue(
+      async () => {
+        // Try guild-scoped first (if your table has guildId)
+        if (guildId) {
+          const { data, error } = await supabase
+            .from("user_consent")
+            .select("consented, consentDate")
+            .eq("userId", userId)
+            .eq("guildId", guildId)
+            .order("consentDate", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (error) {
+            // If guildId column doesn't exist, fall back below
+            if (looksLikeBillingOrQuota(error)) throw error;
+          } else {
+            return !!data?.consented;
+          }
+        }
+
+        // Fallback: user-only (legacy schema)
         const { data, error } = await supabase
           .from("user_consent")
           .select("consented, consentDate")
           .eq("userId", userId)
-          .eq("guildId", guildId)
           .order("consentDate", { ascending: false })
           .limit(1)
           .maybeSingle();
 
         if (error) {
-          // If guildId column doesn't exist, fall back below
           if (looksLikeBillingOrQuota(error)) throw error;
-        } else {
-          return !!data?.consented;
+          console.error(`[ERROR] Could not check consent for ${userId}:`, error);
+          return false;
         }
-      }
 
-      // Fallback: user-only (legacy schema)
-      const { data, error } = await supabase
-        .from("user_consent")
-        .select("consented, consentDate")
-        .eq("userId", userId)
-        .order("consentDate", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        return !!data?.consented;
+      },
+      "hasUserConsented",
+      true
+    );
 
-      if (error) {
-        if (looksLikeBillingOrQuota(error)) throw error;
-        console.error(`[ERROR] Could not check consent for ${userId}:`, error);
-        return false;
-      }
+    consentCache.set(cacheKey, {
+      data: !!result,
+      ts: Date.now(),
+      inFlightPromise: null,
+    });
 
-      return !!data?.consented;
-    },
-    "hasUserConsented",
-    true
-  );
+    return !!result;
+  })();
+
+  consentCache.set(cacheKey, {
+    data: entry?.data,
+    ts: entry?.ts || 0,
+    inFlightPromise: p,
+  });
+
+  return p;
 }
 
 /**
@@ -426,6 +557,7 @@ async function grantUserConsent(userId, guild) {
 
   if (FAIL_OPEN.enabled) {
     console.warn("[FAIL-OPEN] grantUserConsent skipped DB write.");
+    setConsentCache(userId, guild?.id || null, true);
     return;
   }
 
@@ -442,6 +574,7 @@ async function grantUserConsent(userId, guild) {
       const { error } = await supabase.from("user_consent").upsert(payload);
       if (error) throw error;
 
+      setConsentCache(userId, guild?.id || null, true);
       console.log(`[INFO] User ${userId} consent granted.`);
     },
     "grantUserConsent.db",
@@ -459,6 +592,7 @@ async function revokeUserConsent(userId, guild) {
 
   if (FAIL_OPEN.enabled) {
     console.warn("[FAIL-OPEN] revokeUserConsent skipped (no mute, no DB).");
+    invalidateConsentCache(userId, guild?.id || null);
     return;
   }
 
@@ -474,9 +608,15 @@ async function revokeUserConsent(userId, guild) {
 
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("user_consent").delete().eq("userId", userId);
+        const { error } = await supabase
+          .from("user_consent")
+          .delete()
+          .eq("userId", userId);
+
         if (error) throw error;
       }
+
+      invalidateConsentCache(userId, guild?.id || null);
     },
     "revokeUserConsent.db",
     null
@@ -497,24 +637,30 @@ async function revokeUserConsent(userId, guild) {
 }
 
 // ****************************************
-// 7. SAFE CHANNELS & USERS MANAGEMENT
+// 8. SAFE CHANNELS & USERS MANAGEMENT
 // ****************************************
 async function addSafeChannel(guildId, channelId) {
   const settings = await getSettingsForGuild(guildId);
   if (!settings) return;
+
   if (!settings.safeChannels.includes(channelId)) {
     const newsafeChannels = [...settings.safeChannels, channelId];
     await updateSettingsForGuild(guildId, { safeChannels: newsafeChannels });
-    console.log(`[INFO] Added channel ${channelId} to safe list for guild ${guildId}.`);
+    console.log(
+      `[INFO] Added channel ${channelId} to safe list for guild ${guildId}.`
+    );
   }
 }
 
 async function removeSafeChannel(guildId, channelId) {
   const settings = await getSettingsForGuild(guildId);
   if (!settings) return;
+
   const newsafeChannels = settings.safeChannels.filter((id) => id !== channelId);
   await updateSettingsForGuild(guildId, { safeChannels: newsafeChannels });
-  console.log(`[INFO] Removed channel ${channelId} from safe list for guild ${guildId}.`);
+  console.log(
+    `[INFO] Removed channel ${channelId} from safe list for guild ${guildId}.`
+  );
 }
 
 async function listsafeChannels(guildId) {
@@ -525,19 +671,25 @@ async function listsafeChannels(guildId) {
 async function addSafeUser(guildId, user_id) {
   const settings = await getSettingsForGuild(guildId);
   if (!settings) return;
+
   if (!settings.safeUsers.includes(user_id)) {
     const newsafeUsers = [...settings.safeUsers, user_id];
     await updateSettingsForGuild(guildId, { safeUsers: newsafeUsers });
-    console.log(`[INFO] Added user ${user_id} to safe list for guild ${guildId}.`);
+    console.log(
+      `[INFO] Added user ${user_id} to safe list for guild ${guildId}.`
+    );
   }
 }
 
 async function removeSafeUser(guildId, user_id) {
   const settings = await getSettingsForGuild(guildId);
   if (!settings) return;
+
   const newsafeUsers = settings.safeUsers.filter((id) => id !== user_id);
   await updateSettingsForGuild(guildId, { safeUsers: newsafeUsers });
-  console.log(`[INFO] Removed user ${user_id} from safe list for guild ${guildId}.`);
+  console.log(
+    `[INFO] Removed user ${user_id} from safe list for guild ${guildId}.`
+  );
 }
 
 async function listsafeUsers(guildId) {
@@ -546,7 +698,7 @@ async function listsafeUsers(guildId) {
 }
 
 // ****************************************
-// 8. EXPORTS
+// 9. EXPORTS
 // ****************************************
 module.exports = {
   // Supabase-based settings
@@ -575,6 +727,11 @@ module.exports = {
   readConsentData,
   writeConsentData,
 
-  // Fail-open state (useful for debugging)
+  // Fail-open state
   FAIL_OPEN,
+
+  // Optional debugging helpers
+  invalidateSettingsCache,
+  invalidateConsentCache,
+  disableFailOpen,
 };
