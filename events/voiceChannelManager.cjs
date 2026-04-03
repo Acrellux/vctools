@@ -155,7 +155,7 @@ const initiateLoudnessWarning = async (
     console.log(`*** WARNING: User ${uid} is too loud (RMS: ${rms}) ***`);
 
     // ✅ Cached settings again (but still cached)
-    const s = (await getSettingsCached(guild.id).catch(() => null)) || {};
+    const s = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
     const roleId = s.notifyLoudUser ? s.voiceCallPingRoleId : null;
 
     try {
@@ -319,7 +319,7 @@ async function detectUserActivityChanges(oldState, newState) {
   }
 
   // ✅ Cached settings
-  const settings = await getSettingsCached(guild.id);
+  const settings = await getSettingsForGuild(guild.id);
   if (!settings.vcLoggingEnabled || !settings.vcLoggingChannelId) return;
 
   const activityChannel = guild.channels.cache.get(settings.vcLoggingChannelId);
@@ -531,7 +531,7 @@ async function execute(oldState, newState, client) {
   }
 
   // ✅ Cached settings
-  const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
   const safe = new Set(settings.safeChannels || []);
 
   const actorMember = newState.member || guild.members.cache.get(userId);
@@ -681,7 +681,7 @@ async function manageVoiceChannels(guild, client, moveContext = null) {
 
   try {
     // ✅ Cached settings (this is hit very frequently)
-    const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
+    const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
     const featureOn = !!settings.mod_auto_route_enabled;
     const safe = new Set(settings.safeChannels || []);
 
@@ -853,7 +853,7 @@ async function moveToChannel(targetChannel, connection, guild, client) {
 }
 
 async function safeJoinChannel(client, channelId, guild) {
-  const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
   const safeChannels = new Set(settings.safeChannels || []);
 
   if (safeChannels.has(channelId)) {
@@ -865,7 +865,7 @@ async function safeJoinChannel(client, channelId, guild) {
 }
 
 async function joinChannel(client, channelId, guild) {
-  const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
   if ((settings.safeChannels || []).includes(channelId)) {
     console.log(`[INFO] Channel ${channelId} is in safeChannels. Not joining.`);
     return null;
@@ -973,7 +973,7 @@ function audioListeningFunctions(connection, guild) {
     if (currentlySpeaking.has(userId)) return;
 
     // ✅ Cached settings (this is a VERY hot path)
-    const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
+    const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
     if (!settings.transcriptionEnabled) return;
     if (settings.safeUsers?.includes?.(userId)) return;
 
