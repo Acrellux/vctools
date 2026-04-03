@@ -56,69 +56,6 @@ const emptySince = new Map();                     // guildId -> timestamp
 const EMPTY_GRACE_MS = 15000;                     // 15 seconds
 
 /************************************************************************************************
- * SETTINGS CACHE (CRITICAL: reduces Supabase egress / stops hot-path reads)
- *
- * Problem:
- * - getSettingsForGuild() ultimately reads guild_settings from Supabase.
- * - This file calls it in hot paths (voice events, speaking events, periodic checks).
- * - That can explode into thousands of /rest/v1/guild_settings GETs.
- *
- * Fix:
- * - Cache per guild in memory with TTL.
- * - Deduplicate in-flight fetches (stampede protection).
- * - Allow forced refresh only where truly needed.
- ************************************************************************************************/
-const SETTINGS_TTL_MS = 180000; // 3m is plenty for VC logic; adjust if you want
-const settingsCache = new Map(); // guildId -> { data, ts, inFlightPromise }
-
-/**
- * Fetch guild settings with cache + in-flight dedupe.
- * @param {string} guildId
- * @param {{force?: boolean}} opts
- * @returns {Promise<object>}
- */
-async function getSettingsCached(guildId, opts = {}) {
-  const force = !!opts.force;
-  const now = Date.now();
-
-  const entry = settingsCache.get(guildId);
-  if (!force && entry?.data && (now - entry.ts) < SETTINGS_TTL_MS) {
-    return entry.data;
-  }
-
-  if (!force && entry?.inFlightPromise) {
-    return entry.inFlightPromise;
-  }
-
-  const p = (async () => {
-    try {
-      const s = (await getSettingsForGuild(guildId)) || entry?.data || {};
-      settingsCache.set(guildId, { data: s, ts: Date.now(), inFlightPromise: null });
-      return s;
-    } catch (e) {
-      const fallback = entry?.data || {};
-      settingsCache.set(guildId, {
-        data: fallback,
-        ts: Date.now(),
-        inFlightPromise: null,
-      });
-      return fallback;
-    }
-  })();
-
-  settingsCache.set(guildId, { data: entry?.data || {}, ts: entry?.ts || 0, inFlightPromise: p });
-  return p;
-}
-
-/**
- * Optional helper if you ever want to invalidate on a settings update event.
- */
-function invalidateSettingsCache(guildId) {
-  if (!guildId) return;
-  settingsCache.delete(guildId);
-}
-
-/************************************************************************************************
  * GLOBALS & CONSTANTS
  ************************************************************************************************/
 const GRACE_PERIOD_MS = 3000;
@@ -194,8 +131,7 @@ const initiateLoudnessWarning = async (
   guild,
   updateTimestamp
 ) => {
-  // ✅ Cached settings (prevents hot-path Supabase reads)
-  const settings = (await getSettingsCached(guild.id).catch(() => null)) || {};
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
   if (settings.safeUsers?.includes?.(userId)) {
     console.log(`[INFO] User ${userId} is a safe user. Skipping loudness detection.`);
     return null;
@@ -634,9 +570,7 @@ async function execute(oldState, newState, client) {
       audioListeningFunctions(connection, guild);
     }
 
-    // “Fresh” settings for consent destination, but still cached+controlled.
-    // If you *really* need immediate reflect after a dashboard update, set force:true.
-    const freshSettings = (await getSettingsCached(guild.id, { force: false }).catch(() => null)) || {};
+    const freshSettings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
 
     const safeUsersArr = Array.isArray(freshSettings.safeUsers)
       ? freshSettings.safeUsers.map((x) => String(x))
