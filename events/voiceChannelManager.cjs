@@ -1258,5 +1258,4 @@ module.exports = {
   joinChannel,
   audioListeningFunctions,
   startPeriodicVCCheck,
-  invalidateSettingsCache, // optional, but useful
 };
