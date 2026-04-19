@@ -662,7 +662,7 @@ async function onInteractionCreate(interaction) {
             }
           });
 
-          await grantUserConsent(targetUserId, interaction.guild);
+          await grantUserConsent(targetUserId, interaction.guild, interaction.client);
           interactionContexts.delete(targetUserId);
 
           const successRows = replaceConsentButton(
