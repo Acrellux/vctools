@@ -1,16 +1,12 @@
 const {
   Message,
-  Interaction,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   EmbedBuilder,
-  SlashCommandBuilder,
-  StringSelectMenuBuilder,
 } = require("discord.js");
 const { logErrorToChannel } = require("./helpers.cjs");
 
-// Updated help topics with additional keys and content
 const helpTopics = {
   usage: `## **VC Tools ◈ Help ◈ Usage**
 - Use VC Tools via \`>\`, \`!\`, and slash commands.
@@ -71,7 +67,9 @@ const helpTopics = {
 - HELP_ERR_007 - Occurs when a user requests an unknown help subcommand.
 - CMD_ERR_008 - Occurs when a user executes a command without sufficient permissions.
 - REP_ERR_009 - Occurs when a user report cannot be forwarded to the developers.
-> For more details, use \`/help error <error_code>\`.`,
+- VC_ERR_010 - Occurs when a voice command fails for an unknown reason.
+- REP_ERR_011 - Occurs when a user tries to use \`report activity\` and the bot cannot find the transcription channel ID.
+> For more details, use \`help error <error_code>\`.`,
 
   notify: `## **VC Tools ◈ Help ◈ Notify**
 The notification system lets users add others to their notification list. When users on their notification list join a voice channel in a mutual server, they will be notified.
@@ -142,24 +140,24 @@ Of course, there are also privacy settings to control who can see your activity 
 > **Filter Management Overview:**
 - Use \`settings filter\` to manage the profanity filter.
 - **Filter Level:** Choose between \`off\`, \`build\`, \`moderate\`, and \`strict\`.
-  - **Strict:** Aggressive filtering (e.g. common curse words like the f word and s word are censored).
-  - **Moderate:** Lenient filtering (common curse words are allowed, only severe terms are censored).
-  - **Build:** This is an empty filter. You can add or remove custom words from it. The filter will only censor words you add.
+  - **Strict:** Aggressive filtering.
+  - **Moderate:** Lenient filtering.
+  - **Build:** Empty custom filter.
   - **Off:** No filtering is applied.
 > **Subcommands:**
-- \`filter add <word>\` – Add a word to the filter list.
-- \`filter remove <word>\` – Remove a word from the filter list.
-- \`filter list\` – List all custom words in the filter.
-- \`filter level <build|moderate|strict>\` – Set the filter level.`,
+- \`filter add <word>\`
+- \`filter remove <word>\`
+- \`filter list\`
+- \`filter level <build|moderate|strict>\``,
 
   report: `## **VC Tools ◈ Help ◈ Report**
 > **Report Commands:**
 - \`report issue\` - Submit a new report to the developers about an issue you're experiencing with VC Tools.
-- \`report activity\` - Submit a report about a specific voice call activity (e.g. someone being too loud, an argument during a call, etc.).
--# > \`report activity\` requires transcription to be enabled. If you haven't done so, you will have to initialize transcription first.
-- \`report view <id>\` - View details of your submitted report.
-- \`report close <id>\` - Close and delete a report you submitted.
-- \`report edit <id> <description|details> <new value>\` - Edit either your report's description or your report's additional details.
+- \`report activity\` - Submit a report about a specific voice call activity.
+-# > \`report activity\` requires transcription to be enabled.
+- \`report view <id>\`
+- \`report close <id>\`
+- \`report edit <id> <description|details> <new value>\`
 > **Usage Examples:**
 - \`report view 123ABC\`
 - \`report close 123ABC\`
@@ -180,31 +178,16 @@ Of course, there are also privacy settings to control who can see your activity 
 
   vc: `## **VC Tools ◈ Help ◈ VC Commands**
 > **Voice Channel Commands:**
-- \`vc kick <user>\` — Kicks a user from a voice channel.
-- \`vc mute <user>\` — Mutes a user in a voice channel.
-- \`vc unmute <user>\` — Removes the mute from a user in a voice channel.`,
+- \`vc kick <user>\`
+- \`vc mute <user>\`
+- \`vc unmute <user>\``,
 
   tc: `## **VC Tools ◈ Help ◈ Text Channel Commands**
 > **Text Channel Commands:**
-- \`tc mute <user> <duration> <reason>\` — Timeout (mute) a user for a duration (default 60m).
-- \`tc unmute <user> <reason>\` — Remove a user's timeout (mute).
-- \`tc kick <user> <reason>\` — Kick a user from the server.
-- \`tc ban <user> <reason>\` — Ban a user from the server.
-- \`tc warn <user> <reason>\` — Warn a user in the server.
-- \`tc clean <user> <count|time> <number>\` — Delete a number of messages from a user in all text channels.
-- \`tc history <user>\` — View a user's moderation history.
-- \`tc view <action id>\` — View a specific action from a user's moderation history.
-- \`tc delete <action id>\` — Delete a specific action from a user's moderation history.
-> **Notes:**
-- Duration formats: \`10m\`, \`2h\`, \`1d\` (minutes, hours, days supported).
-- Reason is optional, but recommended.
-- All actions are automatically recorded in moderation logs.
-- Abuse of tc commands may be reviewed using VC Tools records.`,
-
-  disallow: `## **VC Tools ◈ Help ◈ Disallow**
-The disallow command removes your data from the VC Tools database.
-- When you execute \`disallow\`, you will be removed from the database, and your voice activity will no longer trigger notifications.
-- You may also be automatically muted upon joining voice channels.`,
+- \`tc mute <user> <duration> <reason>\` — Timeout a user.
+- \`tc unmute <user>\`
+- \`tc kick <user> <reason>\`
+- \`tc ban <user> <reason>\``,
 
   default: `## **VC Tools ◈ Help**
 > **Usage:**
@@ -216,209 +199,94 @@ The disallow command removes your data from the VC Tools database.
 - help initialize
 - help commands
 - help errors
+- help error <code>
+- help tc
 - help notify
 - help settings
 - help safeuser
 - help safechannel
 - help rms
 - help filter
-- help report`,
+- help report
+- help vc`,
 };
 
-// Detailed error help messages mapping
 const errorHelpMessages = {
   CMD_ERR_001: `Triggered when an unknown subcommand is passed.
 -# **For staff:** Check your server's error logs. If you believe that this subcommand is supposed to exist, then use \`report issue\` to report it.`,
+
   INIT_ERR_002: `Occurs during initialization due to missing or incomplete guild data.
 -# **For staff:** Check error logs and use \`report issue\` if needed.`,
+
   INT_ERR_003: `Occurs when the interaction context for a user is missing or expired.
 -# **For staff:** This may occur after a system crash or reboot. Try re-running the command or interaction. If the issue persists, then use \`report issue\`.`,
+
   INT_ERR_004: `Occurs when a user interacts with a component not assigned to them.
 -# **For staff:** Verify that the user interacting with the component is the same user who executed the command. If the issue persists, then use \`report issue\`.`,
+
   INT_ERR_005: `Occurs when the bot encounters an unexpected interaction mode.
 -# **For staff:** Check error logs for further details. If the issue persists, then use \`report issue\`.`,
+
   INT_ERR_006: `Occurs when the bot encounters an unexpected issue processing an interaction.
 -# **For staff:** Check error logs for further details. If the issue persists, then use \`report issue\`.`,
+
   HELP_ERR_007: `Occurs when a user requests an unknown help subcommand.
 -# **For staff:** Check your server's error logs. If you believe that this subcommand is supposed to exist, then use \`report issue\`.`,
+
   CMD_ERR_008: `Occurs when a user executes a command or interacts with a component without sufficient permissions.
 -# **For staff:** Verify user permissions and check error logs.`,
+
   REP_ERR_009: `Occurs when a user report cannot be forwarded to the developers.
 -# **For staff:** Check error logs and try to use \`report issue\` yourself. If this doesn't work, then report it on the GitHub repository or contact Acrellux over Discord.`,
+
   VC_ERR_010: `Occurs when a voice command fails for an unknown reason.
 -# **For staff:** Check error logs and use \`report issue\` if needed.`,
+
   REP_ERR_011: `Occurs when a user tries to use the \`activity report\` command and the bot cannot find the channel ID for transcription.
 -# **For staff:** Use \`initialize transcription\` if you haven't initialized the bot. If you have already initialized the bot, then verify that the channel ID for transcription is set in the bot settings.
 -# You do not need to enable transcription to do either of these.`,
 };
 
-/**
- * Splits a string into multiple pages if needed, respecting maxLength and newlines.
- */
 function paginate(text, maxLength = 1800) {
   const pages = [];
   let currentPage = "";
   const lines = text.split("\n");
 
   for (const line of lines) {
-    // +1 for the newline we add
-    if ((currentPage + "\n" + line).length > maxLength) {
-      pages.push(currentPage);
+    const next = currentPage ? `${currentPage}\n${line}` : line;
+    if (next.length > maxLength) {
+      if (currentPage) pages.push(currentPage);
       currentPage = line;
     } else {
-      currentPage += (currentPage.length ? "\n" : "") + line;
+      currentPage = next;
     }
   }
+
   if (currentPage) pages.push(currentPage);
-  return pages;
+  return pages.length ? pages : ["No help content available."];
 }
 
-/**
- * Show help content with pagination & arrow buttons.
- *
- * @param {Message|Interaction} interactionOrMessage
- * @param {string} subCommandName
- * @param {boolean} ephemeral
- */
-async function showHelpContent(
-  interactionOrMessage,
-  subCommandName,
-  ephemeral = false
-) {
-  const topic = subCommandName ? subCommandName.toLowerCase() : "";
-  let pages = [];
+function getErrorPages() {
+  return Object.entries(errorHelpMessages).map(([code, desc]) => {
+    return [
+      `## **VC Tools ◈ Help ◈ Error ${code}**`,
+      `\`${code}\` - ${desc.trim()}`,
+      ``,
+      `Use \`help error ${code}\` to view this again.`,
+    ].join("\n");
+  });
+}
 
-  if (topic === "errors") {
-    pages = Object.entries(errorHelpMessages).map(([code, desc]) => {
-      return (
-        `## **VC Tools ◈ Help ◈ Error ${code}**\n` +
-        `\`${code}\` - ${desc.trim()}\n\n` +
-        `Use \`help error ${code}\` to view this again.`
-      );
-    });
-  } else {
-    const text = helpTopics[topic] || helpTopics.default;
-    pages = paginate(text, 1800);
-  }
-
-  let currentPage = 0;
-  const embed = new EmbedBuilder()
+function buildHelpEmbed(pages, currentPage) {
+  return new EmbedBuilder()
     .setTitle("VC Tools ◈ Help")
     .setDescription(pages[currentPage])
     .setFooter({ text: `Page ${currentPage + 1} of ${pages.length}` });
-
-  const userId = interactionOrMessage.user
-    ? interactionOrMessage.user.id
-    : interactionOrMessage.author.id;
-
-  let helpMsg;
-  const components =
-    pages.length > 1 ? buildButtons(currentPage, pages, userId, topic) : [];
-
-  if (interactionOrMessage instanceof Message) {
-    helpMsg = await interactionOrMessage.channel.send({
-      embeds: [embed],
-      components,
-      fetchReply: true,
-    });
-  } else {
-    helpMsg = await (interactionOrMessage.replied ||
-      interactionOrMessage.deferred
-      ? interactionOrMessage.followUp
-      : interactionOrMessage.reply
-    ).call(interactionOrMessage, {
-      embeds: [embed],
-      components,
-      ephemeral,
-      fetchReply: true,
-    });
-  }
-
-  if (pages.length <= 1) return;
-
-  const collector = helpMsg.createMessageComponentCollector({
-    filter: (i) => {
-      if (!i.customId.startsWith("help:")) return false;
-      const parts = i.customId.split(":");
-      const expectedUserId = parts[4];
-      if (i.user.id !== expectedUserId) {
-        i.reply({
-          content: "> <❇️> You cannot interact with this help menu. (INT_ERR_004)",
-          ephemeral: true,
-        }).catch(() => { });
-        return false;
-      }
-      return true;
-    },
-    time: 3 * 60 * 1000,
-  });
-
-  collector.on("collect", async (i) => {
-    try {
-      let [, topic, action, pageStr, userId] = i.customId.split(":");
-      let currentPage = parseInt(pageStr);
-
-      let newPages;
-      if (topic === "errors") {
-        newPages = Object.entries(errorHelpMessages).map(([code, desc]) => {
-          return (
-            `## **VC Tools ◈ Help ◈ Error ${code}**\n` +
-            `\`${code}\` - ${desc}\n\n` +
-            `Use \`help error ${code}\` to view this again.`
-          );
-        });
-      } else {
-        const text = helpTopics[topic] || helpTopics.default;
-        newPages = paginate(text, 1800);
-      }
-
-      if (action === "prev") currentPage = Math.max(currentPage - 1, 0);
-      else if (action === "next")
-        currentPage = Math.min(currentPage + 1, newPages.length - 1);
-      else if (action === "jump")
-        currentPage = Math.min(Math.max(currentPage, 0), newPages.length - 1);
-
-      const updatedEmbed = new EmbedBuilder()
-        .setTitle("VC Tools ◈ Help")
-        .setDescription(newPages[currentPage])
-        .setFooter({ text: `Page ${currentPage + 1} of ${newPages.length}` });
-
-      await i.update({
-        embeds: [updatedEmbed],
-        components: buildButtons(currentPage, newPages, userId, topic),
-      });
-    } catch (err) {
-      console.error("[ERROR] Failed to update help page:", err);
-      if (!i.replied) {
-        await i.reply({
-          content: "> <❌> Something went wrong updating the help message. (INT_ERR_006)",
-          ephemeral: true,
-        });
-      }
-    }
-  });
-
-  collector.on("end", async () => {
-    try {
-      if (helpMsg.editable) {
-        await helpMsg.edit({
-          components: disableButtons(helpMsg.components),
-        });
-      }
-    } catch (err) {
-      if (err.code !== 10008) {
-        console.error("Failed to disable help buttons:", err);
-      }
-    }
-  });
 }
 
-/**
- * Builds the row of buttons for the given page.
- */
-function buildButtons(page, pages, userId, topic = "errors") {
+function buildButtons(page, pages, userId, topic) {
   const firstBtn = new ButtonBuilder()
-    .setCustomId(`help:${topic}:first:0:${userId}`)
+    .setCustomId(`help:${topic}:first:${page}:${userId}`)
     .setLabel("⇤")
     .setStyle(ButtonStyle.Primary)
     .setDisabled(page === 0);
@@ -436,134 +304,261 @@ function buildButtons(page, pages, userId, topic = "errors") {
     .setDisabled(page === pages.length - 1);
 
   const lastBtn = new ButtonBuilder()
-    .setCustomId(`help:${topic}:last:${pages.length - 1}:${userId}`)
+    .setCustomId(`help:${topic}:last:${page}:${userId}`)
     .setLabel("⇥")
     .setStyle(ButtonStyle.Primary)
     .setDisabled(page === pages.length - 1);
 
-  const row = new ActionRowBuilder().addComponents(
-    firstBtn,
-    prevBtn,
-    nextBtn,
-    lastBtn
-  );
-
-  return [row]; // Must return an array of ActionRowBuilder instances
+  return [new ActionRowBuilder().addComponents(firstBtn, prevBtn, nextBtn, lastBtn)];
 }
 
-/**
- * Helper to disable all buttons in a row.
- */
 function disableButtons(componentRows) {
   return componentRows
     .map((row) => {
       const disabledRow = new ActionRowBuilder();
-      for (const btn of row.components) {
+
+      for (const component of row.components) {
         try {
-          // Only clone and disable buttons with a label and/or emoji
-          if (btn.data?.label || btn.data?.emoji) {
-            disabledRow.addComponents(
-              ButtonBuilder.from(btn).setDisabled(true)
-            );
-          }
+          disabledRow.addComponents(ButtonBuilder.from(component).setDisabled(true));
         } catch (err) {
-          console.warn(
-            "[WARN] Skipping invalid button during disable:",
-            err.message
-          );
+          console.warn("[WARN] Failed to disable help button:", err.message);
         }
       }
+
       return disabledRow;
     })
     .filter((row) => row.components.length > 0);
 }
 
-/**
- * Checks if the user interacting is the same as the user that triggered help.
- */
-function checkUserId(interaction, interactionOrMessage) {
+function resolveHelpTopic(raw) {
+  const topic = String(raw || "").trim().toLowerCase();
+  if (!topic) return { kind: "topic", value: "default" };
+  if (topic === "error") return { kind: "invalid_topic", value: topic };
+  if (topic.startsWith("error ")) {
+    const code = topic.slice("error ".length).trim().toUpperCase();
+    return { kind: "error_code", value: code };
+  }
+  if (topic in helpTopics) return { kind: "topic", value: topic };
+  return { kind: "invalid_topic", value: topic };
+}
+
+async function sendUnknownHelpTopic(target, topic, ephemeral = false) {
+  const content =
+    `> <❌> Unknown help topic \`${topic}\`. (HELP_ERR_007)\n` +
+    `Use \`help\` to see the available help topics.`;
+
+  if (target instanceof Message) {
+    return target.channel.send({ content });
+  }
+
+  if (target.replied || target.deferred) {
+    return target.followUp({ content, ephemeral });
+  }
+
+  return target.reply({ content, ephemeral });
+}
+
+async function sendSpecificErrorHelp(target, code, ephemeral = false) {
+  if (!errorHelpMessages[code]) {
+    const content =
+      `> <❌> Unknown error code \`${code}\`. (HELP_ERR_007)\n` +
+      `Use \`help errors\` to see a list of valid codes.`;
+
+    if (target instanceof Message) {
+      return target.channel.send({ content });
+    }
+
+    if (target.replied || target.deferred) {
+      return target.followUp({ content, ephemeral });
+    }
+
+    return target.reply({ content, ephemeral });
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`VC Tools ◈ Help ◈ Error ${code}`)
+    .setDescription(`\`${code}\` - ${errorHelpMessages[code]}`)
+    .setColor("Red");
+
+  if (target instanceof Message) {
+    return target.channel.send({ embeds: [embed] });
+  }
+
+  if (target.replied || target.deferred) {
+    return target.followUp({ embeds: [embed], ephemeral });
+  }
+
+  return target.reply({ embeds: [embed], ephemeral });
+}
+
+async function showHelpContent(interactionOrMessage, subCommandName, ephemeral = false) {
+  const resolved = resolveHelpTopic(subCommandName);
+
+  if (resolved.kind === "error_code") {
+    return sendSpecificErrorHelp(interactionOrMessage, resolved.value, ephemeral);
+  }
+
+  if (resolved.kind === "invalid_topic") {
+    return sendUnknownHelpTopic(interactionOrMessage, resolved.value, ephemeral);
+  }
+
+  const topic = resolved.value;
+  const pages =
+    topic === "errors"
+      ? getErrorPages()
+      : paginate(helpTopics[topic] || helpTopics.default, 1800);
+
   const userId = interactionOrMessage.user
     ? interactionOrMessage.user.id
     : interactionOrMessage.author.id;
-  return interaction.user.id === userId;
-}
 
-// Message-based help command handler
-async function handleHelpMessageCommand(message, args) {
-  try {
-    const subCommandName = args.join(" ") || "";
+  let currentPage = 0;
+  const embed = buildHelpEmbed(pages, currentPage);
+  const components = pages.length > 1 ? buildButtons(currentPage, pages, userId, topic) : [];
 
-    if (subCommandName.startsWith("error ")) {
-      const code = subCommandName.split(" ")[1]?.toUpperCase();
-      if (errorHelpMessages[code]) {
-        const embed = new EmbedBuilder()
-          .setTitle(`VC Tools ◈ Help ◈ Error ${code}`)
-          .setDescription(`\`${code}\` - ${errorHelpMessages[code]}`)
-          .setColor("Red");
+  let helpMsg;
 
-        return await message.channel.send({ embeds: [embed] });
+  if (interactionOrMessage instanceof Message) {
+    helpMsg = await interactionOrMessage.channel.send({
+      embeds: [embed],
+      components,
+      fetchReply: true,
+    });
+  } else {
+    const responder =
+      interactionOrMessage.replied || interactionOrMessage.deferred
+        ? interactionOrMessage.followUp
+        : interactionOrMessage.reply;
 
-      } else {
-        return await message.channel.send({
-          content: `> <❌> Unknown error code \`${code}\`. Use \`help errors\` to see a list of valid codes.`,
-        });
+    helpMsg = await responder.call(interactionOrMessage, {
+      embeds: [embed],
+      components,
+      ephemeral,
+      fetchReply: true,
+    });
+  }
+
+  if (pages.length <= 1) return;
+
+  const collector = helpMsg.createMessageComponentCollector({
+    filter: async (i) => {
+      if (!i.customId.startsWith("help:")) return false;
+
+      const parts = i.customId.split(":");
+      const expectedUserId = parts[4];
+
+      if (i.user.id !== expectedUserId) {
+        await i.reply({
+          content: "> <❇️> You cannot interact with this help menu. (INT_ERR_004)",
+          ephemeral: true,
+        }).catch(() => { });
+        return false;
+      }
+
+      return true;
+    },
+    time: 3 * 60 * 1000,
+  });
+
+  collector.on("collect", async (i) => {
+    try {
+      let [, btnTopic, action, pageStr, btnUserId] = i.customId.split(":");
+      let pageIndex = Number(pageStr) || 0;
+
+      const currentPages =
+        btnTopic === "errors"
+          ? getErrorPages()
+          : paginate(helpTopics[btnTopic] || helpTopics.default, 1800);
+
+      switch (action) {
+        case "first":
+          pageIndex = 0;
+          break;
+        case "prev":
+          pageIndex = Math.max(pageIndex - 1, 0);
+          break;
+        case "next":
+          pageIndex = Math.min(pageIndex + 1, currentPages.length - 1);
+          break;
+        case "last":
+          pageIndex = currentPages.length - 1;
+          break;
+        default:
+          pageIndex = Math.min(Math.max(pageIndex, 0), currentPages.length - 1);
+          break;
+      }
+
+      await i.update({
+        embeds: [buildHelpEmbed(currentPages, pageIndex)],
+        components: buildButtons(pageIndex, currentPages, btnUserId, btnTopic),
+      });
+    } catch (err) {
+      console.error("[ERROR] Failed to update help page:", err);
+
+      if (!i.replied && !i.deferred) {
+        await i.reply({
+          content: "> <❌> Something went wrong updating the help message. (INT_ERR_006)",
+          ephemeral: true,
+        }).catch(() => { });
       }
     }
+  });
 
-    await showHelpContent(message, subCommandName);
+  collector.on("end", async () => {
+    try {
+      await helpMsg.edit({
+        components: disableButtons(helpMsg.components),
+      }).catch(() => { });
+    } catch (err) {
+      console.error("[ERROR] Failed to disable help buttons:", err);
+    }
+  });
+}
+
+async function handleHelpMessageCommand(message, args) {
+  try {
+    const subCommandName = args.join(" ").trim();
+    await showHelpContent(message, subCommandName, false);
   } catch (error) {
     console.error(`[ERROR] handleHelpMessageCommand failed: ${error.message}`);
     await logErrorToChannel(
       message.guild?.id,
-      error.stack,
+      error.stack || String(error),
       message.client,
       "handleHelpMessageCommand"
     );
+
     await message.channel.send(
       "> <❌> An error occurred while processing the help command. (INT_ERR_006)"
-    );
+    ).catch(() => { });
   }
 }
 
-// Slash command help handler
 async function handleHelpSlashCommand(interaction) {
   try {
-    const subCommandName = interaction.options.getSubcommand();
+    const subCommandName = interaction.options.getSubcommand(false) || "";
+    const errorCode = interaction.options.getString("code", false);
 
-    if (subCommandName.toLowerCase().startsWith("error ")) {
-      const code = subCommandName.split(" ")[1]?.toUpperCase();
+    const combined =
+      subCommandName === "error" && errorCode
+        ? `error ${errorCode}`
+        : subCommandName;
 
-      if (errorHelpMessages[code]) {
-        const embed = new EmbedBuilder()
-          .setTitle(`VC Tools ◈ Help ◈ Error ${code}`)
-          .setDescription(`\`${code}\` - ${errorHelpMessages[code]}`)
-          .setColor("Red");
-
-        return await interaction.reply({ embeds: [embed], ephemeral: true });
-      } else {
-        return await interaction.reply({
-          content: `> <❌> Unknown error code \`${code}\`. Use \`help errors\` to see a list of valid codes.`,
-          ephemeral: true,
-        });
-      }
-    }
-
-    // fallback to general help
-    await showHelpContent(interaction, subCommandName, false);
+    await showHelpContent(interaction, combined, true);
   } catch (error) {
     console.error(`[ERROR] handleHelpSlashCommand failed: ${error.message}`);
     await logErrorToChannel(
       interaction.guild?.id,
-      error.stack,
+      error.stack || String(error),
       interaction.client,
       "handleHelpSlashCommand"
     );
-    if (!interaction.replied) {
+
+    if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({
-        content:
-          "> <❌> An error occurred processing the help command. (INT_ERR_006)",
+        content: "> <❌> An error occurred processing the help command. (INT_ERR_006)",
         ephemeral: true,
-      });
+      }).catch(() => { });
     }
   }
 }
