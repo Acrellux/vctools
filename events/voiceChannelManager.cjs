@@ -611,7 +611,7 @@ async function execute(oldState, newState, client) {
     } else {
       const consentButtons = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`consent:grant:${userId}`)
+          .setCustomId(`consent:grant:${userId}:${guild.id}`)
           .setLabel("Consent")
           .setStyle(ButtonStyle.Success)
       );

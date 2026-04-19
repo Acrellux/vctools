@@ -475,7 +475,6 @@ async function hasUserConsented(userId, guildId = null, opts = {}) {
   const p = (async () => {
     const result = await withRescue(
       async () => {
-        // Try guild-scoped first (if your table has guildId)
         if (guildId) {
           const { data, error } = await supabase
             .from("user_consent")
@@ -487,14 +486,31 @@ async function hasUserConsented(userId, guildId = null, opts = {}) {
             .maybeSingle();
 
           if (error) {
-            // If guildId column doesn't exist, fall back below
             if (looksLikeBillingOrQuota(error)) throw error;
+
+            // Only fall back to legacy if guildId querying truly isn't supported
+            const msg = errMsg(error);
+            const schemaIssue =
+              /column .*guildid.* does not exist|could not find the column|schema cache/i.test(msg);
+
+            if (!schemaIssue) {
+              console.error(
+                `[ERROR] Could not check guild-scoped consent for ${userId} in ${guildId}:`,
+                error
+              );
+              return false;
+            }
           } else {
+            // IMPORTANT:
+            // If guildId was explicitly requested, trust that result.
+            // Do NOT fall back to legacy just because no row exists.
             return !!data?.consented;
           }
         }
 
-        // Fallback: user-only (legacy schema)
+        // Legacy fallback only for:
+        // - no guildId provided
+        // - schema does not support guildId
         const { data, error } = await supabase
           .from("user_consent")
           .select("consented, consentDate")
@@ -645,15 +661,29 @@ async function revokeUserConsent(userId, guild) {
 
   await withRescue(
     async () => {
-      // Delete consent row (guild-scoped if possible)
       if (guild?.id) {
-        const { error } = await supabase
+        const { error: guildError } = await supabase
           .from("user_consent")
           .delete()
           .eq("userId", userId)
           .eq("guildId", guild.id);
 
-        if (error) throw error;
+        if (guildError) throw guildError;
+
+        // Also clear any old legacy consent rows so they can't keep the user "consented"
+        const { error: legacyError } = await supabase
+          .from("user_consent")
+          .delete()
+          .eq("userId", userId)
+          .is("guildId", null);
+
+        if (legacyError) {
+          const msg = errMsg(legacyError);
+          const schemaIssue =
+            /column .*guildid.* does not exist|could not find the column|schema cache/i.test(msg);
+
+          if (!schemaIssue) throw legacyError;
+        }
       } else {
         const { error } = await supabase
           .from("user_consent")

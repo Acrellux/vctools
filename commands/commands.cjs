@@ -620,7 +620,7 @@ async function onInteractionCreate(interaction) {
 
       // ✅ Safer consent grant handler
       if (interaction.isButton() && interaction.customId.startsWith("consent:grant:")) {
-        const [, , targetUserId] = interaction.customId.split(":");
+        const [, , targetUserId, targetGuildId] = interaction.customId.split(":");
 
         if (interaction.user.id !== targetUserId) {
           if (!interaction.deferred && !interaction.replied) {
@@ -662,7 +662,12 @@ async function onInteractionCreate(interaction) {
             }
           });
 
-          await grantUserConsent(targetUserId, interaction.guild, interaction.client);
+          const targetGuild =
+            interaction.client.guilds.cache.get(targetGuildId) ||
+            interaction.guild ||
+            null;
+
+          await grantUserConsent(targetUserId, targetGuild, interaction.client);
           interactionContexts.delete(targetUserId);
 
           const successRows = replaceConsentButton(
