@@ -591,8 +591,7 @@ async function execute(oldState, newState, client) {
 
     let hasConsent = false;
     try {
-      // ✅ guild-scoped consent (prevents cross-guild consent bleed)
-      hasConsent = !!(await hasUserConsented(userId, guild.id));
+      hasConsent = !!(await hasUserConsented(userId));
     } catch (e) {
       console.warn(
         `[CONSENT] hasUserConsented failed for ${userId} in guild ${guild.id}: ${e?.message || e}`
@@ -984,7 +983,7 @@ function audioListeningFunctions(connection, guild) {
     let consentOk = true;
     try {
       // ✅ guild-scoped consent
-      consentOk = !!(await hasUserConsented(userId, guild.id));
+      consentOk = !!(await hasUserConsented(userId));
     } catch (e) {
       console.warn(`[TX CONSENT ERR] ${userId} (guild ${guild.id}) → ${e?.message || e}`);
       consentOk = false;

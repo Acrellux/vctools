@@ -309,7 +309,7 @@ async function safeGetSettingsForGuild(guildId) {
 async function safeHasUserConsented(userId, guildId) {
   if (FAIL_OPEN.enabled) return true;
   return await withRescue(async () => {
-    return await hasUserConsented(userId, guildId);
+    return await hasUserConsented(userId);
   }, "hasUserConsented", true);
 }
 

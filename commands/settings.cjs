@@ -136,14 +136,11 @@ const CONSENT_TTL_MS = 60 * 1000; // 1 minute
 // guildId -> { data, ts, inFlightPromise }
 const settingsCache = new Map();
 
-// key -> { data, ts, inFlightPromise }
-// key format:
-//   guild-scoped: `${userId}:${guildId}`
-//   legacy user-only: `${userId}:__legacy__`
+// userId -> { data, ts, inFlightPromise }
 const consentCache = new Map();
 
-function getConsentCacheKey(userId, guildId = null) {
-  return `${userId}:${guildId || "__legacy__"}`;
+function getConsentCacheKey(userId) {
+  return String(userId);
 }
 
 function invalidateSettingsCache(guildId) {
@@ -160,20 +157,14 @@ function setSettingsCache(guildId, data) {
   });
 }
 
-function invalidateConsentCache(userId, guildId = null) {
+function invalidateConsentCache(userId) {
   if (!userId) return;
-
-  if (guildId) {
-    consentCache.delete(getConsentCacheKey(userId, guildId));
-  }
-
-  // also clear legacy fallback key, just to be safe
-  consentCache.delete(getConsentCacheKey(userId, null));
+  consentCache.delete(getConsentCacheKey(userId));
 }
 
-function setConsentCache(userId, guildId, consented) {
+function setConsentCache(userId, consented) {
   if (!userId) return;
-  consentCache.set(getConsentCacheKey(userId, guildId), {
+  consentCache.set(getConsentCacheKey(userId), {
     data: !!consented,
     ts: Date.now(),
     inFlightPromise: null,
@@ -447,20 +438,18 @@ async function writeConsentData(data) {
 }
 
 /**
- * Checks if a user has given consent (guild-scoped).
+  * Checks if a user has given global consent.
  *
  * Backwards compatible:
- * - hasUserConsented(userId) -> checks latest consent for user
- * - hasUserConsented(userId, guildId) -> preferred, guild-scoped
- *
- * FAIL-OPEN: returns true (so you never mute/deny by accident).
+ * - hasUserConsented(userId)
+ * - hasUserConsented(userId, guildId) -> guildId is ignored
  */
-async function hasUserConsented(userId, guildId = null, opts = {}) {
+async function hasUserConsented(userId, _guildId = null, opts = {}) {
   if (!userId) return false;
   if (FAIL_OPEN.enabled) return true;
 
   const force = !!opts.force;
-  const cacheKey = getConsentCacheKey(userId, guildId);
+  const cacheKey = getConsentCacheKey(userId);
   const now = Date.now();
   const entry = consentCache.get(cacheKey);
 
@@ -475,42 +464,6 @@ async function hasUserConsented(userId, guildId = null, opts = {}) {
   const p = (async () => {
     const result = await withRescue(
       async () => {
-        if (guildId) {
-          const { data, error } = await supabase
-            .from("user_consent")
-            .select("consented, consentDate")
-            .eq("userId", userId)
-            .eq("guildId", guildId)
-            .order("consentDate", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          if (error) {
-            if (looksLikeBillingOrQuota(error)) throw error;
-
-            // Only fall back to legacy if guildId querying truly isn't supported
-            const msg = errMsg(error);
-            const schemaIssue =
-              /column .*guildid.* does not exist|could not find the column|schema cache/i.test(msg);
-
-            if (!schemaIssue) {
-              console.error(
-                `[ERROR] Could not check guild-scoped consent for ${userId} in ${guildId}:`,
-                error
-              );
-              return false;
-            }
-          } else {
-            // IMPORTANT:
-            // If guildId was explicitly requested, trust that result.
-            // Do NOT fall back to legacy just because no row exists.
-            return !!data?.consented;
-          }
-        }
-
-        // Legacy fallback only for:
-        // - no guildId provided
-        // - schema does not support guildId
         const { data, error } = await supabase
           .from("user_consent")
           .select("consented, consentDate")
@@ -519,16 +472,11 @@ async function hasUserConsented(userId, guildId = null, opts = {}) {
           .limit(1)
           .maybeSingle();
 
-        if (error) {
-          if (looksLikeBillingOrQuota(error)) throw error;
-          console.error(`[ERROR] Could not check consent for ${userId}:`, error);
-          return false;
-        }
-
+        if (error) throw error;
         return !!data?.consented;
       },
       "hasUserConsented",
-      true
+      false
     );
 
     consentCache.set(cacheKey, {
@@ -555,34 +503,50 @@ async function hasUserConsented(userId, guildId = null, opts = {}) {
  * FAIL-OPEN: still tries to unmute (safety), but skips DB writes.
  */
 async function grantUserConsent(userId, guild = null, client = null) {
-  if (!userId) return;
+  if (!userId) return false;
 
-  const targetGuilds = [];
+  if (FAIL_OPEN.enabled) {
+    console.warn("[FAIL-OPEN] grantUserConsent skipped DB write.");
+    setConsentCache(userId, true);
+    return true;
+  }
 
-  if (guild) {
-    targetGuilds.push(guild);
-  } else if (client?.guilds?.cache) {
+  const ok = await withRescue(
+    async () => {
+      const payload = {
+        userId,
+        consented: true,
+        consentDate: new Date().toISOString(),
+      };
+
+      const { error } = await supabase
+        .from("user_consent")
+        .upsert(payload, { onConflict: "userId" });
+
+      if (error) throw error;
+
+      setConsentCache(userId, true);
+      console.log(`[INFO] User ${userId} consent granted globally.`);
+      return true;
+    },
+    "grantUserConsent.db",
+    false
+  );
+
+  if (!ok) return false;
+
+  const guildsToCheck = [];
+
+  if (guild) guildsToCheck.push(guild);
+
+  if (client?.guilds?.cache) {
     for (const g of client.guilds.cache.values()) {
-      const member = await g.members.fetch(userId).catch(() => null);
-      if (!member) continue;
-
-      // Prefer the guilds where the user is actually in VC and/or muted.
-      if (member.voice?.channel || member.voice?.serverMute) {
-        targetGuilds.push(g);
-      }
-    }
-
-    // Fallback: if none matched VC state, still pick mutual guilds
-    if (!targetGuilds.length) {
-      for (const g of client.guilds.cache.values()) {
-        const member = await g.members.fetch(userId).catch(() => null);
-        if (member) targetGuilds.push(g);
-      }
+      if (guild && g.id === guild.id) continue;
+      guildsToCheck.push(g);
     }
   }
 
-  // Always try to unmute in every resolved guild.
-  for (const g of targetGuilds) {
+  for (const g of guildsToCheck) {
     await withRescue(
       async () => {
         const member = await g.members.fetch(userId).catch(() => null);
@@ -596,53 +560,7 @@ async function grantUserConsent(userId, guild = null, client = null) {
     );
   }
 
-  if (FAIL_OPEN.enabled) {
-    console.warn("[FAIL-OPEN] grantUserConsent skipped DB write.");
-    if (targetGuilds.length) {
-      for (const g of targetGuilds) {
-        setConsentCache(userId, g.id, true);
-      }
-    } else {
-      setConsentCache(userId, null, true);
-    }
-    return;
-  }
-
-  await withRescue(
-    async () => {
-      if (targetGuilds.length) {
-        for (const g of targetGuilds) {
-          const payload = {
-            userId,
-            guildId: g.id,
-            consented: true,
-            consentDate: new Date().toISOString(),
-          };
-
-          const { error } = await supabase.from("user_consent").upsert(payload);
-          if (error) throw error;
-
-          setConsentCache(userId, g.id, true);
-          console.log(`[INFO] User ${userId} consent granted for guild ${g.id}.`);
-        }
-      } else {
-        // Absolute fallback so consent is not lost entirely
-        const payload = {
-          userId,
-          consented: true,
-          consentDate: new Date().toISOString(),
-        };
-
-        const { error } = await supabase.from("user_consent").upsert(payload);
-        if (error) throw error;
-
-        setConsentCache(userId, null, true);
-        console.log(`[INFO] User ${userId} consent granted without resolved guild.`);
-      }
-    },
-    "grantUserConsent.db",
-    null
-  );
+  return true;
 }
 
 /**
@@ -650,67 +568,60 @@ async function grantUserConsent(userId, guild = null, client = null) {
  *
  * FAIL-OPEN: NEVER mutes (policy bypass), and skips DB write.
  */
-async function revokeUserConsent(userId, guild) {
-  if (!userId) return;
+async function revokeUserConsent(userId, guild = null, client = null) {
+  if (!userId) return false;
 
   if (FAIL_OPEN.enabled) {
-    console.warn("[FAIL-OPEN] revokeUserConsent skipped (no mute, no DB).");
-    invalidateConsentCache(userId, guild?.id || null);
-    return;
+    console.warn("[FAIL-OPEN] revokeUserConsent skipped DB write.");
+    invalidateConsentCache(userId);
+    return true;
   }
 
-  await withRescue(
+  const ok = await withRescue(
     async () => {
-      if (guild?.id) {
-        const { error: guildError } = await supabase
-          .from("user_consent")
-          .delete()
-          .eq("userId", userId)
-          .eq("guildId", guild.id);
+      const { error } = await supabase
+        .from("user_consent")
+        .delete()
+        .eq("userId", userId);
 
-        if (guildError) throw guildError;
+      if (error) throw error;
 
-        // Also clear any old legacy consent rows so they can't keep the user "consented"
-        const { error: legacyError } = await supabase
-          .from("user_consent")
-          .delete()
-          .eq("userId", userId)
-          .is("guildId", null);
-
-        if (legacyError) {
-          const msg = errMsg(legacyError);
-          const schemaIssue =
-            /column .*guildid.* does not exist|could not find the column|schema cache/i.test(msg);
-
-          if (!schemaIssue) throw legacyError;
-        }
-      } else {
-        const { error } = await supabase
-          .from("user_consent")
-          .delete()
-          .eq("userId", userId);
-
-        if (error) throw error;
-      }
-
-      invalidateConsentCache(userId, guild?.id || null);
+      invalidateConsentCache(userId, null);
+      console.log(`[INFO] User ${userId} global consent revoked.`);
+      return true;
     },
     "revokeUserConsent.db",
-    null
+    false
   );
 
-  await withRescue(
-    async () => {
-      if (!guild) return;
-      const member = await guild.members.fetch(userId).catch(() => null);
-      if (member?.voice?.channel) {
-        await member.voice.setMute(true, "User revoked consent for transcription.");
-        console.log(`[INFO] User ${userId} muted after revoking consent.`);
-      }
-    },
-    "revokeUserConsent.mute",
-    null
-  );
+  if (!ok) return false;
+
+  const guildsToCheck = [];
+
+  if (guild) guildsToCheck.push(guild);
+
+  if (client?.guilds?.cache) {
+    for (const g of client.guilds.cache.values()) {
+      if (guild && g.id === guild.id) continue;
+      guildsToCheck.push(g);
+    }
+  }
+
+  for (const g of guildsToCheck) {
+    await withRescue(
+      async () => {
+        const member = await g.members.fetch(userId).catch(() => null);
+        if (member?.voice?.channel && !member.voice.serverMute) {
+          await member.voice.setMute(true, "User revoked consent for transcription.");
+          console.log(`[INFO] User ${userId} muted in guild ${g.id} after revoking consent.`);
+        }
+      },
+      `revokeUserConsent.mute:${g.id}`,
+      null
+    );
+  }
+
+  return true;
 }
 
 // ****************************************
