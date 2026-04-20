@@ -9,6 +9,7 @@ const {
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
 const { isInvalidTarget } = require("./helpers.cjs");
+const { logErrorToChannel } = require("./helpers.cjs");
 
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
