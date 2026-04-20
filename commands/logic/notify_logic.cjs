@@ -557,7 +557,12 @@ async function handleNotifyMessageCommand(message, args) {
           .select("id");
 
         if (removeError) {
-          console.error("[SUPABASE] Failed to delete notify record:", removeError);
+          await logErrorToChannel(
+            interaction.guild.id,
+            JSON.stringify(removeError, null, 2),
+            interaction.client,
+            "notify_remove"
+          );
           return await message.channel.send("> <❌> Failed to remove notification.");
         }
 
@@ -746,7 +751,12 @@ async function handleNotifySlashCommand(interaction) {
           .select("id");
 
         if (removeError) {
-          console.error("[SUPABASE] Failed to delete notify record:", removeError);
+          await logErrorToChannel(
+            interaction.guild.id,
+            JSON.stringify(removeError, null, 2),
+            interaction.client,
+            "notify_remove"
+          );
           return await interaction.reply({
             content: "<❌> Failed to remove notification.",
             ephemeral: true,
