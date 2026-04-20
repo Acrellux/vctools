@@ -548,35 +548,28 @@ async function handleNotifyMessageCommand(message, args) {
           return;
         }
 
-        // Check if the notification exists
-        const { data: existing, error: fetchError } = await supabase
-          .from("notifications")
-          .select("id")
-          .eq("subscriber_id", message.author.id)
-          .eq("target_id", target.id)
-          .eq("server_id", message.guild.id)
-          .single();
+        try {
+          const removed = await removeNotification(
+            message.author.id,
+            target.id,
+            message.guild.id
+          );
 
-        if (fetchError && fetchError.code !== "PGRST116") {
-          console.error("[SUPABASE] Failed to check for notify record:", fetchError);
-          return await message.channel.send("> <❌> ERROR: Couldn't verify existing notification.");
+          if (!removed || removed.length === 0) {
+            await message.channel.send(
+              `> <❇️> You're not subscribed to <@${target.id}>.`
+            );
+            return;
+          }
+
+          await message.channel.send(
+            `> <✅> Removed notification for <@${target.id}>.`
+          );
+        } catch (error) {
+          console.error("[SUPABASE] Failed to delete notify record:", error);
+          await message.channel.send("> <❌> Failed to remove notification.");
         }
 
-        if (!existing) {
-          return await message.channel.send(`> <❇️> You're not subscribed to <@${target.id}>.`);
-        }
-
-        const { error: removeError } = await supabase
-          .from("notifications")
-          .delete()
-          .eq("id", existing.id);
-
-        if (removeError) {
-          console.error("[SUPABASE] Failed to delete notify record:", removeError);
-          return await message.channel.send("> <❌> Failed to remove notification.");
-        }
-
-        await message.channel.send(`> <✅> Removed notification for <@${target.id}>.`);
         break;
       }
       case "clear": {
