@@ -1,1056 +1,1270 @@
-// =========================================
-// VC TOOLS — TRANSCRIPTION + SAFE CLEANUP
-// =========================================
-
-const INLINE_CONFIG = {
-  STALE_MS: 5 * 60 * 1000,        // 5 minutes
-  SWEEP_INTERVAL_MS: 2 * 60 * 1000, // 2 minutes
-  TEMP_DIRS: [
-    // Whitelisted temp folders (SAFE: will not delete outside these)
-    require("path").resolve(__dirname, "../../temp_audio"),
-  ],
-  SWEEP_EXTS: [".wav", ".pcm", ".tmp", ".json", ".log", ".ogg"], // files eligible for sweeping
-};
-// ─────────────────────────────────────────────────────────────────────────
-
-// =========================================
-// DEPENDENCIES & CONFIGURATION
-// =========================================
-const { config } = require("dotenv");
-config();
-
-const leoProfanity = require("leo-profanity");
-leoProfanity.loadDictionary(); // Load the default English dictionary
+// Fix for UDP discovery issue in Discord.js
+process.env.DISCORDJS_DISABLE_UDP = "true";
+console.log("[BOOT] UDP discovery disabled.");
 
 const path = require("path");
 const fs = require("fs");
 const {
+  VoiceConnectionStatus,
+  joinVoiceChannel,
+  getVoiceConnection,
+  EndBehaviorType,
+} = require("@discordjs/voice");
+const { EventEmitter } = require("events");
+const { finished } = require("stream");
+const prism = require("prism-media");
+const transcription = require("./transcription.cjs");
+const { interactionContexts } = require("../database/contextStore.cjs");
+const {
+  hasUserConsented,
+  grantUserConsent,
+  revokeUserConsent,
+  getSettingsForGuild,
+} = require("../commands/settings.cjs");
+const {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   PermissionsBitField,
-  EmbedBuilder,
+  AuditLogEvent,
 } = require("discord.js");
-const prism = require("prism-media");
-const ffmpeg = require("fluent-ffmpeg");
-ffmpeg.setFfmpegPath(path.resolve(__dirname, "../ffmpeg/ffmpeg.exe"));
-const { exec } = require("child_process");
-const { Readable, Transform } = require("stream");
 const {
-  VoiceConnectionStatus,
-  getVoiceConnection,
-} = require("@discordjs/voice");
+  sendConsentPrompt,
+  resolveConsentDestination,
+} = require("../commands/logic/consent_logic.cjs");
 
-// These functions come from your settings module.
-const {
-  getSettingsForGuild,
-  updateSettingsForGuild,
-} = require("../commands/settings.cjs");
+// VC State importing
+const { saveVCState, clearVCState } = require("../util/vc_state.cjs");
 
-const finalizingUsers = new Set();
-const FINALIZE_COOLDOWN_MS = 1500;
-const lastFinalizeAt = new Map();
+// Supabase initialization
+const { createClient } = require("@supabase/supabase-js");
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-// ─────────────────────────────────────────────
-// PER-GUILD TRANSCRIPTION QUEUES (FAIR SCHEDULING)
-// ─────────────────────────────────────────────
+// We'll track when each user joined
+const userJoinTimes = new Map();
 
-const guildQueues = new Map();        // guildId → Array<job>
-const guildProcessing = new Set();    // guildIds currently processing
+EventEmitter.defaultMaxListeners = 50;
 
-// ─────────────────────────────────────────────
-// GLOBAL WHISPER SEMAPHORE (GPU PRESSURE CAP)
-// Limits concurrent transcribe.py spawns across ALL guilds.
-// Tune MAX_CONCURRENT_WHISPER based on your GPU — 2 is safe for a 3060.
-// ─────────────────────────────────────────────
-const MAX_CONCURRENT_WHISPER = 2;
-let _activeWhisperJobs = 0;
-const _whisperWaiters = [];
+const finalizingUsers = new Set();                // users currently finalizing
+const lastFinalizeAt = new Map();                 // userId → timestamp
+const FINALIZE_COOLDOWN_MS = 1500;                // prevents rapid re-finalize spam
+const emptySince = new Map();                     // guildId -> timestamp
+const EMPTY_GRACE_MS = 15000;                     // 15 seconds
 
-function _acquireWhisper() {
-  return new Promise((resolve) => {
-    if (_activeWhisperJobs < MAX_CONCURRENT_WHISPER) {
-      _activeWhisperJobs++;
-      resolve();
-    } else {
-      _whisperWaiters.push(resolve);
-    }
-  });
-}
-
-function _releaseWhisper() {
-  const next = _whisperWaiters.shift();
-  if (next) {
-    // hand the slot directly to the next waiter
-    next();
-  } else {
-    _activeWhisperJobs--;
-  }
-}
-
-// =========================================
-// TEMP FILE SAFETY CONFIG (env → inline defaults)
-// =========================================
-const DEFAULT_STALE_MS = Number(process.env.VC_TOOLS_STALE_MS ?? INLINE_CONFIG.STALE_MS);
-const SWEEP_INTERVAL_MS = Number(process.env.VC_TOOLS_SWEEP_INTERVAL_MS ?? INLINE_CONFIG.SWEEP_INTERVAL_MS);
-const TEMP_DIRS = (INLINE_CONFIG.TEMP_DIRS || []).map((d) => path.resolve(d));
-const SWEEP_EXTS = new Set(INLINE_CONFIG.SWEEP_EXTS || []);
-
-const inUsePaths = new Set(); // files currently in use; do not delete
-
-// =========================================
-// PROFANITY FILTER FUNCTIONS (USING LEO-PROFANITY)
-// =========================================
-
-/**
- * Updates the profanity filter for the given guild.
- * This function reloads the default dictionary, adds custom words, and—if in strict mode—removes common curse words.
- * @param {string} guildId - The guild's ID.
- */
-async function updateProfanityFilter(guildId) {
-  const settings = await getSettingsForGuild(guildId);
-  const customWords = settings?.filterCustom || [];
-  const filterLevel = settings?.filterLevel || "moderate"; // strict, moderate, build
-
-  if (filterLevel === "build") {
-    console.log(`[PROFANITY] Guild ${guildId} is using the 'build' filter. Skipping leo-profanity entirely.`);
-  } else {
-    // Full leo-profanity reset
-    leoProfanity.loadDictionary();
-
-    // Add user-defined custom banned words
-    customWords.forEach((word) => {
-      leoProfanity.add(word);
-    });
-
-    if (filterLevel === "moderate") {
-      console.log(`[PROFANITY] Guild ${guildId} is using the moderate filter. Removing allowed common words...`);
-      try {
-        const jsonPath = path.resolve(__dirname, "../moderation/profanityFilterModerate.json");
-        console.log("[FILTER] Loading filter from:", jsonPath);
-        const jsonData = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-        const allowedCommon = jsonData.moderate || [];
-        allowedCommon.forEach((word) => {
-          leoProfanity.remove(word);
-        });
-      } catch (err) {
-        console.error("Error loading moderate filter exceptions:", err);
-      }
-    }
-
-    // If strict: just keep the full leo dictionary (plus custom words), no removals
-  }
-}
-
-/**
- * Cleans (censors) the given text based on guild-specific settings.
- * @param {Object} guild - The guild object.
- * @param {string} text - The text to clean.
- * @returns {Promise<string>} - The cleaned text.
- */
-async function clean(guild, text) {
-  await updateProfanityFilter(guild.id);
-  // leoProfanity.clean returns the text with profane words replaced.
-  return leoProfanity.clean(text);
-}
-
-/**
- * Checks if the text contains profanity.
- * @param {Object} guild - The guild object.
- * @param {string} text - The text to check.
- * @returns {Promise<boolean>} - True if profanity is detected.
- */
-async function containsProfanity(guild, text) {
-  const censored = await clean(guild, text);
-  return censored !== text;
-}
-
-/**
- * Checks a transcription for profanity and sends a warning to the logging channel if found.
- * @param {string} userId - The user ID who spoke.
- * @param {string} transcription - The transcription text.
- * @param {Object} guild - The Discord guild object.
- */
-async function checkForFlaggedContent(userId, transcription, guild) {
-  if (!transcription || !guild) return;
-  const settings = await getSettingsForGuild(guild.id);
-  const loggingchannelId = settings.channelId;
-  const voiceCallPingRoleId = settings.voiceCallPingRoleId;
-  const notifyBadWord = settings.notifyBadWord;
-
-  if (!loggingchannelId) {
-    console.warn(`[WARNING] No logging channel set for guild ${guild.id}.`);
-    return;
-  }
-
-  const loggingChannel = guild.channels.cache.get(loggingchannelId);
-  if (!loggingChannel) {
-    console.warn(
-      `[WARNING] Could not find logging channel in guild ${guild.id}.`
-    );
-    return;
-  }
-
-  const censored = await clean(guild, transcription);
-  if (censored === transcription) return;
-
-  let warningMessage = `## ⚠️ **Inappropriate Content Detected**\n> VC Tools detected flagged content from <@${userId}>\n**Transcription:** ${transcription}\n-# Did the filter catch an incorrect word? If so, then use \`settings filter\` to manage it.`;
-  if (notifyBadWord && voiceCallPingRoleId) {
-    warningMessage = `## ⚠️ <@&${voiceCallPingRoleId}> **Inappropriate Content Detected**\n> VC Tools detected flagged content from <@${userId}>\n**Transcription:** ${transcription}\n-# Did the filter catch an incorrect word? If so, then use \`settings filter\` to manage it.`;
-  }
-  await loggingChannel.send({ content: warningMessage });
-  console.log(`[MODERATION] Logged flagged content from user ${userId}.`);
-}
-
-// =========================================
-// TRANSCRIPTION & AUDIO PROCESSING
-// =========================================
-
+/************************************************************************************************
+ * GLOBALS & CONSTANTS
+ ************************************************************************************************/
+const GRACE_PERIOD_MS = 3000;
 const silenceDurations = new Map();
 const MAX_SILENCE_RECORDS = 10;
-const DEFAULT_SILENCE_TIMEOUT = 1000;
-const GRACE_PERIOD_MS = 3000;
-const finalizationTimers = {};
+const DEFAULT_SILENCE_TIMEOUT = 3000;
 
+const AUTO_ROUTE_MIN_OTHER_HUMANS = 2;
+
+// Move cooldown per guild to prevent thrash
+const guildMoveCooldownMs = 1500;
+const guildLastMoveAt = new Map(); // guildId -> timestamp
+
+// Track file streams and subscriptions by user
 const outputStreams = {};
 const userSubscriptions = {};
+const userAudioIds = {}; // userId -> unique
+const pipelines = new Map(); // userId -> { audioStream, decoder, pcmWriter, loudnessRes }
+const finalizingKeys = new Set();
+const routingLock = new Set(); // guildId → locked
 
-/**
- * Creates a loudness detector stream.
- * @param {Object} guild - The guild object.
- * @param {string} userId - The user ID.
- * @param {function} onWarning - Callback to be called when a warning is triggered.
- * @param {Object} options - Optional thresholds and durations.
- * @returns {Transform} - A transform stream.
- */
-function createLoudnessDetector(guild, userId, onWarning, options = {}) {
-  const {
-    cooldownMs = 15000,
-    instantThreshold = 10000,
-    fastThreshold = 6000,
-    fastDuration = 250,
-    prolongedThreshold = 4000,
-    prolongedDuration = 5000,
-  } = options;
-  let fastStart = null;
-  let prolongedStart = null;
-  let lastWarningTime = 0;
+/************************************************************************************************
+ * SMALL UTILS
+ ************************************************************************************************/
+function safeClearTimer(t) {
+  if (!t) return;
+  try { clearTimeout(t); } catch { }
+  try { clearInterval(t); } catch { }
+}
 
-  return new Transform({
-    transform(chunk, encoding, callback) {
-      try {
-        if (chunk.length % 2 !== 0) {
-          chunk = chunk.slice(0, chunk.length - 1);
-        }
-        let sum = 0;
-        const sampleCount = Math.floor(chunk.length / 2);
-        for (let i = 0; i < sampleCount * 2; i += 2) {
-          const sample = chunk.readInt16LE(i);
-          sum += sample * sample;
-        }
-        const rms = Math.round(Math.sqrt(sum / sampleCount));
-        const now = Date.now();
+function waitForFinished(streamLike) {
+  return new Promise((resolve) => {
+    try { finished(streamLike, () => resolve()); }
+    catch { resolve(); }
+  });
+}
 
-        if (now - lastWarningTime < cooldownMs) {
-          return callback(null, chunk);
-        }
-        if (rms > instantThreshold) {
-          console.info(
-            `[WARNING] Instant warning for ${userId} (RMS: ${rms}).`
-          );
-          onWarning(userId, rms);
-          lastWarningTime = now;
-        }
-        if (rms > fastThreshold) {
-          if (!fastStart) fastStart = now;
-          if (now - fastStart > fastDuration) {
-            console.info(`[WARNING] Fast warning for ${userId} (RMS: ${rms}).`);
-            onWarning(userId, rms);
-            lastWarningTime = now;
-            fastStart = null;
-          }
-        } else {
-          fastStart = null;
-        }
-        if (rms > prolongedThreshold) {
-          if (!prolongedStart) prolongedStart = now;
-          if (now - prolongedStart > prolongedDuration) {
-            console.info(
-              `[WARNING] Prolonged warning for ${userId} (RMS: ${rms}).`
-            );
-            onWarning(userId, rms);
-            lastWarningTime = now;
-            prolongedStart = null;
-          }
-        } else {
-          prolongedStart = null;
-        }
-        callback(null, chunk);
-      } catch (error) {
-        console.error(
-          `[ERROR] Loudness detector error for user ${userId}: ${error.message}`
-        );
-        callback(error, chunk);
+/************************************************************************************************
+ * REUSABLE TRANSCRIPTION FUNCTIONS
+ ************************************************************************************************/
+const {
+  transcribeAudio,
+  postTranscription,
+  convertOpusToWav,
+  safeDeleteFile,
+} = transcription;
+
+/************************************************************************************************
+ * SILENCE DETECTION HELPERS
+ ************************************************************************************************/
+function updateSilenceDuration(userId, duration) {
+  const durations = silenceDurations.get(userId) || [];
+  durations.push(duration);
+  if (durations.length > MAX_SILENCE_RECORDS) durations.shift();
+  silenceDurations.set(userId, durations);
+}
+
+function getAverageSilenceDuration(userId) {
+  const durations = silenceDurations.get(userId) || [];
+  if (!durations.length) return DEFAULT_SILENCE_TIMEOUT;
+  const total = durations.reduce((sum, val) => sum + val, 0);
+  return total / durations.length;
+}
+
+/************************************************************************************************
+ * LOUDNESS DETECTION
+ ************************************************************************************************/
+const userWarningTimestamps = new Map(); // Tracks last warning time per user
+
+const initiateLoudnessWarning = async (
+  userId,
+  audioStream, // Opus stream
+  guild,
+  updateTimestamp
+) => {
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  if (settings.safeUsers?.includes?.(userId)) {
+    console.log(`[INFO] User ${userId} is a safe user. Skipping loudness detection.`);
+    return null;
+  }
+
+  const options = {
+    cooldownMs: 15000,
+    instantThreshold: 17500,
+    fastThreshold: 14000,
+    fastDuration: 500,
+    prolongedThreshold: 10000,
+    prolongedDuration: 6000,
+  };
+
+  const warnIfTooLoud = async (uid, rms) => {
+    const now = Date.now();
+    const lastWarning = userWarningTimestamps.get(uid) || 0;
+    if (now - lastWarning < options.cooldownMs) return;
+    userWarningTimestamps.set(uid, now);
+
+    console.log(`*** WARNING: User ${uid} is too loud (RMS: ${rms}) ***`);
+
+    // ✅ Cached settings again (but still cached)
+    const s = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    const roleId = s.notifyLoudUser ? s.voiceCallPingRoleId : null;
+
+    try {
+      const channel = await transcription.ensureTranscriptionChannel(guild);
+      if (!channel) {
+        console.error(`[ERROR] No transcription channel available for guild ${guild.id}`);
+        return;
       }
-    },
+      const base = `## ⚠️ User <@${uid}> is being loud (RMS: **${rms}**)\n-# Confused by what RMS means? Check \`help rms\`.`;
+      const msg = roleId
+        ? `## ⚠️ <@&${roleId}> User <@${uid}> is being loud (RMS: **${rms}**)\n-# Confused by what RMS means? Check \`help rms\`.`
+        : base;
+      await channel.send(msg);
+    } catch (err) {
+      console.error(`[ERROR] Failed to send loudness warning: ${err.message}`);
+    }
+  };
+
+  const loudnessDetector = transcription.createLoudnessDetector(
+    guild,
+    userId,
+    warnIfTooLoud,
+    options
+  );
+  const opusDecoderForLoudness = new prism.opus.Decoder({
+    frameSize: 960,
+    channels: 1,
+    rate: 48000,
   });
+
+  // Track *activity* using source data (fixes RMS-event bug)
+  let lastActiveTime = Date.now();
+  const onData = () => {
+    lastActiveTime = Date.now();
+    if (typeof updateTimestamp === "function") updateTimestamp();
+  };
+  audioStream.on("data", onData);
+
+  const QUIET_TIMEOUT_MS = 4000;
+  const quietTimer = setInterval(() => {
+    const silentDuration = Date.now() - lastActiveTime;
+    if (silentDuration >= QUIET_TIMEOUT_MS) {
+      console.warn(`[QUIET FINALIZE] ${userId} silent (low activity) for ${silentDuration}ms`);
+      teardown();
+    }
+  }, 1000);
+
+  const teardown = () => {
+    safeClearTimer(quietTimer);
+    try { audioStream.off("data", onData); } catch { }
+    try { opusDecoderForLoudness.unpipe?.(loudnessDetector); } catch { }
+    try { audioStream.unpipe?.(opusDecoderForLoudness); } catch { }
+    try { loudnessDetector.destroy?.(); } catch { }
+    try { opusDecoderForLoudness.destroy?.(); } catch { }
+  };
+
+  opusDecoderForLoudness.on("error", (err) => {
+    console.warn(`[LOUDNESS] decoder error for ${userId}: ${err.message} (tearing down loudness branch)`);
+    teardown();
+  });
+
+  audioStream.on("error", (err) => {
+    console.warn(`[LOUDNESS] source stream error for ${userId}: ${err.message}`);
+    teardown();
+  });
+
+  // Wire the branch
+  audioStream.pipe(opusDecoderForLoudness).pipe(loudnessDetector);
+
+  return { loudnessDetector, opusDecoderForLoudness, quietTimer, teardown };
+};
+
+/************************************************************************************************
+ * MOD HELPERS (PERMISSIONS-ONLY)
+ ************************************************************************************************/
+const MOD_FLAGS = [
+  PermissionsBitField.Flags.Administrator,
+  PermissionsBitField.Flags.ManageGuild,
+  PermissionsBitField.Flags.ManageMessages,
+  PermissionsBitField.Flags.KickMembers,
+  PermissionsBitField.Flags.BanMembers,
+  PermissionsBitField.Flags.ModerateMembers,
+  PermissionsBitField.Flags.MuteMembers,
+  PermissionsBitField.Flags.DeafenMembers,
+  PermissionsBitField.Flags.MoveMembers,
+];
+
+function isModerator(member) {
+  if (!member) return false;
+  const perms = member.permissions;
+  if (!perms?.has) return false;
+  for (const f of MOD_FLAGS) {
+    if (perms.has(f)) return true;
+  }
+  return false;
 }
 
-/**
- * Ensures a transcription channel exists in the guild; creates one if needed.
- * @param {Object} guild - The guild object.
- * @returns {Promise<Object|null>} - The text channel or null if creation fails.
- */
-async function ensureTranscriptionChannel(guild) {
-  const guildSettings = await getSettingsForGuild(guild.id);
-  if (!guildSettings.transcriptionEnabled) {
-    console.warn(
-      `[WARNING] Transcription is disabled for guild '${guild.name}'.`
-    );
-    return null;
-  }
-  let channelId = guildSettings.channelId;
-  if (channelId) {
-    const existingChannel = guild.channels.cache.get(channelId);
-    if (existingChannel && existingChannel.type === ChannelType.GuildText) {
-      console.log(
-        `[INFO] Using existing transcription channel: ${existingChannel.name}`
-      );
-      return existingChannel;
-    }
-  }
-  try {
-    const everyoneRole = guild.roles.cache.get(guild.id);
-    let moderatorRole =
-      guild.roles.cache.get(guildSettings.allowedRoleId) ||
-      guild.roles.cache.find((role) => role.name.toLowerCase() === "moderator");
-    if (!moderatorRole) {
-      console.warn(
-        `[WARNING] Moderator role not found in '${guild.name}', defaulting to @everyone.`
-      );
-      moderatorRole = everyoneRole;
-    }
-    const newChannel = await guild.channels.create({
-      name: "transcription",
-      type: ChannelType.GuildText,
-      reason: "The channel for transcriptions was not found.",
-      permissionOverwrites: [
-        {
-          id: everyoneRole.id,
-          deny: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.SendMessages,
-            PermissionsBitField.Flags.ManageMessages,
-            PermissionsBitField.Flags.ManageChannels,
-          ],
-        },
-        {
-          id: moderatorRole.id,
-          allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.SendMessages,
-          ],
-        },
-      ],
+function channelCounts(channel) {
+  let humans = 0;
+  let mods = 0;
+  channel?.members?.forEach((m) => {
+    if (m.user.bot) return;
+    humans += 1;
+    if (isModerator(m)) mods += 1;
+  });
+  return { humans, mods };
+}
+
+function channelHasMod(channel) {
+  if (!channel) return false;
+  const { mods } = channelCounts(channel);
+  return mods > 0;
+}
+
+/************************************************************************************************
+ * Targeting helpers
+ ************************************************************************************************/
+function findBestUnsupervised2(guild, safe, excludeChannelId = null) {
+  let best = null;
+  let bestCount = -1;
+  guild.channels.cache
+    .filter((c) => c.type === ChannelType.GuildVoice)
+    .forEach((ch) => {
+      if (safe.has(ch.id)) return;
+      if (excludeChannelId && ch.id === excludeChannelId) return;
+      const { humans, mods } = channelCounts(ch);
+      if (mods === 0 && humans >= AUTO_ROUTE_MIN_OTHER_HUMANS) {
+        if (humans > bestCount) {
+          best = ch; bestCount = humans;
+        }
+      }
     });
-    console.log(`[INFO] Created new transcription channel: ${newChannel.name}`);
-    await updateSettingsForGuild(guild.id, { channelId: newChannel.id }, guild);
-    return newChannel;
-  } catch (error) {
+  return best; // may be null
+}
+
+function findBusiest(guild, safe) {
+  let busiest = null;
+  let busiestHumans = 0;
+  guild.channels.cache
+    .filter((c) => c.type === ChannelType.GuildVoice)
+    .forEach((ch) => {
+      if (safe.has(ch.id)) return;
+      const nonBot = ch.members.filter((m) => !m.user.bot).size;
+      if (nonBot > busiestHumans) {
+        busiestHumans = nonBot;
+        busiest = ch;
+      }
+    });
+  return { busiest, busiestHumans };
+}
+
+/************************************************************************************************
+ * Detect user activity changes (logs) — with invisible separators to prevent Discord embedding
+ ************************************************************************************************/
+async function detectUserActivityChanges(oldState, newState) {
+  const guild = newState.guild;
+  const member = newState.member;
+  if (!guild || !member || !member.user) {
+    console.warn("[VOICE] Skipping activity change: missing member or user object");
+    return;
+  }
+
+  // ✅ Cached settings
+  const settings = await getSettingsForGuild(guild.id);
+  if (!settings.vcLoggingEnabled || !settings.vcLoggingChannelId) return;
+
+  const activityChannel = guild.channels.cache.get(settings.vcLoggingChannelId);
+  if (!activityChannel) {
     console.error(
-      `[ERROR] Failed to create transcription channel: ${error.message}`
+      `[ERROR] Activity logging channel ${settings.vcLoggingChannelId} not found.`
     );
-    return null;
+    return;
+  }
+
+  const topRole = member.roles.highest?.name || "No Role";
+  const username = member.user.username;
+  const userId = member.user.id;
+
+  const SPACE = "\u200A"; // Hair Space
+
+  const ansi = {
+    darkGray: "\u001b[2;30m",
+    white: "\u001b[2;37m",
+    red: "\u001b[2;31m",
+    yellow: "\u001b[2;33m",
+    cyan: "\u001b[2;36m",
+    reset: "\u001b[0m",
+  };
+
+  const c = (color) => `${color}${SPACE}`;
+  const br = (inner) => `[${SPACE}${inner}${SPACE}]${SPACE}`;
+  const safe = (s) => String(s).replace(/</g, `<${SPACE}`);
+
+  let roleColor = c(ansi.white);
+  if (guild.ownerId === userId) roleColor = c(ansi.red);
+  else if (member.permissions.has(PermissionsBitField.Flags.Administrator)) roleColor = c(ansi.cyan);
+  else if (
+    member.permissions.has(PermissionsBitField.Flags.ManageGuild) ||
+    member.permissions.has(PermissionsBitField.Flags.KickMembers) ||
+    member.permissions.has(PermissionsBitField.Flags.MuteMembers) ||
+    member.permissions.has(PermissionsBitField.Flags.BanMembers) ||
+    member.permissions.has(PermissionsBitField.Flags.ManageMessages)
+  ) roleColor = c(ansi.yellow);
+
+  const now = new Date();
+  const minute = now.getMinutes().toString().padStart(2, "0");
+  const second = now.getSeconds().toString().padStart(2, "0");
+  const timestamp = `${minute}:${second}`;
+
+  const buildLog = (msg) =>
+    `\`\`\`ansi\n${c(ansi.darkGray)}${br(`${c(ansi.white)}${timestamp}${c(ansi.darkGray)}`)}${SPACE}${msg}${c(ansi.reset)}\n\`\`\``;
+
+  const oldChan = oldState.channelId ? guild.channels.cache.get(oldState.channelId) : null;
+  const newChan = newState.channelId ? guild.channels.cache.get(newState.channelId) : null;
+  const oldId = oldChan?.id || null;
+  const newId = newChan?.id || null;
+
+  if (oldId !== newId) {
+    if (oldChan && newChan) {
+      const logMsg =
+        `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+        ` ${roleColor}${safe(username)}${c(ansi.darkGray)} moved from ` +
+        `${c(ansi.white)}#${safe(oldChan.name)}${c(ansi.darkGray)} to ` +
+        `${c(ansi.white)}#${safe(newChan.name)}${c(ansi.darkGray)}.`;
+      await activityChannel.send(buildLog(logMsg)).catch(console.error);
+    } else if (!oldChan && newChan) {
+      const logMsg =
+        `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+        ` ${roleColor}${safe(username)}${c(ansi.darkGray)} joined ` +
+        `${c(ansi.white)}#${safe(newChan.name)}${c(ansi.darkGray)}.`;
+      await activityChannel.send(buildLog(logMsg)).catch(console.error);
+    } else if (oldChan && !newChan) {
+      let forciblyDisconnected = false;
+      let executor = "Unknown";
+      try {
+        const fetchedLogs = await guild.fetchAuditLogs({
+          limit: 1,
+          type: AuditLogEvent.GuildMemberDisconnect,
+        });
+        const auditEntry = fetchedLogs.entries.first();
+        if (
+          auditEntry?.target?.id === userId &&
+          Date.now() - auditEntry.createdTimestamp < 5000
+        ) {
+          forciblyDisconnected = true;
+          executor = auditEntry.executor?.tag ?? "Unknown";
+        }
+      } catch (error) {
+        console.error("[AUDIT LOG ERROR]", error);
+      }
+
+      if (forciblyDisconnected) {
+        const logMsg =
+          `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+          `${br(`${c(ansi.white)}FORCED${c(ansi.darkGray)}`)}` +
+          ` ${roleColor}${safe(username)}${c(ansi.darkGray)} was disconnected from ` +
+          `${c(ansi.white)}#${safe(oldChan.name)}${c(ansi.darkGray)} by ` +
+          `${c(ansi.white)}${safe(executor)}${c(ansi.darkGray)}.`;
+        await activityChannel.send(buildLog(logMsg)).catch(console.error);
+      } else {
+        const logMsg =
+          `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+          ` ${roleColor}${safe(username)}${c(ansi.darkGray)} left ` +
+          `${c(ansi.white)}#${safe(oldChan.name)}${c(ansi.darkGray)}.`;
+        await activityChannel.send(buildLog(logMsg)).catch(console.error);
+      }
+      return;
+    }
+  }
+
+  if (oldState.serverMute !== newState.serverMute) {
+    let executor = "Unknown";
+    try {
+      const fetchedLogs = await guild.fetchAuditLogs({
+        limit: 1,
+        type: AuditLogEvent.MemberUpdate,
+      });
+      const auditEntry = fetchedLogs.entries.find(
+        (entry) =>
+          entry.target?.id === userId &&
+          entry.changes?.some((change) => change.key === "mute")
+      );
+      if (auditEntry) executor = auditEntry.executor?.tag ?? "Unknown";
+    } catch (error) {
+      console.error("[AUDIT LOG ERROR]", error);
+    }
+    if (!newState.serverMute && executor === "Unknown") return;
+    const action = newState.serverMute ? "server-muted" : "server-unmuted";
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)} by ` +
+      `${c(ansi.white)}${safe(executor)}${c(ansi.darkGray)}.`;
+    await activityChannel.send(buildLog(logMsg)).catch(console.error);
+  }
+
+  if (oldState.serverDeaf !== newState.serverDeaf) {
+    let executor = "Unknown";
+    try {
+      const fetchedLogs = await guild.fetchAuditLogs({
+        limit: 1,
+        type: AuditLogEvent.MemberUpdate,
+      });
+      const auditEntry = fetchedLogs.entries.find(
+        (entry) =>
+          entry.target?.id === userId &&
+          entry.changes?.some((change) => change.key === "deaf")
+      );
+      if (auditEntry) executor = auditEntry.executor?.tag ?? "Unknown";
+    } catch (error) {
+      console.error("[AUDIT LOG ERROR]", error);
+    }
+    if (!newState.serverDeaf && executor === "Unknown") return;
+    const action = newState.serverDeaf ? "server-deafened" : "server-undeafened";
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)} by ` +
+      `${c(ansi.white)}${safe(executor)}${c(ansi.darkGray)}.`;
+    await activityChannel.send(buildLog(logMsg)).catch(console.error);
+  }
+
+  if (oldState.selfMute !== newState.selfMute) {
+    const action = newState.selfMute ? "self-muted" : "self-unmuted";
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)}.`;
+    await activityChannel.send(buildLog(logMsg)).catch(console.error);
+  }
+
+  if (oldState.selfDeaf !== newState.selfDeaf) {
+    const action = newState.selfDeaf ? "self-deafened" : "self-undeafened";
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)}.`;
+    await activityChannel.send(buildLog(logMsg)).catch(console.error);
+  }
+
+  if (oldState.streaming !== newState.streaming) {
+    const action = newState.streaming ? "started screen sharing" : "stopped screen sharing";
+    const logMsg =
+      `${br(`${roleColor}${safe(topRole)}${c(ansi.darkGray)}`)}` +
+      ` ${roleColor}${safe(username)}${c(ansi.darkGray)} ${safe(action)}.`;
+    await activityChannel.send(buildLog(logMsg)).catch(console.error);
   }
 }
 
-/**
- * Queues audio for processing.
- * @param {string} userId - The user ID.
- * @param {Object} guild - The guild object.
- * @returns {Promise<string>} - The transcription text.
- */
-async function processAudio(userId, guild) {
-  return new Promise((resolve, reject) => {
-    const audioDir = path.resolve(__dirname, "../../temp_audio");
-    ensureDirectoryExistence(path.join(audioDir, "._ensure"));
+/************************************************************************************************
+ * DISCONNECTING FLAG
+ ************************************************************************************************/
+let isDisconnecting = false;
 
-    const unique = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const wavFilePath = path.join(audioDir, `${userId}-${unique}.wav`);
-
-    inUsePaths.add(path.resolve(wavFilePath));
-
-    const job = {
-      userId,
-      guild,
-      wavFilePath,
-      unique,
-      resolve,
-      reject,
-    };
-
-    const guildId = guild.id;
-
-    if (!guildQueues.has(guildId)) {
-      guildQueues.set(guildId, []);
-    }
-
-    guildQueues.get(guildId).push(job);
-
-    processGuildQueue(guildId);
-  });
-}
-
-async function processGuildQueue(guildId) {
-  if (guildProcessing.has(guildId)) return;
-
-  const queue = guildQueues.get(guildId);
-  if (!queue || queue.length === 0) return;
-
-  guildProcessing.add(guildId);
+/************************************************************************************************
+ * DISCORD VOICE CHANNEL HANDLERS
+ ************************************************************************************************/
+async function execute(oldState, newState, client) {
+  if (newState?.member?.user?.bot) return;
 
   try {
-    while (queue.length > 0) {
-      const job = queue.shift();
-      if (!job) continue;
+    await detectUserActivityChanges(oldState, newState);
+  } catch (e) {
+    console.warn("[VOICE] detectUserActivityChanges failed:", e?.message || e);
+  }
 
-      const { userId, guild, wavFilePath, resolve, reject } = job;
+  if (!newState?.guild) {
+    console.error("[ERROR] Guild object is missing.");
+    return;
+  }
+
+  const guild = newState.guild;
+  const userId = newState?.member?.id || oldState?.member?.id;
+  if (!userId) {
+    console.error("[ERROR] Failed to retrieve user ID from voice state.");
+    return;
+  }
+
+  // ✅ Cached settings
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  const safe = new Set(settings.safeChannels || []);
+
+  const actorMember = newState.member || guild.members.cache.get(userId);
+  const actorIsMod = isModerator(actorMember);
+  const moveContext = {
+    actorId: userId,
+    actorIsMod,
+    originId: oldState?.channelId || null,
+    destId: newState?.channelId || null,
+  };
+
+  if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+    console.log(`[DEBUG] User ${userId} moved from ${oldState.channelId} to ${newState.channelId}`);
+
+    const isDestSafe = safe.has(newState.channelId);
+    if (isDestSafe) {
+      console.log("[VC] Move into SAFE channel detected; skipping VC management.");
+      return;
+    }
+
+    await manageVoiceChannels(guild, client, moveContext);
+    return;
+  }
+
+  if (!oldState.channelId && newState.channelId) {
+    console.log(`[DEBUG] User ${userId} joined channel: ${newState.channelId}`);
+    userJoinTimes.set(userId, Date.now());
+
+    const isJoinSafe = safe.has(newState.channelId);
+    if (!isJoinSafe) {
+      await manageVoiceChannels(guild, client, moveContext);
+    }
+
+    let connection = getVoiceConnection(guild.id);
+    if (connection) {
+      audioListeningFunctions(connection, guild);
+    }
+
+    const freshSettings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+
+    const safeUsersArr = Array.isArray(freshSettings.safeUsers)
+      ? freshSettings.safeUsers.map((x) => String(x))
+      : [];
+    const isSafeUser = safeUsersArr.includes(String(userId));
+
+    if (isSafeUser) {
+      console.log(`[CONSENT] ${userId} is a safe user; skipping consent & muting.`);
+      try {
+        if (newState.serverMute) {
+          await newState.setMute(false, "Safe user bypasses consent.");
+        }
+      } catch (err) {
+        console.error(`[ERROR] Failed to unmute safe user ${userId}: ${err.message}`);
+      }
+      return;
+    }
+
+    let hasConsent = false;
+    try {
+      hasConsent = !!(await hasUserConsented(userId));
+    } catch (e) {
+      console.warn(
+        `[CONSENT] hasUserConsented failed for ${userId} in guild ${guild.id}: ${e?.message || e}`
+      );
+      hasConsent = false;
+    }
+
+    if (hasConsent) {
+      try {
+        if (newState.serverMute) {
+          await newState.setMute(false, "User has consented to transcription.");
+        }
+      } catch (err) {
+        console.error(`[ERROR] Failed to unmute user ${userId}: ${err.message}`);
+      }
+    } else {
+      const consentButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`consent:grant:${userId}:${guild.id}`)
+          .setLabel("Consent")
+          .setStyle(ButtonStyle.Success)
+      );
+
+      interactionContexts.set(userId, { guildId: guild.id, mode: "consent" });
+
+      const member = newState.member;
+      const dest = await resolveConsentDestination(guild, member, freshSettings);
+
+      await sendConsentPrompt({
+        guild,
+        user: member.user,
+        member,
+        client,
+        settings: freshSettings,
+        destination: dest,
+        content:
+          `# Consent Required\nInside this voice call, your voice will be transcribed into text.\n` +
+          `Please click the button below to consent.\n\n` +
+          `> All audio files of your voice are temporary and will not be permanently saved.\n` +
+          `-# > You can also take a look at our [privacy policy](<https://www.vctools.app/privacy>) for more information.`,
+        components: [consentButtons],
+        mentionUserInChannel: true,
+      });
 
       try {
-        const { text, confidence } = await transcribeAudio(wavFilePath);
-
-        if (typeof resolve === "function") {
-          resolve(text);
+        // If consent check *failed*, avoid punishment-style mute.
+        // Only mute when we definitively know they haven't consented.
+        if (hasConsent === false) {
+          await newState.setMute(true, "Awaiting transcription consent.");
         }
-
-        await postTranscription(
-          guild,
-          userId,
-          text,
-          null,
-          confidence
-        );
       } catch (err) {
-        console.error(
-          `[QUEUE:${guildId}] Transcription failed for ${userId}: ${err.message}`
-        );
-        if (typeof reject === "function") reject(err);
+        console.error(`[ERROR] Failed to mute user ${userId} (no consent): ${err.message}`);
+      }
+    }
+    return;
+  }
+
+  if (oldState.channelId && !newState.channelId) {
+    console.log(`[DEBUG] User ${userId} left channel: ${oldState.channelId}`);
+
+    const startMs = userJoinTimes.get(userId) || Date.now();
+    const durationSec = Math.floor((Date.now() - startMs) / 1000);
+    userJoinTimes.delete(userId);
+
+    const { error } = await supabase
+      .from("voice_activity")
+      .insert([{ guild_id: guild.id, user_id: userId, duration: durationSec }], {
+        returning: "minimal",
+      });
+
+    if (error) {
+      console.error("[Heatmap] Supabase insert failed:", error.message, error.details);
+    }
+
+    await manageVoiceChannels(guild, client, moveContext);
+    return;
+  }
+}
+
+/************************************************************************************************
+ * MANAGE VOICE CHANNELS & MOVES (core decision engine)
+ ************************************************************************************************/
+async function manageVoiceChannels(guild, client, moveContext = null) {
+  if (routingLock.has(guild.id)) return;
+  routingLock.add(guild.id);
+
+  try {
+    // ✅ Cached settings (this is hit very frequently)
+    const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    const featureOn = !!settings.mod_auto_route_enabled;
+    const safe = new Set(settings.safeChannels || []);
+
+    const connection = getVoiceConnection(guild.id);
+    const currentChannel = connection
+      ? guild.channels.cache.get(connection.joinConfig.channelId)
+      : null;
+
+    const { busiest, busiestHumans } = findBusiest(guild, safe);
+    const bestUnsupervised = findBestUnsupervised2(guild, safe, currentChannel?.id || null);
+
+    const now = Date.now();
+    const last = guildLastMoveAt.get(guild.id) || 0;
+    const canMove = now - last >= guildMoveCooldownMs;
+
+    if (!featureOn) {
+      if (!currentChannel) {
+        if (busiest && busiestHumans > 0) {
+          const newConn = await safeJoinChannel(client, busiest.id, guild);
+          if (newConn) audioListeningFunctions(newConn, guild);
+        }
+        return;
+      }
+
+      const currentHumans = currentChannel.members.filter((m) => !m.user.bot).size;
+      if (currentHumans < 2) {
+        if (busiest && busiest.id !== currentChannel.id && busiestHumans > currentHumans && canMove) {
+          guildLastMoveAt.set(guild.id, now);
+          await moveToChannel(busiest, connection, guild, client);
+          return;
+        }
+        if (currentHumans === 0 && (!busiest || busiestHumans === 0) && !isDisconnecting) {
+          await disconnectAndReset(connection, guild, client);
+        }
+        return;
+      }
+
+      if (busiest && busiest.id !== currentChannel.id && busiestHumans > currentHumans && canMove) {
+        guildLastMoveAt.set(guild.id, now);
+        await moveToChannel(busiest, connection, guild, client);
+      }
+      return;
+    }
+
+    if (currentChannel && safe.has(currentChannel.id)) {
+      if (bestUnsupervised && canMove) {
+        guildLastMoveAt.set(guild.id, now);
+        await moveToChannel(bestUnsupervised, connection, guild, client);
+        return;
+      }
+      if (busiest && busiestHumans > 0 && canMove) {
+        guildLastMoveAt.set(guild.id, now);
+        await moveToChannel(busiest, connection, guild, client);
+        return;
+      }
+      if (!isDisconnecting) {
+        await disconnectAndReset(connection, guild, client);
+      }
+      return;
+    }
+
+    if (currentChannel && moveContext?.actorIsMod && canMove) {
+      const origin = moveContext.originId
+        ? guild.channels.cache.get(moveContext.originId)
+        : null;
+      const dest = moveContext.destId
+        ? guild.channels.cache.get(moveContext.destId)
+        : null;
+
+      if (dest && dest.id === currentChannel.id && origin && !safe.has(origin.id)) {
+        const { humans, mods } = channelCounts(origin);
+        if (mods === 0 && humans >= AUTO_ROUTE_MIN_OTHER_HUMANS) {
+          console.log("[ROUTE] Mod entered our room → trading places to origin:", origin.name);
+          guildLastMoveAt.set(guild.id, now);
+          await moveToChannel(origin, connection, guild, client);
+          return;
+        }
+      }
+    }
+
+    if (!currentChannel) {
+      const bestWhenDisconnected = findBestUnsupervised2(guild, safe, null);
+      if (bestWhenDisconnected) {
+        const { humans } = channelCounts(bestWhenDisconnected);
+        if (humans > 0) {
+          console.log("[ROUTE] (disconnected) joining unsupervised≥2:", bestWhenDisconnected.name);
+          const newConn = await joinChannel(client, bestWhenDisconnected.id, guild);
+          if (newConn) audioListeningFunctions(newConn, guild);
+        }
+        return;
+      }
+
+      if (busiest && busiestHumans > 0) {
+        console.log("[ROUTE] (disconnected) joining busiest:", busiest.name);
+        const newConn = await joinChannel(client, busiest.id, guild);
+        if (newConn) audioListeningFunctions(newConn, guild);
+      }
+      return;
+    }
+
+    const currentHumans = currentChannel.members.filter((m) => !m.user.bot).size;
+
+    if (currentHumans < 2) {
+      const dest = findBestUnsupervised2(guild, safe, currentChannel.id);
+      if (dest && canMove) {
+        guildLastMoveAt.set(guild.id, now);
+        console.log("[ROUTE] <2 humans → moving to unsupervised≥2:", dest.name);
+        await moveToChannel(dest, connection, guild, client);
+        return;
+      }
+      if (busiest && busiestHumans > currentHumans && canMove) {
+        guildLastMoveAt.set(guild.id, now);
+        console.log("[ROUTE] <2 humans → moving to busiest (mod allowed):", busiest.name);
+        await moveToChannel(busiest, connection, guild, client);
+        return;
+      }
+      if (currentHumans === 0) {
+        const since = emptySince.get(guild.id) ?? Date.now();
+        emptySince.set(guild.id, since);
+
+        if (Date.now() - since >= EMPTY_GRACE_MS && !isDisconnecting) {
+          console.log("[ROUTE] 0 humans for grace period → disconnect.");
+          emptySince.delete(guild.id);
+          await disconnectAndReset(connection, guild, client);
+        }
+        return;
+      }
+
+      emptySince.delete(guild.id);
+      return;
+    }
+
+    const currentHasMod = channelHasMod(currentChannel);
+
+    if (currentHasMod) {
+      const dest = findBestUnsupervised2(guild, safe, currentChannel.id);
+      if (dest && canMove) {
+        guildLastMoveAt.set(guild.id, now);
+        console.log("[ROUTE] Mod present → moving to unsupervised≥2:", dest.name);
+        await moveToChannel(dest, connection, guild, client);
+      }
+      return;
+    }
+
+    if (busiest && busiest.id !== currentChannel.id && !channelHasMod(busiest)) {
+      const here = channelCounts(currentChannel);
+      const there = channelCounts(busiest);
+      if (there.humans > here.humans && canMove) {
+        guildLastMoveAt.set(guild.id, now);
+        console.log("[ROUTE] Upgrading to bigger no-mod VC:", busiest.name);
+        await moveToChannel(busiest, connection, guild, client);
       }
     }
   } finally {
-    guildProcessing.delete(guildId);
+    routingLock.delete(guild.id);
   }
 }
 
-/**
- * Runs the Whisper transcription script on a WAV file.
- * Acquires a global semaphore slot before spawning to cap GPU pressure.
- * @param {string} wavFilePath - The path to the WAV file.
- * @returns {Promise<{ text: string, confidence: number|undefined }>}
- */
-// Spawns transcribe.py, parses JSON lines, returns { text, confidence }
-async function transcribeAudio(wavFilePath) {
-  const { spawn } = require("child_process");
-  const path = require("path");
-
-  await _acquireWhisper();
-
-  return new Promise((resolve, reject) => {
-    const _done = (fn, val) => { _releaseWhisper(); fn(val); };
-
-    try {
-      const pyPath = path.resolve("../models/whisper/transcribe.py");
-      const proc = spawn("py", ["-3", pyPath, wavFilePath], { cwd: __dirname, windowsHide: true });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout.on("data", (d) => (stdout += d.toString("utf8")));
-      proc.stderr.on("data", (d) => (stderr += d.toString("utf8")));
-
-      proc.on("error", (err) => _done(reject, err));
-
-      proc.on("close", (code) => {
-        if (code !== 0 && !stdout) {
-          return _done(reject,
-            new Error(`transcribe.py exited with code ${code}: ${stderr || "no stderr"}`)
-          );
-        }
-
-        try {
-          // Collect all JSON objects printed by Python
-          const jsonMatches = stdout.match(/\{[\s\S]*?\}/g) || [];
-          let transcriptionText = "";
-          let confidence = undefined;
-
-          for (const j of jsonMatches) {
-            try {
-              const parsed = JSON.parse(j);
-              if (parsed && typeof parsed.text === "string" && parsed.text.length) {
-                transcriptionText = parsed.text;
-                if (typeof parsed.confidence === "number") {
-                  confidence = parsed.confidence;
-                } else if (typeof parsed.confidence_percent === "number") {
-                  confidence = Math.max(0, Math.min(1, parsed.confidence_percent / 100));
-                }
-                break;
-              }
-            } catch (_) {
-              // ignore malformed json lines
-            }
-          }
-
-          if (!transcriptionText) {
-            // If Python only returned an error JSON, surface it
-            for (const j of jsonMatches) {
-              try {
-                const errObj = JSON.parse(j);
-                if (errObj && errObj.error) {
-                  return _done(reject, new Error(errObj.error));
-                }
-              } catch (_) { }
-            }
-            return _done(reject, new Error("No transcription text found in Python output."));
-          }
-
-          _done(resolve, { text: transcriptionText, confidence });
-        } catch (parseErr) {
-          _done(reject, parseErr);
-        }
-      });
-    } catch (outerErr) {
-      _done(reject, outerErr);
+async function moveToChannel(targetChannel, connection, guild, client) {
+  if (connection) {
+    console.log(`[INFO] Leaving and joining: ${targetChannel.name}`);
+    await disconnectAndReset(connection, guild, client);
+    const newConnection = await joinChannel(client, targetChannel.id, guild);
+    if (newConnection) {
+      saveVCState(guild.id, targetChannel.id);
+      audioListeningFunctions(newConnection, guild);
     }
-  });
+  }
 }
 
-/**
- * Posts the transcription to the transcription channel and checks for profanity.
- * @param {Object} guild - The guild object.
- * @param {string} userId - The user ID.
- * @param {string|Object} transcription - The transcription text OR an object { text, confidence }.
- * @param {string} channelId - Voice/text channel id (for label).
- * @param {number} [confidence] - Optional confidence in [0..1].
- */
-async function postTranscription(guild, userId, transcription, channelId, confidence) {
+async function safeJoinChannel(client, channelId, guild) {
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  const safeChannels = new Set(settings.safeChannels || []);
+
+  if (safeChannels.has(channelId)) {
+    console.log(`[SAFE BLOCK] Refusing to join safe channel ${channelId}`);
+    return null;
+  }
+
+  return joinChannel(client, channelId, guild);
+}
+
+async function joinChannel(client, channelId, guild) {
+  const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+  if ((settings.safeChannels || []).includes(channelId)) {
+    console.log(`[INFO] Channel ${channelId} is in safeChannels. Not joining.`);
+    return null;
+  }
+
+  const channel = client.channels.cache.get(channelId);
+  if (!channel) {
+    console.error(`[ERROR] Channel not found: ${channelId}`);
+    return null;
+  }
+
   try {
-    // --- HOTFIX: unwrap accidental { text, confidence } objects ---
-    if (transcription && typeof transcription === "object") {
-      const t = transcription;
-      if (typeof t.text === "string") {
-        transcription = t.text;
-        if (confidence == null && typeof t.confidence === "number") {
-          confidence = t.confidence;
-        }
-      } else {
-        transcription = String(t); // hard fallback, avoids [object Object]
-      }
-    }
+    const connection = joinVoiceChannel({
+      channelId: channel.id,
+      guildId: channel.guild.id,
+      adapterCreator: channel.guild.voiceAdapterCreator,
+      selfDeaf: false,
+    });
 
-    const channel = await ensureTranscriptionChannel(guild);
-    if (!channel) {
-      console.error(
-        `[ERROR] Could not find or create a transcription channel in guild '${guild.name}'.`
-      );
-      return;
-    }
-    const member = await guild.members.fetch(userId).catch(() => null);
-    if (!member) {
-      console.warn(
-        `[WARN] Could not fetch member for user ${userId}. Defaulting to plain text.`
-      );
-    }
-    if (!guild.roles) {
-      guild = await guild.fetch();
-    }
-
-    const highestRole = member?.roles?.highest || null;
-    const roleName = highestRole?.name || "Member";
-    const formattedRole = roleName === "@everyone" ? "Member" : roleName;
-
-    // ===== colors (your style) =====
-    let roleColor = "\u001b[2;37m"; // light gray
-    let nameColor = "\u001b[2;37m";
-
-    if (guild.ownerId === userId) {
-      roleColor = "\u001b[31m"; // red
-      nameColor = "\u001b[31m";
-    } else if (member?.permissions?.has?.("Administrator")) {
-      roleColor = "\u001b[34m"; // blue
-      nameColor = "\u001b[34m";
-    } else if (
-      member?.permissions?.has?.("ManageGuild") ||
-      member?.permissions?.has?.("KickMembers") ||
-      member?.permissions?.has?.("MuteMembers") ||
-      member?.permissions?.has?.("BanMembers") ||
-      member?.permissions?.has?.("ManageMessages")
-    ) {
-      roleColor = "\u001b[33m"; // yellow/gold
-      nameColor = "\u001b[33m";
-    }
-
-    const bracket = "\u001b[2;30m"; // dark gray
-    const reset = "\u001b[0m";
-    const idColor = "\u001b[37m"; // white
-    const timeColor = "\u001b[37m"; // white
-    const channelColor = "\u001b[37m"; // white
-    const messageColor = "\u001b[2;37m"; // light gray
-
-    // confidence colors (dim)
-    const CONF_GREEN = "\u001b[2;32m";
-    const CONF_YELLOW = "\u001b[2;33m";
-    const CONF_RED = "\u001b[2;31m";
-
-    const SPACE = "\u200A";
-
-    const now = new Date();
-    const timestamp = `${bracket}[${timeColor}${now.toLocaleTimeString("en-US", {
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    })}${bracket}]${reset}`;
-
-    let voiceChannelName = "Unknown Channel";
-    if (channelId && guild.channels.cache.has(channelId)) {
-      voiceChannelName = guild.channels.cache.get(channelId)?.name || "Unknown Channel";
-    }
-
-    // confidence badge
-    let confidenceBadge = "";
-    if (typeof confidence === "number" && !Number.isNaN(confidence)) {
-      const pct = Math.max(0, Math.min(100, Math.round(confidence * 100)));
-      let confColor = CONF_YELLOW;
-      if (confidence >= 0.55) confColor = CONF_GREEN;
-      else if (confidence < 0.4) confColor = CONF_RED;
-      confidenceBadge = ` ${bracket}[${confColor}${pct}%${bracket}]${reset}`;
-    }
-
-    const displayName = member?.displayName || `User ${userId}`;
-
-    const formattedMessage = `
-${timestamp}${confidenceBadge} ${bracket}${SPACE}[${SPACE}${roleColor}${SPACE}${formattedRole}${SPACE}${bracket}${SPACE}]${SPACE} [${SPACE}${idColor}${SPACE}${userId}${SPACE}${bracket}${SPACE}]${SPACE} [🔊${SPACE}${channelColor}${SPACE}${voiceChannelName}${SPACE}${bracket}${SPACE}]${SPACE} ${nameColor}${SPACE}${displayName}${SPACE}${bracket}${SPACE}:${SPACE}${messageColor}${SPACE} ${transcription}${reset}`;
-    try {
-      const maxLength = 1900;
-      const content = formattedMessage.trim();
-      let start = 0;
-
-      while (start < content.length) {
-        const chunk = content.slice(start, start + maxLength);
-        await channel.send("```ansi\n" + chunk + "\n```").catch(console.error);
-        start += maxLength;
-      }
-
-      console.log(`[✅] Sent transcription to ${channel.name}`);
-    } catch (err) {
-      console.error(`[❌] Failed to send transcription: ${err.message}`);
-    }
-
-    // Profanity checks
-    await updateProfanityFilter(guild.id);
-    const censoredText = await clean(guild, transcription);
-    if (transcription !== censoredText) {
-      await checkForFlaggedContent(userId, transcription, guild);
-    }
-  } catch (error) {
-    console.error(`[ERROR] Failed to post transcription: ${error.message}`);
-  }
-}
-
-/**
- * Converts a raw **16-bit PCM** file (decoded from Opus) to a WAV file.
- * @param {string} pcmPath      Absolute path of the source `.pcm` file.
- * @param {string} wavFilePath  Destination path for the `.wav` file.
- * @returns {Promise<void>}
- */
-async function convertOpusToWav(pcmPath, wavFilePath) {
-  const ffmpegPath = path.resolve(__dirname, "../ffmpeg/ffmpeg.exe");
-  ffmpeg.setFfmpegPath(ffmpegPath);
-
-  // Ensure the target directory exists.
-  ensureDirectoryExistence(wavFilePath);
-
-  console.log(
-    `[DEBUG] Converting PCM → WAV:\n  src: ${pcmPath}\n  dst: ${wavFilePath}`
-  );
-
-  const pcmFull = path.resolve(pcmPath);
-  const wavFull = path.resolve(wavFilePath);
-
-  // Mark both files as in-use (only for the duration of ffmpeg)
-  inUsePaths.add(pcmFull);
-  inUsePaths.add(wavFull);
-
-  const releaseLocks = () => {
-    try { inUsePaths.delete(pcmFull); } catch { }
-    try { inUsePaths.delete(wavFull); } catch { }
-  };
-
-  const cleanupPcmBestEffort = async () => {
-    // IMPORTANT: unlock first, or safeDeleteFile will refuse
-    try { inUsePaths.delete(pcmFull); } catch { }
-
-    let ok = false;
-    try {
-      ok = await safeDeleteFile(pcmPath, { retries: 10, delayMs: 120 });
-    } catch { }
-
-    if (!ok) {
-      // escalate on Windows locks
-      try { await hardDeleteFile(pcmPath, { retries: 14, baseDelayMs: 140 }); } catch { }
-    }
-  };
-
-  return new Promise((resolve, reject) => {
-    ffmpeg(pcmPath)
-      .inputFormat("s16le")
-      .inputOptions(["-ar 48000", "-ac 1"])
-      .audioFrequency(16000)
-      .audioChannels(1)
-      .audioCodec("pcm_s16le")
-      .toFormat("wav")
-      .save(wavFilePath)
-      .on("end", () => {
-        console.log(`[INFO] PCM → WAV conversion complete: ${wavFilePath}`);
-
-        // Small delay to let ffmpeg fully release file handles on Windows
-        setTimeout(() => {
-          cleanupPcmBestEffort().finally(() => {
-            // WAV is no longer "locked" by conversion step
-            try { inUsePaths.delete(wavFull); } catch { }
-          });
-        }, 150);
-
-        resolve();
-      })
-      .on("error", (error) => {
-        console.error(`[ERROR] FFmpeg failed: ${error.message}`);
-
-        setTimeout(() => {
-          cleanupPcmBestEffort().finally(() => {
-            releaseLocks();
-          });
-        }, 150);
-
-        reject(error);
-      });
-  });
-}
-
-/**
- * Safely deletes a file if it exists.
- * - Only deletes inside whitelisted TEMP_DIRS
- * - Skips files marked in-use
- * - Retries on Windows locks (EPERM/EACCES/EBUSY) with exponential backoff
- * - Optionally requires the file to be older than N ms (based on timestamp
- *   embedded in filename if present, else mtime)
- * @param {string} filePath
- * @param {object} [opts]
- * @param {number} [opts.retries=7]
- * @param {number} [opts.delayMs=200]
- * @param {number} [opts.olderThanMs=0]
- */
-async function safeDeleteFile(filePath, opts = {}) {
-  const { retries = 7, delayMs = 200, olderThanMs = 0 } = opts;
-  if (!filePath) return false;
-
-  const full = path.resolve(filePath);
-
-  if (!isInTempDirs(full)) {
-    console.warn(`[SAFE-DEL] Refused to delete outside temp dirs: ${full}`);
-    return false;
-  }
-  if (inUsePaths.has(full)) {
-    // Skip deletion while in use
-    return false;
-  }
-
-  if (olderThanMs > 0) {
-    try {
-      const stat = await fs.promises.stat(full);
-      const base = path.basename(full);
-      const tsFromName = parseTimestampFromName(base);
-      const referenceTime = tsFromName ?? stat.mtimeMs;
-      if (Date.now() - referenceTime < olderThanMs) {
-        return false;
-      }
-    } catch (e) {
-      if (e.code === "ENOENT") return true; // already gone
-    }
-  }
-
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      await fs.promises.unlink(full);
-      tryRemoveEmptyParents(full).catch(() => { });
-      return true;
-    } catch (err) {
-      if (err.code === "ENOENT") return true;
-      const retriable = ["EBUSY", "EPERM", "EACCES"].includes(err.code);
-      if (retriable && attempt < retries) {
-        await wait(delayMs * Math.pow(2, attempt));
-        continue;
-      } else {
-        console.error(`[SAFE-DEL] Failed to delete ${full} (${err.code}): ${err.message}`);
-        if (attempt >= retries) return false;
-      }
-    }
-  }
-  return false;
-}
-
-/**
- * Deletes an array of files.
- * @param {Array<string>} filePaths - The file paths to delete.
- */
-async function cleanupFiles(filePaths = []) {
-  for (const filePath of filePaths) {
-    try {
-      await safeDeleteFile(filePath);
-    } catch (err) {
-      console.error(`[ERROR] Failed to delete ${filePath}: ${err.message}`);
-    }
-  }
-}
-
-/**
- * Ensures the directory for a file exists.
- * @param {string} filePath - The file path.
- */
-function ensureDirectoryExistence(filePath) {
-  const dirname = path.dirname(filePath);
-  if (!fs.existsSync(dirname)) {
-    fs.mkdirSync(dirname, { recursive: true });
-  }
-}
-
-// ── Helper: sweeping & path safety ─────────────────────────────────────────
-
-function isPathInside(child, parent) {
-  const rel = path.relative(parent, child);
-  return !rel.startsWith("..") && !path.isAbsolute(rel);
-}
-
-function isInTempDirs(fullPath) {
-  const resolved = path.resolve(fullPath);
-  return TEMP_DIRS.some((dir) => isPathInside(resolved, dir) || resolved === dir);
-}
-
-function parseTimestampFromName(basename) {
-  // Looks for a 13+ digit number (Date.now()) in the name
-  const m = basename.match(/(\d{13,})/);
-  if (m) {
-    const n = Number(m[1]);
-    if (!Number.isNaN(n)) return n;
-  }
-  return null;
-}
-
-async function tryRemoveEmptyParents(fullPath) {
-  let dir = path.dirname(fullPath);
-  for (const root of TEMP_DIRS) {
-    while (isPathInside(dir, root) || dir === root) {
+    connection.on(VoiceConnectionStatus.Ready, async () => {
+      console.log(`[INFO] Connected to ${channel.name}`);
+      saveVCState(guild.id, channel.id);
       try {
-        const entries = await fs.promises.readdir(dir);
-        if (entries.length === 0) {
-          await fs.promises.rmdir(dir).catch(() => { });
-          dir = path.dirname(dir);
-        } else {
-          break;
-        }
-      } catch {
-        break;
+        await manageVoiceChannels(guild, client, null);
+      } catch { }
+      audioListeningFunctions(connection, guild);
+    });
+
+    return connection;
+  } catch (error) {
+    console.error(`[ERROR] Can't connect to ${channel.name}: ${error.message}`);
+    return null;
+  }
+}
+
+async function disconnectAndReset(connection, guild, client) {
+  if (!isDisconnecting) {
+    isDisconnecting = true;
+    try {
+      const guildId = connection.joinConfig.guildId;
+      clearVCState(guildId);
+      connection.destroy();
+      console.log(`[INFO] Disconnected from VC in guild ${guildId}`);
+    } catch (error) {
+      console.error(`[ERROR] During disconnect: ${error.message}`);
+    } finally {
+      isDisconnecting = false;
+      if (guild && client) {
+        try { await manageVoiceChannels(guild, client, null); } catch (e) { console.warn("[ROUTE] Post-disconnect manage failed:", e?.message || e); }
       }
     }
   }
 }
 
-function wait(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+/************************************************************************************************
+ * AUDIO LISTENING FUNCTIONS
+ ************************************************************************************************/
+function audioListeningFunctions(connection, guild) {
+  const receiver = connection.receiver;
+  if (receiver.isListening) return;
+  receiver.isListening = true;
 
-/**
- * Sweep function: delete OLD files in TEMP_DIRS (age ≥ DEFAULT_STALE_MS).
- * Uses file name timestamp if present; otherwise mtime.
- */
-async function sweepTempDirs(olderThanMs = DEFAULT_STALE_MS) {
-  for (const dir of TEMP_DIRS) {
+  const currentlySpeaking = new Set();
+  const userLastSpokeTime = {};
+  const perUserSilenceTimer = {};
+
+  async function stopUserPipeline(userId) {
+    const p = pipelines.get(userId);
+    if (!p) return;
+
+    const { audioStream, decoder, pcmWriter, loudnessRes } = p;
+    pipelines.delete(userId);
+
     try {
-      await fs.promises.mkdir(dir, { recursive: true });
-      const entries = await fs.promises.readdir(dir);
-      for (const name of entries) {
-        const full = path.join(dir, name);
-        try {
-          const stat = await fs.promises.stat(full);
-          if (!stat.isFile()) continue;
-          const ext = path.extname(full).toLowerCase();
-          if (!SWEEP_EXTS.has(ext)) continue;
-          if (inUsePaths.has(full)) continue;
+      try { loudnessRes?.teardown?.(); } catch { }
 
-          const tsFromName = parseTimestampFromName(name);
-          const referenceTime = tsFromName ?? stat.mtimeMs;
-          const age = Date.now() - referenceTime;
-          if (age >= olderThanMs) {
-            await safeDeleteFile(full, { retries: 7, delayMs: 200, olderThanMs: 0 });
-          }
-        } catch {
-          // ignore per-file errors
-        }
+      try { audioStream?.unpipe?.(decoder); } catch { }
+      try { decoder?.unpipe?.(pcmWriter); } catch { }
+      try { audioStream?.pause?.(); } catch { }
+
+      if (pcmWriter && !pcmWriter.closed) {
+        pcmWriter.on("error", () => { });
+        try { pcmWriter.end(); } catch { }
+        await waitForFinished(pcmWriter);
       }
-    } catch (err) {
-      console.error(`[SWEEP] Failed to sweep ${dir}: ${err.message}`);
-    }
-  }
-}
-
-/** Public trigger to run a sweep immediately */
-async function forceCleanNow(ms = DEFAULT_STALE_MS) {
-  await sweepTempDirs(ms);
-}
-
-// Start sweeper automatically and run once now
-sweepTempDirs().catch(() => { });
-const _sweepTimer = setInterval(() => {
-  sweepTempDirs().catch(() => { });
-}, SWEEP_INTERVAL_MS);
-_sweepTimer.unref?.();
-
-// Also try on shutdown
-const _finalCleanup = async () => {
-  try {
-    await sweepTempDirs(0); // delete anything not marked in-use
-  } catch { }
-};
-process.on("beforeExit", _finalCleanup);
-process.on("SIGINT", async () => { await _finalCleanup(); process.exit(0); });
-process.on("SIGTERM", async () => { await _finalCleanup(); process.exit(0); });
-
-// ─────────────────────────────────────────────────────────────────────────
-// HARD DELETE (bypass inUse guard; close & nuke stubborn Windows locks)
-// ─────────────────────────────────────────────────────────────────────────
-const { spawn } = require("child_process");
-
-function _toLongPath(p) {
-  const win = path.resolve(p).replace(/\//g, "\\");
-  return win.startsWith("\\\\?\\") ? win : "\\\\?\\" + win;
-}
-function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function _run(cmd, args) {
-  return new Promise((resolve) => {
-    const c = spawn(cmd, args, { windowsHide: true, stdio: "ignore" });
-    c.on("exit", (code) => resolve(code === 0));
-    c.on("error", () => resolve(false));
-  });
-}
-
-/**
- * Forcefully unmark and delete a file even if our process *thinks* it is in use.
- * Steps:
- *  1) Best-effort: drop from inUsePaths (if present).
- *  2) try fs.unlink; if locked, rename -> tombstone in same dir.
- *  3) hammer with: attrib -r -s -h, del /f /q, PowerShell Remove-Item -Force.
- *  4) retries with backoff; returns boolean.
- */
-async function hardDeleteFile(filePath, {
-  retries = 12,
-  baseDelayMs = 120,
-} = {}) {
-  if (!filePath) return false;
-  const full = path.resolve(filePath);
-
-  // 1) Unmark "in use" if stale
-  try { inUsePaths.delete(full); } catch { }
-
-  // 2) Try fast unlink
-  try {
-    await fs.promises.unlink(full);
-    await tryRemoveEmptyParents(full).catch(() => { });
-    return true;
-  } catch (e) {
-    if (e.code === "ENOENT") return true;
-  }
-
-  // 3) Try rename to tombstone (often succeeds even if current name is "busy")
-  let tomb = full;
-  try {
-    const base = path.basename(full);
-    tomb = path.join(path.dirname(full), `.__tomb.${process.pid}.${Date.now()}.${base}`);
-    await fs.promises.rename(full, tomb);
-  } catch {
-    tomb = full;
-  }
-
-  // 4) Repeated hammer with shell fallbacks
-  for (let i = 0; i <= retries; i++) {
-    // normalize attributes
-    await _run("cmd.exe", ["/d", "/s", "/c", `attrib -r -s -h "${tomb}"`]);
-
-    // local unlink
-    try {
-      await fs.promises.unlink(tomb);
-      await tryRemoveEmptyParents(tomb).catch(() => { });
-      return true;
     } catch (e) {
-      if (e.code === "ENOENT") return true;
-    }
+      console.warn(`[PIPELINE STOP] user=${userId} ➜ ${e.message}`);
+    } finally {
+      try { decoder?.destroy?.(); } catch { }
+      try { audioStream?.destroy?.(); } catch { }
 
-    // CMD del
-    const delOk = await _run("cmd.exe", ["/d", "/s", "/c", `del /f /q "${_toLongPath(tomb)}"`]);
-    if (delOk) {
-      try { await fs.promises.access(tomb); } catch { return true; }
+      if (userSubscriptions[userId]) {
+        try { userSubscriptions[userId].destroy?.(); } catch { }
+        delete userSubscriptions[userId];
+      }
+      if (outputStreams[userId] && !outputStreams[userId].closed) {
+        try { outputStreams[userId].end(); } catch { }
+      }
+      delete outputStreams[userId];
     }
-
-    // PowerShell remove
-    const psOk = await _run("powershell.exe", [
-      "-NoProfile",
-      "-Command",
-      `Remove-Item -LiteralPath '${_toLongPath(tomb).replace(/'/g, "''")}' -Force -ErrorAction SilentlyContinue`,
-    ]);
-    if (psOk) {
-      try { await fs.promises.access(tomb); } catch { return true; }
-    }
-
-    await _sleep(Math.min(baseDelayMs * Math.pow(1.6, i), 1500));
   }
 
-  // still here → give up
-  return false;
-}
+  receiver.speaking.setMaxListeners(100);
+  receiver.speaking.on("start", async (userId) => {
+    if (currentlySpeaking.has(userId)) return;
 
-/**
- * Convenience: final-phase hard delete for multiple paths.
- */
-async function hardFinalizeDelete(paths = []) {
-  let allOk = true;
-  for (const p of paths) {
+    // ✅ Cached settings (this is a VERY hot path)
+    const settings = (await getSettingsForGuild(guild.id).catch(() => null)) || {};
+    if (!settings.transcriptionEnabled) return;
+    if (settings.safeUsers?.includes?.(userId)) return;
+
+    const member = guild.members.cache.get(userId);
+    const chanId = member?.voice?.channel?.id;
+    if ((settings.safeChannels || []).includes(chanId)) return;
+
+    let consentOk = true;
     try {
-      const ok = await hardDeleteFile(p, { retries: 14, baseDelayMs: 140 });
-      if (!ok) allOk = false;
-    } catch {
-      allOk = false;
+      // ✅ guild-scoped consent
+      consentOk = !!(await hasUserConsented(userId));
+    } catch (e) {
+      console.warn(`[TX CONSENT ERR] ${userId} (guild ${guild.id}) → ${e?.message || e}`);
+      consentOk = false;
+    }
+    if (!consentOk) return;
+
+    const unique = `${Date.now()}-${Math.floor(Math.random() * 1e3)}`;
+    userAudioIds[userId] = unique;
+    currentlySpeaking.add(userId);
+    userLastSpokeTime[userId] = Date.now();
+
+    if (perUserSilenceTimer[userId]) {
+      safeClearTimer(perUserSilenceTimer[userId]);
+      delete perUserSilenceTimer[userId];
+    }
+
+    console.log(`[DEBUG] START for ${userId}`);
+    const audioStream = receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
+    userSubscriptions[userId] = audioStream;
+
+    const loudnessRes = await initiateLoudnessWarning(userId, audioStream, guild, () => {
+      userLastSpokeTime[userId] = Date.now();
+    });
+
+    const pcmPath = path.join(__dirname, "../../temp_audio", `${userId}-${unique}.pcm`);
+    fs.mkdirSync(path.dirname(pcmPath), { recursive: true });
+    const pcmWriter = fs.createWriteStream(pcmPath, { flags: "w" });
+    const decoder = new prism.opus.Decoder({
+      frameSize: 960,
+      channels: 1,
+      rate: 48000,
+    });
+
+    let byteCount = 0;
+    const onRaw = (chunk) => { byteCount += chunk.length; };
+    audioStream.on("data", onRaw);
+
+    const closePipeline = async (reason) => {
+      console.warn(`[DECODE GUARD] user=${userId} closing pipeline: ${reason}`);
+      try { audioStream?.unpipe?.(decoder); } catch { }
+      try { decoder?.unpipe?.(pcmWriter); } catch { }
+      try { pcmWriter?.end?.(); } catch { }
+      try { decoder?.destroy?.(); } catch { }
+      try { audioStream?.destroy?.(); } catch { }
+      try { audioStream.off?.("data", onRaw); } catch { }
+    };
+
+    decoder.on("error", async (err) => {
+      console.warn(`[OPUS] decoder error for ${userId}: ${err.message}`);
+      await closePipeline("decoder_error");
+      const member = guild.members.cache.get(userId);
+      const chanId = member?.voice?.channel?.id || null;
+      try { await finalizeUserAudio?.(userId, guild, unique, chanId); } catch { }
+    });
+
+    audioStream.on("error", async (err) => {
+      console.warn(`[STREAM] audio stream error for ${userId}: ${err.message}`);
+      await closePipeline("stream_error");
+    });
+
+    pcmWriter.on("error", (err) => {
+      console.warn(`[PCM WRITE] ${userId}: ${err.message}`);
+    });
+
+    try {
+      audioStream.pipe(decoder).pipe(pcmWriter);
+    } catch (err) {
+      console.warn(`[PIPE ERROR] ${err.message}`);
+    }
+
+    pipelines.set(userId, { audioStream, decoder, pcmWriter, loudnessRes });
+    outputStreams[userId] = pcmWriter;
+
+    perUserSilenceTimer[userId] = setInterval(async () => {
+      const silenceDuration = Date.now() - (userLastSpokeTime[userId] || 0);
+      const threshold = getAverageSilenceDuration(userId) || DEFAULT_SILENCE_TIMEOUT;
+
+      if (silenceDuration >= threshold) {
+        const now = Date.now();
+        const last = lastFinalizeAt.get(userId) || 0;
+        if (now - last < FINALIZE_COOLDOWN_MS) return;
+        if (finalizingUsers.has(userId)) return;
+
+        console.warn(`[SILENCE FINALIZE] ${userId} silent for ${silenceDuration}ms (threshold: ${threshold})`);
+
+        safeClearTimer(perUserSilenceTimer[userId]);
+        delete perUserSilenceTimer[userId];
+
+        finalizingUsers.add(userId);
+        lastFinalizeAt.set(userId, now);
+
+        try {
+          await stopUserPipeline(userId);
+          const member = guild.members.cache.get(userId);
+          const chanIdNow = member?.voice?.channel?.id || null;
+          audioStream.off?.("data", onRaw);
+          console.log(`[TX BYTES] ${userId} → captured ${byteCount} bytes before finalize`);
+          await finalizeUserAudio(userId, guild, unique, chanIdNow);
+          currentlySpeaking.delete(userId);
+        } catch (e) {
+          console.error(`[SILENCE FINALIZE] finalize failed for ${userId}: ${e.message}`);
+        } finally {
+          finalizingUsers.delete(userId);
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+    }, 1000);
+  });
+
+  receiver.speaking.on("stop", (userId) => {
+    console.log(`[DEBUG] STOP triggered for ${userId}`);
+    if (!currentlySpeaking.has(userId)) return;
+    currentlySpeaking.delete(userId);
+
+    stopUserPipeline(userId);
+
+    const member = guild.members.cache.get(userId);
+    const chanId = member?.voice?.channel?.id || null;
+    const unique = userAudioIds[userId];
+    if (!unique) return;
+
+    const wait = GRACE_PERIOD_MS - (Date.now() - (userLastSpokeTime[userId] || 0));
+    perUserSilenceTimer[userId] = setTimeout(() => {
+      if (!currentlySpeaking.has(userId)) {
+        finalizeUserAudio(userId, guild, unique, chanId);
+      }
+      safeClearTimer(perUserSilenceTimer[userId]);
+      delete perUserSilenceTimer[userId];
+    }, wait > 0 ? wait : 0);
+  });
+
+  connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    receiver.speaking.removeAllListeners();
+    receiver.isListening = false;
+    Object.values(perUserSilenceTimer).forEach((t) => safeClearTimer(t));
+    try { await manageVoiceChannels(guild, guild.client, null); } catch { }
+  });
+
+  async function finalizeUserAudio(userId, guild, unique, channelId) {
+    const key = `${userId}-${unique}`;
+    if (finalizingKeys.has(key)) return;
+    finalizingKeys.add(key);
+
+    const base = path.join(__dirname, "../../temp_audio", `${userId}-${unique}`);
+    const pcm = `${base}.pcm`;
+    const wav = `${base}.wav`;
+
+    // ── Step 1: fully tear down the pipeline BEFORE touching the file ──────
+    // This ensures Node releases all read/write handles on the pcm before
+    // ffmpeg tries to open it, which is the root cause of Windows file locks.
+    safeClearTimer(perUserSilenceTimer[userId]);
+    delete perUserSilenceTimer[userId];
+
+    const p = pipelines.get(userId);
+    if (p) {
+      pipelines.delete(userId);
+      try { p.loudnessRes?.teardown?.(); } catch { }
+      try { p.audioStream?.unpipe?.(p.decoder); } catch { }
+      try { p.decoder?.unpipe?.(p.pcmWriter); } catch { }
+      try { p.audioStream?.pause?.(); } catch { }
+
+      // End pcmWriter and wait for the OS to fully flush and close the file handle
+      if (p.pcmWriter && !p.pcmWriter.closed) {
+        await new Promise((resolve) => {
+          p.pcmWriter.once("close", resolve);
+          try { p.pcmWriter.end(); } catch { resolve(); }
+        }).catch(() => { });
+      }
+
+      // Now destroy remaining stream objects
+      try { p.decoder?.destroy?.(); } catch { }
+      try { p.audioStream?.destroy?.(); } catch { }
+      try { p.pcmWriter?.destroy?.(); } catch { }
+    }
+
+    // Also close the outputStreams reference if it's still open
+    const writer = outputStreams[userId];
+    if (writer && !writer.closed && !writer.destroyed) {
+      await new Promise((resolve) => {
+        writer.once("close", resolve);
+        try { writer.end(); } catch { resolve(); }
+      }).catch(() => { });
+      try { writer.destroy(); } catch { }
+    }
+    delete outputStreams[userId];
+
+    // Give Windows a moment to fully release file handles after stream close
+    await new Promise(r => setTimeout(r, 150));
+
+    // ── Step 2: transcribe ────────────────────────────────────────────────
+    try {
+      if (!fs.existsSync(pcm) || fs.statSync(pcm).size < 2048) {
+        // Too small to be real audio — skip transcription, just clean up
+        await transcription.safeDeleteFile(pcm);
+        cleanup(userId);
+        finalizingKeys.delete(key);
+        return;
+      }
+
+      // convertOpusToWav handles pcm deletion internally after ffmpeg finishes
+      await convertOpusToWav(pcm, wav);
+      const text = await transcribeAudio(wav);
+      if (text) await postTranscription(guild, userId, text, channelId);
+    } catch (err) {
+      console.error(`[FINALIZE] user=${userId} ➜ ${err.message}`);
+      // Best-effort cleanup on error path
+      try { await transcription.hardFinalizeDelete([pcm, wav]); } catch { }
+    } finally {
+      // wav cleanup — convertOpusToWav handles pcm, we own wav here
+      try { await transcription.safeDeleteFile(wav); } catch { }
+      try { await transcription.hardFinalizeDelete([wav]); } catch { }
+
+      cleanup(userId);
+      finalizingKeys.delete(key);
     }
   }
-  return allOk;
+
+  function cleanup(userId) {
+    if (outputStreams[userId]) {
+      const writer = outputStreams[userId];
+      try { if (!writer.destroyed) writer.end(); } catch (e) { console.warn(`[CLEANUP] end err: ${e.message}`); }
+      writer.on("error", (err) => console.warn(`[PCM WRITER ERROR] ${err.message}`));
+      try { writer.destroy(); } catch (e) { console.warn(`[CLEANUP] destroy err: ${e.message}`); }
+      delete outputStreams[userId];
+    }
+
+    if (userSubscriptions[userId]) {
+      try { userSubscriptions[userId].destroy?.(); } catch (e) { console.warn(`[CLEANUP] sub err: ${e.message}`); }
+      delete userSubscriptions[userId];
+    }
+
+    delete userAudioIds[userId];
+  }
 }
 
-// =========================================
-/** EXPORTS */
-// =========================================
+/************************************************************************************************
+ * Periodic VC auto-(re)join probe (every 15s)
+ * - Honors mod_auto_route_enabled gating for target selection
+ ************************************************************************************************/
+let vcAutoCheckInterval = null;
+const vcProbeRunning = new Set();
+
+function startPeriodicVCCheck(client, intervalMs = 15000) {
+  if (vcAutoCheckInterval) clearInterval(vcAutoCheckInterval);
+
+  const probeGuild = async (guild) => {
+    if (!guild) return;
+    if (vcProbeRunning.has(guild.id)) return;
+    vcProbeRunning.add(guild.id);
+
+    try {
+      await manageVoiceChannels(guild, client, null);
+    } catch (e) {
+      console.warn(`[AUTO-VC] Guild ${guild.id} probe failed: ${e?.message || e}`);
+    } finally {
+      vcProbeRunning.delete(guild.id);
+    }
+  };
+
+  const probeAll = async () => {
+    for (const guild of client.guilds.cache.values()) {
+      await probeGuild(guild);
+    }
+  };
+
+  probeAll().catch((e) => {
+    console.warn(`[AUTO-VC] Initial probe failed: ${e?.message || e}`);
+  });
+
+  vcAutoCheckInterval = setInterval(() => {
+    probeAll().catch((e) => {
+      console.warn(`[AUTO-VC] Interval probe failed: ${e?.message || e}`);
+    });
+  }, intervalMs);
+
+  console.log(`[AUTO-VC] Periodic check started (every ${intervalMs}ms).`);
+}
+
 module.exports = {
-  // Transcription & Audio Processing
-  ensureTranscriptionChannel,
-  processAudio,
-  convertOpusToWav,
-  transcribeAudio,
-  postTranscription,
-  // File utilities
-  safeDeleteFile,
-  cleanupFiles,
-  ensureDirectoryExistence,
-  createLoudnessDetector,
-  forceCleanNow,
-  hardDeleteFile,
-  hardFinalizeDelete,
-  // Profanity & Flagging Functions
-  updateProfanityFilter,
-  containsProfanity,
-  clean,
-  checkForFlaggedContent,
+  execute,
+  joinChannel,
+  audioListeningFunctions,
+  startPeriodicVCCheck,
 };
