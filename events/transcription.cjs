@@ -56,6 +56,36 @@ const lastFinalizeAt = new Map();
 const guildQueues = new Map();        // guildId → Array<job>
 const guildProcessing = new Set();    // guildIds currently processing
 
+// ─────────────────────────────────────────────
+// GLOBAL WHISPER SEMAPHORE (GPU PRESSURE CAP)
+// Limits concurrent transcribe.py spawns across ALL guilds.
+// Tune MAX_CONCURRENT_WHISPER based on your GPU — 2 is safe for a 3060.
+// ─────────────────────────────────────────────
+const MAX_CONCURRENT_WHISPER = 2;
+let _activeWhisperJobs = 0;
+const _whisperWaiters = [];
+
+function _acquireWhisper() {
+  return new Promise((resolve) => {
+    if (_activeWhisperJobs < MAX_CONCURRENT_WHISPER) {
+      _activeWhisperJobs++;
+      resolve();
+    } else {
+      _whisperWaiters.push(resolve);
+    }
+  });
+}
+
+function _releaseWhisper() {
+  const next = _whisperWaiters.shift();
+  if (next) {
+    // hand the slot directly to the next waiter
+    next();
+  } else {
+    _activeWhisperJobs--;
+  }
+}
+
 // =========================================
 // TEMP FILE SAFETY CONFIG (env → inline defaults)
 // =========================================
@@ -411,53 +441,21 @@ async function processGuildQueue(guildId) {
 }
 
 /**
- * Processes the audio queue.
- */
-async function processQueue() {
-
-  try {
-    while (processingQueue.length > 0) {
-      const job = processingQueue.shift();
-      if (!job) continue;
-
-      const { userId, guild, wavFilePath, channelId, resolve, reject } = job;
-
-      try {
-        const { text: transcriptionText, confidence } = await transcribeAudio(wavFilePath);
-        console.log(`[QUEUE] Transcription for user ${userId}: ${transcriptionText}`);
-
-        // Preserve prior resolve behavior for upstream callers
-        if (typeof resolve === "function") {
-          resolve(transcriptionText);
-        }
-
-        // Post to your log/output with the confidence badge
-        await postTranscription(guild, userId, transcriptionText, channelId, confidence);
-      } catch (err) {
-        console.error(`[QUEUE] Transcription failed for user ${userId}: ${err.message}`);
-        if (typeof reject === "function") {
-          reject(err);
-        }
-      } finally {
-        // Any cleanup for wavFilePath stays as-is elsewhere in your code
-      }
-    }
-  } finally {
-    global.__vcToolsTranscribeProcessing = false;
-  }
-}
-
-/**
  * Runs the Whisper transcription script on a WAV file.
+ * Acquires a global semaphore slot before spawning to cap GPU pressure.
  * @param {string} wavFilePath - The path to the WAV file.
- * @returns {Promise<string>} - The transcription text.
+ * @returns {Promise<{ text: string, confidence: number|undefined }>}
  */
 // Spawns transcribe.py, parses JSON lines, returns { text, confidence }
 async function transcribeAudio(wavFilePath) {
   const { spawn } = require("child_process");
   const path = require("path");
 
+  await _acquireWhisper();
+
   return new Promise((resolve, reject) => {
+    const _done = (fn, val) => { _releaseWhisper(); fn(val); };
+
     try {
       const pyPath = path.resolve("../models/whisper/transcribe.py");
       const proc = spawn("py", ["-3", pyPath, wavFilePath], { cwd: __dirname, windowsHide: true });
@@ -468,11 +466,11 @@ async function transcribeAudio(wavFilePath) {
       proc.stdout.on("data", (d) => (stdout += d.toString("utf8")));
       proc.stderr.on("data", (d) => (stderr += d.toString("utf8")));
 
-      proc.on("error", (err) => reject(err));
+      proc.on("error", (err) => _done(reject, err));
 
       proc.on("close", (code) => {
         if (code !== 0 && !stdout) {
-          return reject(
+          return _done(reject,
             new Error(`transcribe.py exited with code ${code}: ${stderr || "no stderr"}`)
           );
         }
@@ -506,20 +504,20 @@ async function transcribeAudio(wavFilePath) {
               try {
                 const errObj = JSON.parse(j);
                 if (errObj && errObj.error) {
-                  return reject(new Error(errObj.error));
+                  return _done(reject, new Error(errObj.error));
                 }
               } catch (_) { }
             }
-            return reject(new Error("No transcription text found in Python output."));
+            return _done(reject, new Error("No transcription text found in Python output."));
           }
 
-          resolve({ text: transcriptionText, confidence });
+          _done(resolve, { text: transcriptionText, confidence });
         } catch (parseErr) {
-          reject(parseErr);
+          _done(reject, parseErr);
         }
       });
     } catch (outerErr) {
-      reject(outerErr);
+      _done(reject, outerErr);
     }
   });
 }
