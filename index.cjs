@@ -450,16 +450,14 @@ client.ws.on("VOICE_CHANNEL_EFFECT_SEND", async (data) => {
     if (DEFAULT_SOUNDS[sound_id]) {
       soundName = DEFAULT_SOUNDS[sound_id];
     } else {
-      // best-effort fetch guild sounds
+      // Use discord.js soundboardSounds cache — cleaner than raw REST
       const guildSounds = await withRescue(async () => {
-        return await client.rest.get(`/guilds/${guildId}/soundboard-sounds`, {
-          headers: { Authorization: `Bot ${process.env.DISCORD_TOKEN}` },
-        });
+        return await guild.soundboardSounds.fetch();
       }, "fetchGuildSoundboardSounds", null);
 
-      if (guildSounds && Array.isArray(guildSounds.items)) {
-        const found = guildSounds.items.find((s) => s.sound_id === sound_id);
-        if (found) soundName = `${found.name} ${found.emoji_name || ""}`;
+      if (guildSounds) {
+        const found = guildSounds.get(sound_id);
+        if (found) soundName = `${found.name}${found.emojiName ? ` ${found.emojiName}` : ""}`;
       }
     }
 
@@ -689,6 +687,11 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
           await subscriberUser.send({
             content: `[❕] <@${joinedUserId}> just joined ${channelMention} inside **${guildName}**!`,
+          }).catch((err) => {
+            // 50007 = Cannot send messages to this user (DMs closed), not a real error
+            if (err?.code !== 50007) {
+              safeLog(`[NOTIFY] DM failed for ${sub.user_id}: ${err?.message || err}`);
+            }
           });
 
           safeLog(`[INFO] DM sent: Notified ${sub.user_id} about ${joinedUserId}`);
